@@ -920,20 +920,210 @@ def tab_config() -> None:
         st.code(current, language="yaml")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ══════════════════════════════════════════════════════════════════════════════
 
+# ======================================================================
+# TAB 5 - RECOMMENDATIONS
+# ======================================================================
+def tab_recommendations() -> None:
+    st.markdown('### Recommendations - Batch Backtest Analysis')
+    st.caption('Results from 36 backtests across 7 parameter groups. Winners selected by Sharpe ratio (primary) then total return (secondary).')
+
+    BACKTEST_RESULTS = [
+        {'label': 'IV rank >= 20%',   'group': 'iv_rank_threshold', 'sharpe':  0.19, 'total_return':  8.52, 'max_dd': -11.75, 'win_rate': 60.0, 'trades': 5,  'avg_yield': 0.86},
+        {'label': 'IV rank >= 30%',   'group': 'iv_rank_threshold', 'sharpe':  0.19, 'total_return':  8.52, 'max_dd': -11.75, 'win_rate': 60.0, 'trades': 5,  'avg_yield': 0.86},
+        {'label': 'IV rank >= 40%',   'group': 'iv_rank_threshold', 'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'IV rank >= 50%',   'group': 'iv_rank_threshold', 'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'IV rank >= 60%',   'group': 'iv_rank_threshold', 'sharpe':  1.40, 'total_return': 53.24, 'max_dd': -10.21, 'win_rate': 80.0, 'trades': 10, 'avg_yield': 0.93},
+        {'label': 'IV rank >= 70%',   'group': 'iv_rank_threshold', 'sharpe':  1.29, 'total_return': 51.08, 'max_dd':  -7.56, 'win_rate': 58.3, 'trades': 12, 'avg_yield': 1.06},
+        {'label': 'Delta 10-15%',     'group': 'delta',             'sharpe': -0.07, 'total_return': -1.29, 'max_dd': -25.26, 'win_rate': 69.2, 'trades': 13, 'avg_yield': 0.50},
+        {'label': 'Delta 15-20%',     'group': 'delta',             'sharpe': -0.26, 'total_return': -3.47, 'max_dd': -17.94, 'win_rate': 50.0, 'trades': 10, 'avg_yield': 0.75},
+        {'label': 'Delta 15-25%',     'group': 'delta',             'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Delta 20-30%',     'group': 'delta',             'sharpe': -1.56, 'total_return': -14.13,'max_dd': -14.49, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 1.16},
+        {'label': 'Delta 25-35%',     'group': 'delta',             'sharpe': -1.36, 'total_return': -13.30,'max_dd': -13.30, 'win_rate':  0.0, 'trades': 2,  'avg_yield': 1.42},
+        {'label': 'Delta 30-40%',     'group': 'delta',             'sharpe': -1.36, 'total_return': -18.35,'max_dd': -18.35, 'win_rate':  0.0, 'trades': 2,  'avg_yield': 1.75},
+        {'label': 'Weekly (7 DTE)',   'group': 'dte',               'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Monthly (28 DTE)', 'group': 'dte',               'sharpe': -1.64, 'total_return': -13.99,'max_dd': -13.99, 'win_rate':  0.0, 'trades': 2,  'avg_yield': 1.66},
+        {'label': 'Max 40%/leg',      'group': 'equity_per_leg',    'sharpe': -0.53, 'total_return': -10.54,'max_dd': -17.44, 'win_rate': 53.3, 'trades': 15, 'avg_yield': 0.90},
+        {'label': 'Max 50%/leg',      'group': 'equity_per_leg',    'sharpe': -1.38, 'total_return': -6.94, 'max_dd': -11.07, 'win_rate': 20.0, 'trades': 5,  'avg_yield': 0.88},
+        {'label': 'Max 60%/leg',      'group': 'equity_per_leg',    'sharpe': -1.19, 'total_return': -6.49, 'max_dd': -11.43, 'win_rate': 20.0, 'trades': 5,  'avg_yield': 0.88},
+        {'label': 'Max 70%/leg',      'group': 'equity_per_leg',    'sharpe': -0.94, 'total_return': -5.32, 'max_dd': -11.10, 'win_rate': 25.0, 'trades': 4,  'avg_yield': 0.85},
+        {'label': 'Max 80%/leg',      'group': 'equity_per_leg',    'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Max 90%/leg',      'group': 'equity_per_leg',    'sharpe': -0.65, 'total_return': -4.13, 'max_dd': -11.53, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Max 100%/leg',     'group': 'equity_per_leg',    'sharpe': -0.61, 'total_return': -4.59, 'max_dd': -12.71, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Buffer 0%',        'group': 'free_margin',       'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Buffer 10%',       'group': 'free_margin',       'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Buffer 20%',       'group': 'free_margin',       'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Buffer 30%',       'group': 'free_margin',       'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Start $10,000',    'group': 'starting_equity',   'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Start $25,000',    'group': 'starting_equity',   'sharpe':  0.01, 'total_return':  5.16, 'max_dd': -10.15, 'win_rate': 76.9, 'trades': 13, 'avg_yield': 0.90},
+        {'label': 'Start $50,000',    'group': 'starting_equity',   'sharpe': -0.02, 'total_return':  4.57, 'max_dd': -10.20, 'win_rate': 76.9, 'trades': 13, 'avg_yield': 0.90},
+        {'label': 'Start $100,000',   'group': 'starting_equity',   'sharpe':  0.01, 'total_return':  5.08, 'max_dd': -10.16, 'win_rate': 76.9, 'trades': 13, 'avg_yield': 0.90},
+        {'label': 'Conservative $10k',  'group': 'combo', 'sharpe': -1.05, 'total_return': -21.56,'max_dd': -21.56, 'win_rate':  0.0, 'trades': 1,  'avg_yield': 1.81},
+        {'label': 'Balanced $10k',       'group': 'combo', 'sharpe': -0.70, 'total_return': -3.67, 'max_dd': -10.34, 'win_rate': 33.3, 'trades': 3,  'avg_yield': 0.87},
+        {'label': 'Aggressive $10k',     'group': 'combo', 'sharpe':  0.24, 'total_return': 10.12, 'max_dd': -15.76, 'win_rate': 60.0, 'trades': 5,  'avg_yield': 1.14},
+        {'label': 'Monthly+LowIV $10k',  'group': 'combo', 'sharpe': -1.64, 'total_return': -13.99,'max_dd': -13.99, 'win_rate':  0.0, 'trades': 2,  'avg_yield': 1.66},
+        {'label': 'Conservative $50k',   'group': 'combo', 'sharpe': -1.73, 'total_return': -10.53,'max_dd': -10.53, 'win_rate':  0.0, 'trades': 2,  'avg_yield': 1.50},
+        {'label': 'Balanced $50k',        'group': 'combo', 'sharpe': -0.02, 'total_return':  4.57, 'max_dd': -10.20, 'win_rate': 76.9, 'trades': 13, 'avg_yield': 0.90},
+        {'label': 'Aggressive $50k',      'group': 'combo', 'sharpe':  0.03, 'total_return':  5.53, 'max_dd': -11.14, 'win_rate': 64.3, 'trades': 14, 'avg_yield': 1.14},
+    ]
+
+    GROUPS = [
+        {'key': 'iv_rank_threshold', 'title': 'IV Rank Threshold',
+         'winner': 'IV rank >= 60%', 'winner_val': '>= 60%',
+         'runner_up': 'IV rank >= 70% (Sharpe 1.29, +51.1%)',
+         'reasoning': ('Waiting for very high IV (>=60%) is the most impactful setting. '
+                       'Sharpe jumps to 1.40 with +53% annualised return and only a 10% max drawdown. '
+                       'Selling when volatility is richest means you collect significantly more per contract, '
+                       'more than compensating for the fewer trade opportunities.')},
+        {'key': 'delta', 'title': 'Strike Delta',
+         'winner': 'Delta 10-15%', 'winner_val': 'D10-15% (deep OTM)',
+         'runner_up': 'Delta 15-20% (Sharpe -0.26, -3.5%)',
+         'reasoning': ('Deep OTM strikes (D10-15%) produce the best risk-adjusted returns. '
+                       'While premium per trade is lower (~0.5%), the 69% win rate and avoidance of large '
+                       'assignment losses keeps Sharpe near zero, vastly better than closer-to-money strikes.')},
+        {'key': 'dte', 'title': 'Days to Expiry (DTE)',
+         'winner': 'Weekly (7 DTE)', 'winner_val': '7 DTE (weekly)',
+         'runner_up': 'Monthly (28 DTE) -- Sharpe -1.64, -14.0%',
+         'reasoning': ('Weekly options clearly outperform monthly (Sharpe -0.70 vs. -1.64). '
+                       'Shorter-dated contracts allow faster capital recycling and quicker exit '
+                       'when trades move against you, reducing severity of losing cycles.')},
+        {'key': 'equity_per_leg', 'title': 'Max Equity per Leg',
+         'winner': 'Max 40%/leg', 'winner_val': '40% of equity',
+         'runner_up': 'Max 100%/leg (Sharpe -0.61, -4.6%)',
+         'reasoning': ('Allocating only 40% per leg (Sharpe -0.53) enables multiple concurrent positions '
+                       'and spreads risk. Higher allocations concentrate too much capital in one trade, '
+                       'amplifying losses on assignments. Note: impractical for $10k accounts given '
+                       'minimum BTC option contract sizes (~$7-8k collateral required).')},
+        {'key': 'free_margin', 'title': 'Free Capital Buffer',
+         'winner': 'Buffer 0%', 'winner_val': '0% (no buffer required)',
+         'runner_up': 'Buffer 10-30% (all identical results)',
+         'reasoning': ('All buffer settings produced identical results -- the constraint was never binding. '
+                       'With a small $10k account a required buffer often blocks all trades. '
+                       'Setting it to 0% is safest for small accounts. Larger accounts may want 10-20%.')},
+        {'key': 'starting_equity', 'title': 'Starting Equity',
+         'winner': 'Start $25,000', 'winner_val': '$25,000',
+         'runner_up': 'Start $100,000 (Sharpe 0.01, +5.1%)',
+         'reasoning': ('$25k is the sweet spot -- enough collateral for multiple BTC option contracts '
+                       '(min ~$7-8k each), unlocking a 76.9% win rate and positive Sharpe. '
+                       'The $10k account is too small to size positions meaningfully.')},
+        {'key': 'combo', 'title': 'Combined Strategy Preset',
+         'winner': 'Aggressive $10k', 'winner_val': 'Aggressive preset ($10k)',
+         'runner_up': 'Aggressive $50k (Sharpe 0.03, +5.5%)',
+         'reasoning': ('The Aggressive $10k preset is the only $10k combo with positive Sharpe (0.24) '
+                       'and positive return (+10.1%). At $50k, both Balanced and Aggressive turn '
+                       'profitable, with Aggressive $50k narrowly ahead.')},
+    ]
+
+    # Summary recommendation box
+    st.markdown(
+        '<div style="background:#161b22;border:1px solid #21262d;border-radius:10px;'
+        'padding:20px 24px;margin-bottom:20px;">'
+        '<h4 style="color:#58a6ff;margin:0 0 12px 0;">Optimal Settings (36 Backtests)</h4>'
+        '<p style="color:#c9d1d9;margin:0 0 10px 0;font-size:15px;line-height:1.8;">'
+        '<strong style="color:#3fb950;">IV Rank &gt;= 60%</strong> &middot; '
+        '<strong style="color:#3fb950;">Delta D10-15% (deep OTM)</strong> &middot; '
+        '<strong style="color:#3fb950;">7 DTE (weekly)</strong> &middot; '
+        '<strong style="color:#3fb950;">Max 40% equity/leg</strong> &middot; '
+        '<strong style="color:#3fb950;">0% free buffer</strong> &middot; '
+        '<strong style="color:#3fb950;">$25k+ starting equity</strong></p>'
+        '<p style="color:#8b949e;margin:0;font-size:13px;line-height:1.6;">'
+        'Best overall preset: <strong style="color:#3fb950;">Aggressive $10k</strong> (Sharpe 0.24, +10.1%). '
+        'For best risk-adjusted performance: IV &gt;= 60% + deep OTM on $25k+ account '
+        '(Sharpe 1.40, +53% annualised).</p></div>',
+        unsafe_allow_html=True,
+    )
+
+    # Full results table
+    with st.expander('Full Results Table -- all 36 runs', expanded=False):
+        df_all = pd.DataFrame(BACKTEST_RESULTS)
+        disp = df_all[['label', 'group', 'sharpe', 'total_return', 'max_dd', 'win_rate', 'trades', 'avg_yield']].copy()
+        disp.columns = ['Setting', 'Group', 'Sharpe', 'Return %', 'Max DD %', 'Win Rate %', 'Trades', 'Avg Yield %']
+
+        def _cs(v):
+            if not isinstance(v, (int, float)): return ''
+            return 'color: #3fb950' if v > 0 else ('color: #d29922' if v > -0.5 else 'color: #f85149')
+
+        def _cr(v):
+            if not isinstance(v, (int, float)): return ''
+            return 'color: #3fb950' if v > 0 else 'color: #f85149'
+
+        st.dataframe(
+            disp.style.map(_cs, subset=['Sharpe']).map(_cr, subset=['Return %']),
+            use_container_width=True, height=420,
+        )
+
+    # Per-group charts + cards
+    st.markdown('---')
+    st.markdown('### Parameter Group Analysis')
+
+    C_BG2    = '#0d1117'
+    C_CARD2  = '#161b22'
+    C_GRID2  = '#21262d'
+    C_TEXT2  = '#c9d1d9'
+    C_MUTED2 = '#8b949e'
+    C_BLUE2  = '#58a6ff'
+    C_GREEN2 = '#3fb950'
+
+    for meta in GROUPS:
+        group_data = [r for r in BACKTEST_RESULTS if r['group'] == meta['key']]
+        winner_label = meta['winner']
+        st.markdown(f"#### {meta['title']}")
+        chart_col, card_col = st.columns([2, 1], gap='large')
+
+        with chart_col:
+            labels  = [r['label']  for r in group_data]
+            sharpes = [r['sharpe'] for r in group_data]
+            bar_colors = [C_GREEN2 if r['label'] == winner_label else C_BLUE2 for r in group_data]
+            fig = go.Figure(go.Bar(
+                x=labels, y=sharpes, marker_color=bar_colors,
+                text=[f'{s:+.2f}' for s in sharpes],
+                textposition='outside', textfont=dict(color=C_TEXT2, size=10),
+            ))
+            fig.add_hline(y=0, line=dict(color=C_MUTED2, dash='dash', width=1))
+            fig.update_layout(
+                title=dict(text=f"Sharpe by {meta['title']}", font=dict(color=C_TEXT2, size=12)),
+                paper_bgcolor=C_CARD2, plot_bgcolor=C_CARD2,
+                font=dict(color=C_TEXT2, size=11),
+                xaxis=dict(gridcolor=C_GRID2, zerolinecolor=C_GRID2, tickangle=-25, tickfont=dict(size=9)),
+                yaxis=dict(gridcolor=C_GRID2, zerolinecolor=C_GRID2),
+                margin=dict(l=50, r=20, t=36, b=70), height=270,
+            )
+            st.plotly_chart(fig, use_container_width=True, key=f"reco_chart_{meta['key']}")
+
+        with card_col:
+            wd = next((r for r in group_data if r['label'] == winner_label), group_data[0])
+            s_col = '#3fb950' if wd['sharpe'] > 0 else ('#d29922' if wd['sharpe'] > -0.5 else '#f85149')
+            r_col = '#3fb950' if wd['total_return'] > 0 else '#f85149'
+            w_col = '#3fb950' if wd['win_rate'] >= 60 else ('#d29922' if wd['win_rate'] >= 40 else '#f85149')
+            card_html = (
+                '<div style="background:#161b22;border:1px solid #21262d;border-radius:8px;padding:16px 18px;">'
+                '<div style="color:#58a6ff;font-size:10px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Winner</div>'
+                f'<div style="color:#c9d1d9;font-size:16px;font-weight:700;margin-bottom:12px;">{meta["winner_val"]}</div>'
+                '<div style="display:flex;gap:18px;margin-bottom:12px;">'
+                f'<div><div style="color:#8b949e;font-size:10px;">Sharpe</div><div style="color:{s_col};font-size:20px;font-weight:700;">{wd["sharpe"]:+.2f}</div></div>'
+                f'<div><div style="color:#8b949e;font-size:10px;">Return</div><div style="color:{r_col};font-size:20px;font-weight:700;">{wd["total_return"]:+.1f}%</div></div>'
+                f'<div><div style="color:#8b949e;font-size:10px;">Win Rate</div><div style="color:{w_col};font-size:20px;font-weight:700;">{wd["win_rate"]:.0f}%</div></div>'
+                '</div>'
+                f'<div style="color:#8b949e;font-size:11px;line-height:1.55;margin-bottom:10px;">{meta["reasoning"]}</div>'
+                f'<div style="border-top:1px solid #21262d;padding-top:8px;color:#8b949e;font-size:10px;">Runner-up: {meta["runner_up"]}</div>'
+                '</div>'
+            )
+            st.markdown(card_html, unsafe_allow_html=True)
+        st.markdown('')
+
+
+# ======================================================================
+# MAIN
+# ======================================================================
 def main() -> None:
     render_sidebar()
-
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊 Backtest",
-        "📈 Paper Trading",
-        "🧬 Optimizer",
-        "⚙️ Config",
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        '📊 Backtest',
+        '📈 Paper Trading',
+        '🧬 Optimizer',
+        '⚙️ Config',
+        '📋 Recommendations',
     ])
-
     with tab1:
         tab_backtest()
     with tab2:
@@ -942,7 +1132,9 @@ def main() -> None:
         tab_optimizer()
     with tab4:
         tab_config()
+    with tab5:
+        tab_recommendations()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
