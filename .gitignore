@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+logs/
+data/*.csv
+backtest_results.png
+.DS_Store
+*.bak

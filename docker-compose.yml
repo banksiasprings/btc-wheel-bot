@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  wheel-bot:
+    build: .
+    image: btc-wheel-bot:latest
+    container_name: btc-wheel-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["--mode", "paper"]   # Change to "live" for real trading
+
+  # Optional: run backtest only (exits after completion)
+  backtest:
+    build: .
+    image: btc-wheel-bot:latest
+    container_name: btc-wheel-backtest
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["--mode", "backtest"]
+    profiles:
+      - backtest
