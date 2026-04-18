@@ -219,6 +219,16 @@ class WheelBot:
             logger.warning("Zero contracts sized — skipping open")
             return
 
+        # Full pre-trade check (kill switch, max legs, collateral, free margin)
+        if not self._risk.full_pre_trade_check(
+            open_positions=self._positions,
+            equity_usd=self._equity_usd,
+            strike_usd=signal.strike,
+            btc_price=underlying_price,
+            proposed_contracts=contracts,
+        ):
+            return
+
         if self._paper:
             logger.info(
                 f"[PAPER OPEN] SELL {signal.instrument_name} "

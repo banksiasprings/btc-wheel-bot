@@ -72,6 +72,8 @@ class MarketBrief:
     drawdown_warning: bool           # within 50% of max_drawdown limit
     consecutive_loss_warning: bool   # 3+ losses in a row
     iv_spike_warning: bool           # IV rank > 0.85
+    low_capital_warning: bool        # free (unreserved) equity < min_free_equity_fraction
+    free_equity_pct: float           # % of account currently unencumbered
 
 
 @dataclass
@@ -195,11 +197,13 @@ Good reasons to HALT:
 - Extreme IV spike (rank > 0.90) combined with an open losing position
 - Equity is below 85% of starting equity
 - The strategy has stopped working: win rate below 50% over last 10 cycles
+- low_capital_warning is true AND there is already an open losing position (double jeopardy)
 
 Good reasons to CONTINUE:
 - One or two assignments in a row (normal for a wheel strategy)
 - IV is elevated but within normal bounds
 - Equity is up overall, drawdown is manageable
+- low_capital_warning is true but the open position is profitable (capital is productively deployed)
 
 Current bot state:
 {brief_json}
@@ -288,7 +292,18 @@ class AIOverSeer:
                 break
 
         from config import cfg
+
+        # Free capital: equity minus notional collateral locked in open positions
         pos = open_position or {}
+        reserved = 0.0
+        if open_position:
+            strike = pos.get("strike", 0)
+            contracts = pos.get("contracts", 1)
+            reserved = strike * contracts * cfg.sizing.contract_size_btc
+        free_equity = max(current_equity - reserved, 0.0)
+        free_equity_pct = (free_equity / current_equity * 100) if current_equity > 0 else 0.0
+        low_capital = free_equity_pct < (cfg.sizing.min_free_equity_fraction * 100)
+
         return MarketBrief(
             timestamp_utc=datetime.now(tz=timezone.utc).isoformat(),
             starting_equity=starting_equity,
@@ -313,6 +328,8 @@ class AIOverSeer:
             drawdown_warning=drawdown_pct > (cfg.risk.max_daily_drawdown * 50),
             consecutive_loss_warning=consecutive_losses >= 3,
             iv_spike_warning=iv_rank > 0.85,
+            low_capital_warning=low_capital,
+            free_equity_pct=round(free_equity_pct, 1),
         )
 
     def check(self, brief: MarketBrief) -> bool:

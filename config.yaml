@@ -48,6 +48,11 @@ sizing:
   # Collateral buffer (1.5 = 150%)
   collateral_buffer: 1.50
 
+  # Minimum fraction of equity that must remain FREE (unreserved) after opening any new leg.
+  # e.g. 0.25 = always keep 25% of account unencumbered as a liquidity buffer.
+  # Set to 0.0 to disable this check.
+  min_free_equity_fraction: 0.25
+
   # Contract size in BTC (Deribit minimum lot = 0.1 BTC)
   contract_size_btc: 0.1
 

@@ -144,6 +144,56 @@ class RiskManager:
         )
         return True
 
+    def check_free_margin(
+        self,
+        equity_usd: float,
+        open_positions: list[Position],
+        proposed_strike_usd: float,
+        proposed_contracts: float,
+    ) -> bool:
+        """
+        Verify opening a new leg leaves enough FREE (unreserved) capital.
+
+        For cash-secured puts on Deribit the full strike notional is locked
+        as collateral.  This check ensures we never over-commit liquidity —
+        even if individual position sizing looks fine, stacking multiple
+        legs (or a large strike) can leave the account with no cushion.
+
+        Calculation
+        -----------
+            reserved_now  = Σ(strike × contracts × contract_size) for existing legs
+            reserved_new  = proposed_strike × proposed_contracts × contract_size
+            free_after    = equity - reserved_now - reserved_new
+            required_free = equity × min_free_equity_fraction
+
+        Returns False (block trade) if free_after < required_free.
+        """
+        threshold = cfg.sizing.min_free_equity_fraction
+        if threshold <= 0.0:
+            return True   # check disabled in config
+
+        reserved_now = sum(
+            pos.strike * pos.contracts * cfg.sizing.contract_size_btc
+            for pos in open_positions
+        )
+        reserved_new  = proposed_strike_usd * proposed_contracts * cfg.sizing.contract_size_btc
+        free_after    = equity_usd - reserved_now - reserved_new
+        required_free = equity_usd * threshold
+
+        if free_after < required_free:
+            logger.warning(
+                f"Free-margin check FAILED: ${free_after:,.0f} free after proposed leg "
+                f"(need ≥ ${required_free:,.0f} = {threshold:.0%} of equity). "
+                f"Reserved now: ${reserved_now:,.0f}  |  Proposed leg: ${reserved_new:,.0f}"
+            )
+            return False
+
+        logger.debug(
+            f"Free-margin OK: ${free_after:,.0f} free after leg "
+            f"(min ${required_free:,.0f})"
+        )
+        return True
+
     # ── In-trade ──────────────────────────────────────────────────────────────
 
     def should_roll(self, position: Position) -> tuple[bool, str]:
@@ -206,16 +256,26 @@ class RiskManager:
         equity_usd: float,
         strike_usd: float,
         btc_price: float,
+        proposed_contracts: float | None = None,
     ) -> bool:
         """
         Run all pre-trade checks in sequence.
         Returns True only if every check passes.
+
+        proposed_contracts is optional — if provided, the free-margin check
+        uses the exact contract count.  If omitted, it is estimated from
+        the position-sizing formula (same logic as calculate_contracts).
         """
+        # Estimate contracts for free-margin check if not provided
+        if proposed_contracts is None:
+            proposed_contracts = self.calculate_contracts(equity_usd, strike_usd)
+
         checks = [
             self.check_kill_switch(),
             self.check_max_legs(open_positions),
             self.check_position_size(equity_usd, strike_usd),
             self.check_collateral(open_positions, equity_usd, btc_price),
+            self.check_free_margin(equity_usd, open_positions, strike_usd, proposed_contracts),
         ]
         result = all(checks)
         if result:

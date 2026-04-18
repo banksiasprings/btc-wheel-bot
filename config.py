@@ -66,6 +66,7 @@ class SizingConfig:
     max_open_legs: int
     collateral_buffer: float
     contract_size_btc: float
+    min_free_equity_fraction: float = 0.25
 
 
 @dataclass
@@ -182,6 +183,7 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         max_open_legs=int(sz["max_open_legs"]),
         collateral_buffer=float(sz["collateral_buffer"]),
         contract_size_btc=float(sz["contract_size_btc"]),
+        min_free_equity_fraction=float(sz.get("min_free_equity_fraction", 0.25)),
     )
 
     r = raw["risk"]
