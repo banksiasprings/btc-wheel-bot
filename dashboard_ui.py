@@ -309,10 +309,59 @@ def tab_backtest() -> None:
     st.markdown("### 📊 Backtest — Interactive Parameter Explorer")
     st.caption("Adjust parameters, hit **Run Backtest**, and see the results instantly.")
 
+    # ── Quick presets ──────────────────────────────────────────────────────────
+    with st.expander("⚡ Quick Presets — click to load a starting configuration"):
+        pcol1, pcol2, pcol3 = st.columns(3)
+        with pcol1:
+            st.markdown("**Conservative**")
+            st.caption("Δ15-20% OTM, monthly options, very selective on IV. Fewer trades, lower risk.")
+            if st.button("Load Conservative", use_container_width=True):
+                st.session_state["preset"] = dict(
+                    iv_rank_threshold=0.60, target_delta_min=0.15, target_delta_max=0.20,
+                    min_dte=21, max_dte=35, max_equity_per_leg=0.80, min_free_equity_fraction=0.0,
+                    lookback_months=18, starting_equity=10000,
+                )
+                st.rerun()
+        with pcol2:
+            st.markdown("**Balanced**")
+            st.caption("Δ15-25% OTM, weekly options, moderate IV filter. Good starting point.")
+            if st.button("Load Balanced", use_container_width=True):
+                st.session_state["preset"] = dict(
+                    iv_rank_threshold=0.50, target_delta_min=0.15, target_delta_max=0.25,
+                    min_dte=5, max_dte=14, max_equity_per_leg=0.80, min_free_equity_fraction=0.0,
+                    lookback_months=18, starting_equity=10000,
+                )
+                st.rerun()
+        with pcol3:
+            st.markdown("**Aggressive**")
+            st.caption("Δ20-35% OTM, weekly, low IV filter. More trades, more risk.")
+            if st.button("Load Aggressive", use_container_width=True):
+                st.session_state["preset"] = dict(
+                    iv_rank_threshold=0.30, target_delta_min=0.20, target_delta_max=0.35,
+                    min_dte=5, max_dte=14, max_equity_per_leg=0.80, min_free_equity_fraction=0.0,
+                    lookback_months=18, starting_equity=10000,
+                )
+                st.rerun()
+
+    # Load preset into session if just clicked
+    _preset = st.session_state.pop("preset", None)
+
     raw = load_yaml()
     s   = raw.get("strategy", {})
     sz  = raw.get("sizing", {})
     bt  = raw.get("backtest", {})
+
+    # If a preset was just loaded, override the config defaults for this render
+    if _preset:
+        s  = {**s,  "iv_rank_threshold": _preset["iv_rank_threshold"],
+                    "target_delta_min":  _preset["target_delta_min"],
+                    "target_delta_max":  _preset["target_delta_max"],
+                    "min_dte":           _preset["min_dte"],
+                    "max_dte":           _preset["max_dte"]}
+        sz = {**sz, "max_equity_per_leg":         _preset["max_equity_per_leg"],
+                    "min_free_equity_fraction":   _preset["min_free_equity_fraction"]}
+        bt = {**bt, "lookback_months":  _preset["lookback_months"],
+                    "starting_equity":  _preset["starting_equity"]}
 
     col_params, col_results = st.columns([1, 2], gap="large")
 
@@ -321,44 +370,60 @@ def tab_backtest() -> None:
 
         iv_thresh = st.slider(
             "IV Rank Threshold",
-            min_value=0.20, max_value=0.80, step=0.05,
-            value=float(s.get("iv_rank_threshold", 0.50)),
-            help="Only sell when IV rank exceeds this — higher = wait for more volatility",
-        )
+            min_value=20, max_value=80, step=5,
+            value=int(float(s.get("iv_rank_threshold", 0.50)) * 100),
+            format="%d%%",
+            help="Only sell when IV rank exceeds this. 50% = only trade when volatility is above its 1-year median. Higher = fewer but better-timed trades.",
+        ) / 100
+
         delta_min = st.slider(
             "Target Delta Min",
-            min_value=0.10, max_value=0.25, step=0.025,
-            value=float(s.get("target_delta_min", 0.15)),
-        )
+            min_value=10, max_value=25, step=2,
+            value=int(float(s.get("target_delta_min", 0.15)) * 100),
+            format="Δ%d%%",
+            help="Lower bound of how far OTM your strike will be. Δ15% = very safely OTM, rarely assigned.",
+        ) / 100
+
         delta_max = st.slider(
             "Target Delta Max",
-            min_value=0.20, max_value=0.45, step=0.025,
-            value=float(s.get("target_delta_max", 0.30)),
-        )
+            min_value=20, max_value=45, step=2,
+            value=int(float(s.get("target_delta_max", 0.30)) * 100),
+            format="Δ%d%%",
+            help="Upper bound. Keep this below Δ30% for safety — higher means closer to the money, more premium but more assignments.",
+        ) / 100
+
         min_dte = st.slider(
-            "Min DTE", min_value=2, max_value=14, step=1,
+            "Min DTE (days to expiry)",
+            min_value=2, max_value=14, step=1,
             value=int(s.get("min_dte", 5)),
+            help="Don't open a new position with fewer than this many days to expiry.",
         )
         max_dte = st.slider(
-            "Max DTE", min_value=7, max_value=45, step=7,
+            "Max DTE (days to expiry)",
+            min_value=7, max_value=45, step=7,
             value=int(s.get("max_dte", 35)),
+            help="7 = weekly options (small premium, fast decay). 28-35 = monthly (better premium/risk). Monthly recommended.",
         )
 
         st.markdown("#### Sizing & Risk")
-        equity_frac = st.slider(
-            "Max Equity per Leg",
-            min_value=0.01, max_value=0.15, step=0.01,
-            value=float(sz.get("max_equity_per_leg", 0.05)),
-            format="%.0f%%",
-            help="Fraction of account risked per position",
+
+        equity_frac_pct = st.slider(
+            "Max Equity per Leg (%)",
+            min_value=1, max_value=30, step=1,
+            value=max(1, int(float(sz.get("max_equity_per_leg", 0.05)) * 100)),
+            format="%d%%",
+            help="Max % of your account used as collateral for one leg. With $10k account and BTC options, you need at least 70-80% because the minimum contract (0.1 BTC) costs ~$7-8k collateral. With larger accounts you can set this lower.",
         )
-        free_margin = st.slider(
-            "Min Free Equity Fraction",
-            min_value=0.0, max_value=0.50, step=0.05,
-            value=float(sz.get("min_free_equity_fraction", 0.25)),
-            format="%.0f%%",
-            help="Always keep this much of the account unencumbered",
+        equity_frac = equity_frac_pct / 100
+
+        free_margin_pct = st.slider(
+            "Min Free Capital Buffer (%)",
+            min_value=0, max_value=50, step=5,
+            value=int(float(sz.get("min_free_equity_fraction", 0.25)) * 100),
+            format="%d%%",
+            help="Always keep this % of account unencumbered as a safety buffer. Set to 0% on a small account (it may block every trade otherwise).",
         )
+        free_margin = free_margin_pct / 100
 
         st.markdown("#### Backtest Settings")
         lookback = st.slider(
