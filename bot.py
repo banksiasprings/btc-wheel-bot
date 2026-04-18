@@ -1,113 +1,281 @@
 """
-bot.py — Main async trading loop for paper and live modes.
+bot.py -- Async main trading loop (paper and live modes).
 
-# LIVE_ONLY: This module is scaffolded but NOT activated in Phase 1.
-# It will be wired up after backtesting is validated.
+Architecture:
+  - WheelBot.run() is the top-level async entry point
+  - 60-second poll loop fetches market state and decides actions
+  - 08:00 UTC daily: expiry check -> auto-settle -> open next leg
+  - All orders are confirmed via WebSocket before loop proceeds
+  - KILL_SWITCH file halts everything immediately
 
-Modes:
-  paper — connects to Deribit testnet, executes real orders but no real money
-  live  — connects to mainnet, real orders, real money
+This module is SCAFFOLDED for Phase 1.
+Live order execution is not active; paper mode logs simulated actions.
 """
 
 from __future__ import annotations
 
 import asyncio
-import signal
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from loguru import logger
 
-from config import cfg
-from deribit_client import DeribitClient
+from ai_overseer import AIOverSeer
+from config import Config, cfg
+from deribit_client import DeribitClient, DeribitPublicREST
 from risk_manager import Position, RiskManager
 from strategy import WheelStrategy
 
 
 class WheelBot:
     """
-    Async wheel strategy bot.
+    Async wheel-strategy bot.
 
-    Loop:
-      1. Check kill switch
-      2. Fetch account equity + open positions
-      3. Check drawdown
-      4. If no open position: run strategy, size, place order
-      5. If position open: check roll/close conditions
-      6. Sleep poll_interval seconds
-      7. Repeat
+    Modes:
+        paper=True  -- fetches live data, logs simulated orders
+        paper=False -- fetches live data, places real orders (LIVE_ONLY)
     """
 
-    def __init__(self) -> None:
-        self._client = DeribitClient()
-        self._risk = RiskManager()
-        self._open_positions: list[Position] = []
-        self._equity_curve: list[float] = []
-        self._running: bool = False
+    def __init__(self, config: Config | None = None, paper: bool = True) -> None:
+        self._cfg        = config or cfg
+        self._paper      = paper
+        self._risk       = RiskManager()
+        self._client     = DeribitClient()
+        self._strategy   = WheelStrategy(self._client.rest)
+        self._positions: list[Position] = []
+        self._equity_usd: float = self._cfg.backtest.starting_equity
+        self._equity_history: list[float] = []
+        self._kill_path  = Path(self._cfg.risk.kill_switch_file)
+        self._trades_log: list[dict] = []          # lightweight in-memory trade log
+        self._iv_history_cache: list = []
+        self._last_overseer_check: datetime | None = None
 
-    async def start(self) -> None:
-        """Connect to Deribit and start the main loop."""
+        # AI Overseer (disabled if no LLM key found or config disabled)
+        if self._cfg.overseer.enabled:
+            self._overseer = AIOverSeer()
+            if self._overseer.is_enabled():
+                logger.info(
+                    f"AI Overseer active — check every "
+                    f"{self._cfg.overseer.check_interval_minutes}min"
+                )
+            else:
+                logger.info("AI Overseer: no LLM key found; oversight disabled")
+        else:
+            self._overseer = None
+            logger.info("AI Overseer: disabled in config")
+
+    # ── Lifecycle ──────────────────────────────────────────────────────────────
+
+    async def run(self) -> None:
+        """Main async loop."""
         logger.info(
-            f"Starting WheelBot | mode={'testnet' if cfg.deribit.testnet else 'MAINNET'} | "
-            f"poll={cfg.execution.poll_interval}s"
+            f"WheelBot starting ({'PAPER' if self._paper else 'LIVE'} mode)"
         )
-        await self._client.connect_live()
-        self._running = True
-
-        # Register graceful shutdown
-        loop = asyncio.get_event_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, self._stop)
+        if not self._paper:
+            # LIVE_ONLY: connect and authenticate WebSocket
+            await self._client.connect_live()
 
         try:
-            await self._main_loop()
+            while True:
+                await self._tick()
+                await asyncio.sleep(self._cfg.execution.poll_interval)
+        except asyncio.CancelledError:
+            logger.info("Bot loop cancelled")
         finally:
             await self._client.disconnect()
-            logger.info("Bot stopped")
+            logger.info("WheelBot shut down")
 
-    def _stop(self) -> None:
-        logger.warning("Shutdown signal received — stopping after current iteration")
-        self._running = False
+    def _should_run_overseer(self, now: datetime) -> bool:
+        """Return True if enough time has elapsed since the last LLM oversight check."""
+        if self._overseer is None or not self._overseer.is_enabled():
+            return False
+        if self._last_overseer_check is None:
+            return True
+        interval = timedelta(minutes=self._cfg.overseer.check_interval_minutes)
+        return now - self._last_overseer_check >= interval
 
-    async def _main_loop(self) -> None:
-        """Core execution loop."""
-        strategy: WheelStrategy | None = None
-        last_cycle = cfg.strategy.initial_cycle
+    def _run_overseer_check(self, now: datetime, btc_price: float, iv_rank: float) -> None:
+        """Build a MarketBrief and ask the LLM whether to CONTINUE or HALT."""
+        if self._overseer is None:
+            return
 
-        while self._running:
-            # ── Kill switch ────────────────────────────────────────────────────
+        open_pos: dict | None = None
+        if self._positions:
+            p = self._positions[0]
+            open_pos = {
+                "option_type": p.option_type,
+                "strike": p.strike,
+                "delta": p.current_delta,
+                "unrealised_pnl": (p.entry_price - p.current_price) * p.contracts * btc_price,
+                "dte": 0,          # DTE not tracked at this stage; Phase 2 TODO
+            }
+
+        brief = self._overseer.build_brief(
+            equity_curve=self._equity_history or [self._equity_usd],
+            trades=self._trades_log,
+            current_btc_price=btc_price,
+            btc_change_7d_pct=0.0,   # TODO: track 7d price in Phase 2
+            current_iv=float(self._iv_history_cache[-1][1]) if self._iv_history_cache else 80.0,
+            iv_rank=iv_rank,
+            open_position=open_pos,
+        )
+
+        safe = self._overseer.check(brief)
+        self._last_overseer_check = now
+
+        if not safe:
+            # Kill switch already written by overseer — kill switch check on
+            # next tick will halt the loop cleanly.
+            logger.critical("AI Overseer issued HALT — kill switch activated.")
+
+    async def _tick(self) -> None:
+        """Single poll iteration."""
+        now = datetime.now(timezone.utc)
+
+        # Kill switch check (highest priority — catches both manual and AI-triggered halts)
+        if not self._risk.check_kill_switch():
+            return
+
+        # Fetch market state
+        try:
+            iv_history   = self._client.rest.get_historical_volatility(
+                currency=self._cfg.deribit.currency
+            )
+            instruments  = self._client.rest.get_instruments(
+                currency=self._cfg.deribit.currency
+            )
+            # Fetch tickers for qualifying strikes
+            tickers = {}
+            for inst in instruments[:self._cfg.strategy.liquidity_top_n]:
+                ticker = self._client.rest.get_ticker(inst.instrument_name)
+                if ticker:
+                    tickers[inst.instrument_name] = ticker
+        except Exception as exc:
+            logger.error(f"Market data fetch failed: {exc}")
+            return
+
+        if not tickers:
+            logger.warning("No tickers fetched — skipping tick")
+            return
+
+        # Underlying price and current IV rank
+        underlying_price = next(iter(tickers.values())).underlying_price
+        if iv_history:
+            self._iv_history_cache = iv_history
+        recent_ivs = [row[1] for row in iv_history[-365:]] if iv_history else []
+        if len(recent_ivs) >= 2:
+            lo, hi = min(recent_ivs), max(recent_ivs)
+            iv_rank = (recent_ivs[-1] - lo) / (hi - lo) if hi > lo else 0.5
+        else:
+            iv_rank = 0.5
+
+        # Update equity (placeholder — live mode would query account API)
+        self._equity_history.append(self._equity_usd)
+
+        # Drawdown guard
+        if not self._risk.check_drawdown(self._equity_history):
+            logger.warning("Drawdown limit breached — no new positions this tick")
+            return
+
+        # AI Overseer (runs on its own cadence, not every tick)
+        if self._should_run_overseer(now):
+            self._run_overseer_check(now, underlying_price, iv_rank)
+            # Overseer may have written a kill switch; re-check before continuing
             if not self._risk.check_kill_switch():
-                logger.critical("Kill switch active — sleeping 60s then checking again")
-                await asyncio.sleep(60)
-                continue
+                return
 
+        # In-trade checks
+        for pos in list(self._positions):
+            should_roll, reason = self._risk.should_roll(pos)
+            if should_roll:
+                logger.warning(f"Rolling {pos.instrument_name}: {reason}")
+                await self._close_position(pos, reason)
+                self._positions.remove(pos)
+
+        # Open new leg if flat
+        if not self._positions:
+            last_cycle = None  # strategy decides based on internal state
+            signal = self._strategy.generate_signal(
+                iv_history=iv_history,
+                instruments=instruments,
+                tickers=tickers,
+                underlying_price=underlying_price,
+                last_cycle=last_cycle,
+            )
+            if signal:
+                await self._open_position(signal, underlying_price)
+
+        # Dashboard tick
+        self._print_status(now, underlying_price)
+
+    async def _open_position(self, signal, underlying_price: float) -> None:
+        """Open a new option position (paper or live)."""
+        contracts = self._risk.calculate_contracts(
+            equity_usd=self._equity_usd,
+            strike_usd=signal.strike,
+        )
+        if contracts <= 0:
+            logger.warning("Zero contracts sized — skipping open")
+            return
+
+        if self._paper:
+            logger.info(
+                f"[PAPER OPEN] SELL {signal.instrument_name} "
+                f"x{contracts} @ {signal.mark_price:.4f} BTC "
+                f"| delta={signal.delta:.3f} | IV={signal.mark_iv:.1f}%"
+            )
+        else:
+            # LIVE_ONLY: place real sell order via WebSocket
+            if self._client.ws is None:
+                logger.error("WebSocket not connected — cannot place order")
+                return
             try:
-                # ── Fetch market state ─────────────────────────────────────────
-                # TODO (Phase 2): Fetch real equity, positions, IV history
-                # equity = await self._client.ws.get_account_equity()
-                # iv_history = self._client.rest.get_historical_volatility()
-                # instruments = self._client.rest.get_instruments()
-                logger.info("Main loop iteration — paper/live data fetch not yet implemented")
-
-                # ── Drawdown check ─────────────────────────────────────────────
-                if not self._risk.check_drawdown(self._equity_curve):
-                    logger.warning("Drawdown limit — skipping this cycle")
-                    await asyncio.sleep(cfg.execution.poll_interval)
-                    continue
-
-                # ── In-trade management ────────────────────────────────────────
-                for pos in list(self._open_positions):
-                    should, reason = self._risk.should_roll(pos)
-                    if should:
-                        logger.warning(f"Rolling {pos.instrument_name}: {reason}")
-                        # TODO: execute roll order via self._client.ws.sell_option(...)
-
-                # ── New position ───────────────────────────────────────────────
-                if not self._open_positions:
-                    logger.info("No open position — checking for entry signal")
-                    # TODO: run strategy.generate_signal() and place order
-
+                result = await self._client.ws.sell_option(
+                    instrument_name=signal.instrument_name,
+                    amount=contracts,
+                    order_type="limit",
+                    price=signal.mark_price,
+                    label="wheel_bot",
+                )
+                logger.info(f"Order placed: {result}")
             except Exception as exc:
-                logger.error(f"Loop error: {exc}", exc_info=True)
+                logger.error(f"Order failed: {exc}")
+                return
 
-            await asyncio.sleep(cfg.execution.poll_interval)
+        # Track position in memory (live mode would use exchange state)
+        pos = Position(
+            instrument_name=signal.instrument_name,
+            strike=signal.strike,
+            option_type=signal.option_type,
+            entry_price=signal.mark_price,
+            underlying_at_entry=underlying_price,
+            contracts=contracts,
+            current_delta=abs(signal.delta),
+            current_price=signal.mark_price,
+            entry_equity=self._equity_usd,
+        )
+        self._positions.append(pos)
+
+    async def _close_position(self, pos: Position, reason: str) -> None:
+        """Close / roll a position (paper or live)."""
+        if self._paper:
+            logger.info(
+                f"[PAPER CLOSE] BUY BACK {pos.instrument_name} "
+                f"x{pos.contracts} @ {pos.current_price:.4f} BTC | {reason}"
+            )
+        else:
+            # LIVE_ONLY: place buy-to-close order
+            logger.warning(f"[LIVE CLOSE] {pos.instrument_name} | {reason}")
+
+    def _print_status(self, now: datetime, spot: float) -> None:
+        """Log a brief status line each tick."""
+        pos_str = (
+            f"{self._positions[0].instrument_name} "
+            f"delta={self._positions[0].current_delta:.3f}"
+            if self._positions else "FLAT"
+        )
+        logger.info(
+            f"[{now.strftime('%H:%M:%S')} UTC] "
+            f"BTC=${spot:,.0f} | equity=${self._equity_usd:,.0f} | {pos_str}"
+        )

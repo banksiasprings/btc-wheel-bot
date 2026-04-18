@@ -102,6 +102,20 @@ backtest:
   results_image: "backtest_results.png"
   results_csv: "data/backtest_trades.csv"
 
+# ── AI Overseer ───────────────────────────────────────────────────────────────
+overseer:
+  enabled: true                    # set false to disable LLM oversight entirely
+  check_interval_minutes: 60       # how often to run the LLM check (minutes)
+  # LLM backend selected automatically from env vars:
+  #   GEMINI_API_KEY    → Google Gemini Flash (recommended, free tier)
+  #   ANTHROPIC_API_KEY → Claude Haiku
+  #   OPENAI_API_KEY    → GPT-4o-mini
+  # If no key is set, the overseer is disabled regardless of `enabled` above.
+  #
+  # Thresholds that trigger a HALT recommendation to the LLM:
+  drawdown_warning_threshold: 0.05  # warn LLM when drawdown > 50% of max_daily_drawdown
+  iv_spike_warning_threshold: 0.85  # warn LLM when IV rank > this value
+
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging:
   level: "INFO"                    # DEBUG | INFO | WARNING | ERROR

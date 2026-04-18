@@ -1,38 +1,114 @@
-# BTC Wheel Bot
+# btc-wheel-bot
 
-A modular Python bot for collecting premium via a Bitcoin options wheel strategy on Deribit. Sells OTM puts and calls in a repeating cycle to harvest theta/vega without a directional BTC bet.
+A modular Python bot for a Bitcoin options **wheel-strategy** (premium-collection) on Deribit.
 
-> **Phase 1 complete:** Backtester is live. Paper/live modules are scaffolded.  
-> **Phase 2:** Paper trading on Deribit testnet (4+ weeks required).  
-> **Phase 3:** Live trading with small size after Phase 2 validation.
+Sells ~0.20–0.30 delta OTM puts (or calls) to harvest theta/vega decay.  
+No directional BTC bias.  Alternates put/call each cycle to stay roughly delta-neutral.
 
 ---
 
-## Quick Start
+## Quick start
 
 ### 1. Install dependencies
 
 ```bash
-cd btc-wheel-bot
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the backtest (Phase 1)
+### 2. Run the backtest
 
-No credentials needed — uses Deribit public data only.
+Downloads 12 months of real BTC price + IV data from Deribit (no API key needed):
 
 ```bash
-python main.py --mode backtest
+python main.py --mode=backtest
 ```
 
-This will:
-- Download 12 months of BTC price + IV data from Deribit
-- Simulate weekly wheel cycles
-- Print results table to console
-- Save `backtest_results.png` (equity curve)
-- Save `data/backtest_trades.csv`
+Outputs:
+- Summary table to stdout
+- `backtest_results.png` — equity curve + drawdown chart
+- `data/backtest_trades.csv` — per-trade log
 
-### 3. Run unit tests
+### 3. Paper-trade (live data, no real orders)
+
+```bash
+cp .env.example .env      # no credentials needed for paper mode
+python main.py --mode=paper
+```
+
+### 4. Live trading
+
+```bash
+# 1. Fill in .env with real Deribit API key/secret
+# 2. Set deribit.testnet: false in config.yaml
+python main.py --mode=live
+```
+
+---
+
+## Configuration
+
+All strategy parameters live in `config.yaml`.  
+Secrets (API key/secret) come from `.env` or environment variables — never in YAML.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `strategy.iv_rank_threshold` | 0.50 | Only sell when IV rank > 50% |
+| `strategy.target_delta_min` | 0.15 | Minimum delta for strike selection |
+| `strategy.target_delta_max` | 0.30 | Maximum delta for strike selection |
+| `strategy.expiry_preference` | weekly | Weekly or monthly expirations |
+| `sizing.max_equity_per_leg` | 0.05 | Max 5% of equity per leg |
+| `risk.max_adverse_delta` | 0.40 | Roll trigger: delta breach |
+| `risk.max_loss_per_leg` | 0.02 | Roll trigger: 2% unrealised loss |
+| `risk.max_daily_drawdown` | 0.10 | Pause trading at 10% drawdown |
+| `backtest.starting_equity` | 10000 | Starting capital (USD) |
+| `backtest.lookback_months` | 12 | Simulation horizon |
+
+---
+
+## Module overview
+
+| Module | Role |
+|--------|------|
+| `config.py` | YAML + env loader, typed dataclasses |
+| `deribit_client.py` | Public REST (backtest) + WebSocket scaffold (live) |
+| `strategy.py` | IV rank, cycle decision, strike selection, `# ML_HOOK` stubs |
+| `risk_manager.py` | Sizing, collateral check, roll triggers, drawdown guard |
+| `backtester.py` | Historical simulation with Black-Scholes pricing |
+| `bot.py` | Async 60s poll loop (paper/live) |
+| `dashboard.py` | Rich/plain console status panel |
+| `main.py` | CLI entry: `--mode=backtest|paper|live` |
+
+---
+
+## Emergency kill switch
+
+Create a file named `KILL_SWITCH` in the project root to immediately halt all trading:
+
+```bash
+touch KILL_SWITCH   # halt
+rm KILL_SWITCH      # resume
+```
+
+---
+
+## Docker
+
+```bash
+# Build
+docker compose build
+
+# Backtest (one-shot)
+docker compose --profile backtest up backtest
+
+# Paper trading (continuous)
+docker compose up -d btc-wheel-bot
+docker compose logs -f btc-wheel-bot
+```
+
+---
+
+## Running tests
 
 ```bash
 pytest tests/ -v
@@ -40,131 +116,21 @@ pytest tests/ -v
 
 ---
 
-## Configuration
+## Adding ML models (future Phase 2)
 
-All parameters live in `config.yaml`. No magic numbers in Python files.
+The code contains `# ML_HOOK` comments at the three primary decision points:
 
-Key settings:
+1. **`strategy.py` → `calculate_iv_rank()`** — replace with a trained IV-regime classifier
+2. **`strategy.py` → `decide_cycle()`** — replace with skew/trend predictor for put/call choice
+3. **`strategy.py` → `select_strike()`** — replace with ML-ranked candidate scoring
 
-| Setting | Default | Description |
-|---|---|---|
-| `strategy.iv_rank_threshold` | 0.50 | Only sell when IV rank > this |
-| `strategy.target_delta_min/max` | 0.15–0.30 | Delta range for strike selection |
-| `strategy.max_dte` | 35 | Maximum days to expiry |
-| `sizing.max_equity_per_leg` | 0.05 | Max 5% of account per trade |
-| `risk.max_daily_drawdown` | 0.10 | Pause if down 10% from peak |
-| `backtest.lookback_months` | 12 | How far back to simulate |
-
----
-
-## Paper Trading (Phase 2)
-
-1. Get testnet API credentials from https://www.deribit.com/account/testnet/api
-2. Copy `.env.example` → `.env` and fill in your keys
-3. Ensure `DERIBIT_TESTNET=true` in `.env`
-4. Run for minimum 4 weeks:
-
-```bash
-python main.py --mode paper
-```
-
-**Phase 2 pass criteria:**
-- Win rate > 60%
-- Max drawdown < 10%
-- Sharpe ratio > 0.8 annualised
-
----
-
-## Live Trading (Phase 3)
-
-Only proceed after Phase 2 passes. Start with minimum size (0.01–0.05 BTC collateral).
-
-```bash
-# In .env:
-DERIBIT_TESTNET=false
-DERIBIT_API_KEY=your_mainnet_key
-DERIBIT_API_SECRET=your_mainnet_secret
-```
-
-```bash
-python main.py --mode live
-```
-
-You will be prompted to type `YES I UNDERSTAND` before the bot connects to mainnet.
-
----
-
-## Emergency Kill Switch
-
-Create a file named `KILL_SWITCH` in the bot's working directory:
-
-```bash
-touch KILL_SWITCH
-```
-
-The bot checks for this file every loop and halts all trading immediately if found. Delete the file to resume.
-
----
-
-## Docker
-
-### Run backtest in Docker
-
-```bash
-docker-compose --profile backtest up backtest
-```
-
-### Run paper/live in Docker
-
-```bash
-cp .env.example .env
-# Fill in your API keys in .env
-docker-compose up wheel-bot
-```
-
----
-
-## Adding ML Later
-
-Strike selection in `strategy.py` includes `# ML_HOOK` stubs where a scikit-learn model can be plugged in:
+Example hook replacement:
 
 ```python
-# In strategy.py → select_strike()
-# ML_HOOK: Replace score calculation with ML model output:
-from ml_model import StrikeSelector
-selector = StrikeSelector.load("models/strike_selector.pkl")
-candidates = selector.rank(candidates, market_features)
-```
-
-Suggested approach:
-1. Export `data/backtest_trades.csv` as training data
-2. Features: IV rank, DTE, delta, skew, term structure, day-of-week
-3. Target: premium yield / win rate per cycle
-4. Train with `sklearn.ensemble.GradientBoostingClassifier` or XGBoost
-5. Load model in `strategy.py` behind the `# ML_HOOK` stub
-
----
-
-## Project Structure
-
-```
-btc-wheel-bot/
-├── main.py              # Entry point (--mode backtest|paper|live)
-├── config.py            # Typed config loader
-├── config.yaml          # All strategy parameters
-├── deribit_client.py    # REST + WebSocket client
-├── strategy.py          # Wheel logic, IV rank, strike selection
-├── risk_manager.py      # Sizing, collateral, drawdown checks
-├── backtester.py        # Phase 1: historical simulation
-├── bot.py               # Phase 2/3: async trading loop
-├── dashboard.py         # Console position display
-├── tests/               # pytest unit tests
-├── data/                # Trade CSVs (gitignored)
-├── logs/                # Log files (gitignored)
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml
-└── .env.example
+# ML_HOOK: uncomment and train the model
+# from ml_model import IVRankPredictor
+# predictor = IVRankPredictor.load("models/iv_rank_model.pkl")
+# return predictor.predict(iv_history, spot_price, term_structure)
 ```
 
 ---
@@ -173,17 +139,11 @@ btc-wheel-bot/
 
 ```bash
 # Tail live log
-tail -f logs/bot.log
+tail -f logs/btc-wheel-bot.log
 
-# Show dashboard
-python main.py --mode dashboard
+# Check current position
+grep "OPEN\|EXPIRY\|ROLL" logs/btc-wheel-bot.log | tail -20
 
-# Check kill switch status
-ls -la KILL_SWITCH 2>/dev/null && echo "KILL SWITCH ACTIVE" || echo "Bot running"
+# Drawdown alert
+grep "PAUSE\|drawdown" logs/btc-wheel-bot.log
 ```
-
----
-
-## Disclaimer
-
-This bot is for educational and research purposes. Options trading involves substantial risk of loss. Never trade with money you cannot afford to lose. Always validate thoroughly on testnet before using real funds.

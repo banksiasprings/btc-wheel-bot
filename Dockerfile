@@ -1,29 +1,27 @@
+# ── Stage 1: builder ─────────────────────────────────────────────────────────
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libffi-dev && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt && \
+    apt-get purge -y gcc libffi-dev && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/*
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
 
-# Create non-root user
-RUN useradd -m -u 1000 botuser
-
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy application source
+COPY --from=builder /install /usr/local
 COPY . .
 
-# Create data/log directories
-RUN mkdir -p data logs && chown -R botuser:botuser /app
+RUN mkdir -p logs data
 
-USER botuser
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-# Default: backtest mode
 ENTRYPOINT ["python", "main.py"]
-CMD ["--mode", "backtest"]
+CMD ["--mode=backtest"]

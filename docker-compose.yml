@@ -1,28 +1,37 @@
 version: "3.9"
 
 services:
-  wheel-bot:
+  btc-wheel-bot:
     build: .
     image: btc-wheel-bot:latest
     container_name: btc-wheel-bot
-    restart: unless-stopped
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-    command: ["--mode", "paper"]   # Change to "live" for real trading
 
-  # Optional: run backtest only (exits after completion)
+    env_file:
+      - .env          # copy .env.example to .env and fill in credentials
+
+    volumes:
+      - ./data:/app/data        # persist trade CSV and chart
+      - ./logs:/app/logs        # persist log files
+      - ./config.yaml:/app/config.yaml:ro
+
+    command: ["--mode=paper"]   # change to --mode=live for real trading
+
+    restart: unless-stopped
+
+  # ── Backtest one-shot service ───────────────────────────────────────────────
   backtest:
     build: .
     image: btc-wheel-bot:latest
     container_name: btc-wheel-backtest
+    profiles: ["backtest"]      # docker compose --profile backtest up
+
     env_file:
       - .env
+
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    command: ["--mode", "backtest"]
-    profiles:
-      - backtest
+      - ./config.yaml:/app/config.yaml:ro
+
+    command: ["--mode=backtest"]
+    restart: "no"

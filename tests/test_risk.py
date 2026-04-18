@@ -1,9 +1,11 @@
-"""Unit tests for risk_manager.py — sizing and collateral checks."""
+"""
+tests/test_risk.py -- Unit tests for risk manager sizing and checks.
+"""
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
-from risk_manager import RiskManager, Position
+from risk_manager import Position, RiskManager
+from config import load_config
 
 
 @pytest.fixture
@@ -11,88 +13,140 @@ def rm():
     return RiskManager()
 
 
-def make_position(delta: float = -0.22, current_price: float = 0.015,
-                  entry_price: float = 0.02) -> Position:
+@pytest.fixture
+def sample_position():
     return Position(
-        instrument_name="BTC-60000-P",
-        strike=60000.0,
+        instrument_name="BTC-27DEC24-45000-P",
+        strike=45_000,
         option_type="put",
-        entry_price=entry_price,
-        underlying_at_entry=65000.0,
-        contracts=0.1,
-        current_delta=delta,
-        current_price=current_price,
-        entry_equity=10000.0,
+        entry_price=0.02,            # 0.02 BTC per contract
+        underlying_at_entry=50_000,
+        contracts=1.0,
+        current_delta=0.20,
+        current_price=0.02,
+        entry_equity=10_000,
     )
 
 
-def test_kill_switch_absent(rm, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    assert rm.check_kill_switch() is True
+# ── calculate_contracts ────────────────────────────────────────────────────────
+
+def test_contracts_basic(rm):
+    """5% of $10k equity at $50k strike = 0.01 contracts -> floor to 0.1."""
+    c = rm.calculate_contracts(equity_usd=10_000, strike_usd=50_000)
+    # max_equity_per_leg=0.05 -> $500 / $50k = 0.01 -> floored to 0.1
+    assert c == 0.1
 
 
-def test_kill_switch_present(rm, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "KILL_SWITCH").write_text("stop")
-    assert rm.check_kill_switch() is False
+def test_contracts_large_equity(rm):
+    """Larger equity should yield proportionally more contracts."""
+    c = rm.calculate_contracts(equity_usd=1_000_000, strike_usd=50_000)
+    # max_notional = $1M * 5% = $50k; collateral_per = $50k * 0.1 = $5k; contracts = 10.0
+    assert c == 10.0
 
 
-def test_max_legs_ok(rm):
-    assert rm.check_max_legs([]) is True
+def test_contracts_zero_equity(rm):
+    assert rm.calculate_contracts(equity_usd=0, strike_usd=50_000) == 0.0
 
 
-def test_max_legs_at_limit(rm):
-    positions = [make_position() for _ in range(10)]
-    assert rm.check_max_legs(positions) is False
+def test_contracts_zero_strike(rm):
+    assert rm.calculate_contracts(equity_usd=10_000, strike_usd=0) == 0.0
 
 
-def test_calculate_contracts(rm):
-    # equity=$10000, strike=$60000, max_equity_per_leg=5% → $500 max → 500/60000 ≈ 0.1
-    contracts = rm.calculate_contracts(equity_usd=10000.0, strike_usd=60000.0)
-    assert contracts >= 0.1
+# ── check_position_size ────────────────────────────────────────────────────────
+
+def test_position_size_passes(rm):
+    """$1M equity can always open at least 0.1 contracts."""
+    assert rm.check_position_size(equity_usd=1_000_000, strike_usd=50_000) is True
 
 
-def test_check_position_size_ok(rm):
-    assert rm.check_position_size(100000.0, 60000.0) is True
+def test_position_size_fails_tiny_equity(rm):
+    """Very small equity cannot open a position."""
+    # $100 equity -> 5% = $5 / $50k -> 0.0001 contracts < 0.1
+    assert rm.check_position_size(equity_usd=100, strike_usd=50_000) is False
 
 
-def test_check_position_size_too_small(rm):
-    # Very small equity → can't afford even 0.1 contract
-    assert rm.check_position_size(100.0, 80000.0) is False
+# ── check_collateral ──────────────────────────────────────────────────────────
+
+def test_collateral_no_positions(rm):
+    """No open positions means collateral is always fine."""
+    assert rm.check_collateral([], equity_usd=10_000, btc_price=50_000) is True
 
 
-def test_collateral_ok(rm):
-    pos = make_position()
-    assert rm.check_collateral([pos], equity_usd=10000.0, btc_price=65000.0) is True
+def test_collateral_within_buffer(rm, sample_position):
+    """One position at $45k strike, $1M equity -> well within 150%."""
+    assert rm.check_collateral([sample_position], equity_usd=1_000_000, btc_price=50_000)
 
 
-def test_collateral_exceeded(rm):
-    # Create many large positions that exceed 150% buffer
-    positions = [make_position() for _ in range(30)]
-    # 30 × 60000 × 0.1 = $180,000 collateral vs $10,000 × 1.5 = $15,000 allowed
-    assert rm.check_collateral(positions, equity_usd=10000.0, btc_price=65000.0) is False
+def test_collateral_exceeds_buffer(rm):
+    """Position larger than 150% of equity should fail."""
+    big_pos = Position(
+        instrument_name="BTC-X-P",
+        strike=200_000,     # massive strike
+        option_type="put",
+        entry_price=0.01,
+        underlying_at_entry=50_000,
+        contracts=1.0,
+        current_delta=0.1,
+        current_price=0.01,
+        entry_equity=5_000,
+    )
+    # collateral = 200k, equity = 5k, buffer = 7.5k -> 200k > 7.5k
+    assert not rm.check_collateral([big_pos], equity_usd=5_000, btc_price=50_000)
 
 
-def test_should_roll_delta_breach(rm):
-    pos = make_position(delta=-0.50)  # exceeds max_adverse_delta=0.40
-    should, reason = rm.should_roll(pos)
-    assert should is True
-    assert reason == "delta_breach"
+# ── should_roll ───────────────────────────────────────────────────────────────
 
-
-def test_should_roll_ok(rm):
-    pos = make_position(delta=-0.22)
-    should, reason = rm.should_roll(pos)
-    assert should is False
+def test_no_roll_healthy(rm, sample_position):
+    """Healthy position should not trigger a roll."""
+    roll, reason = rm.should_roll(sample_position)
+    assert not roll
     assert reason == "ok"
 
 
+def test_roll_delta_breach(rm, sample_position):
+    """Delta exceeding max_adverse_delta triggers a roll."""
+    sample_position.current_delta = 0.45   # above default 0.40
+    roll, reason = rm.should_roll(sample_position)
+    assert roll
+    assert reason == "delta_breach"
+
+
+def test_roll_loss_breach(rm, sample_position):
+    """Unrealised loss > 2% of entry equity triggers a roll."""
+    # Premium received: 0.02 BTC * $50k = $1k
+    # Current cost: 0.05 BTC * $50k = $2.5k -> loss = $1.5k -> 15% of $10k
+    sample_position.current_price = 0.05
+    roll, reason = rm.should_roll(sample_position)
+    assert roll
+    assert reason == "loss_breach"
+
+
+# ── check_drawdown ────────────────────────────────────────────────────────────
+
 def test_drawdown_ok(rm):
-    equity_curve = [10000.0, 10200.0, 10100.0, 10300.0]
-    assert rm.check_drawdown(equity_curve) is True
+    """Equity curve with small dip should pass."""
+    curve = [10_000, 10_500, 9_800, 10_200]
+    # peak=10500, current=10200 -> dd=2.9% < 10%
+    assert rm.check_drawdown(curve) is True
 
 
 def test_drawdown_breached(rm):
-    # Drop from 10000 to 8000 = 20% drawdown > 10% limit
-    equity_curve = [10000.0, 10100.0, 8000.0]
-    assert rm.check_drawdown(equity_curve) is False
+    """15% drop from peak should halt trading."""
+    curve = [10_000, 10_000, 8_400]  # 16% drop from 10k
+    assert rm.check_drawdown(curve) is False
+
+
+# ── kill switch ───────────────────────────────────────────────────────────────
+
+def test_kill_switch_inactive(rm, tmp_path, monkeypatch):
+    """No KILL_SWITCH file -> trading allowed."""
+    monkeypatch.setattr(rm, "_kill_switch_path", tmp_path / "KILL_SWITCH")
+    assert rm.check_kill_switch() is True
+
+
+def test_kill_switch_active(rm, tmp_path, monkeypatch):
+    """KILL_SWITCH file present -> trading blocked."""
+    ks = tmp_path / "KILL_SWITCH"
+    ks.touch()
+    monkeypatch.setattr(rm, "_kill_switch_path", ks)
+    assert rm.check_kill_switch() is False

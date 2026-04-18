@@ -96,6 +96,14 @@ class BacktestConfig:
 
 
 @dataclass
+class OverseerConfig:
+    enabled: bool
+    check_interval_minutes: int
+    drawdown_warning_threshold: float
+    iv_spike_warning_threshold: float
+
+
+@dataclass
 class LoggingConfig:
     level: str
     rotation: str
@@ -112,6 +120,7 @@ class Config:
     risk: RiskConfig
     execution: ExecutionConfig
     backtest: BacktestConfig
+    overseer: OverseerConfig
     logging: LoggingConfig
 
 
@@ -202,6 +211,14 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         results_csv=bt["results_csv"],
     )
 
+    ov = raw.get("overseer", {})
+    overseer_cfg = OverseerConfig(
+        enabled=bool(ov.get("enabled", True)),
+        check_interval_minutes=int(ov.get("check_interval_minutes", 60)),
+        drawdown_warning_threshold=float(ov.get("drawdown_warning_threshold", 0.05)),
+        iv_spike_warning_threshold=float(ov.get("iv_spike_warning_threshold", 0.85)),
+    )
+
     lg = raw["logging"]
     logging_cfg = LoggingConfig(
         level=os.getenv("LOG_LEVEL", lg["level"]),
@@ -218,6 +235,7 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         risk=risk_cfg,
         execution=exec_cfg,
         backtest=backtest_cfg,
+        overseer=overseer_cfg,
         logging=logging_cfg,
     )
 

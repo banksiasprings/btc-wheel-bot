@@ -1,8 +1,13 @@
 """
-dashboard.py — Console dashboard for current bot state.
+dashboard.py -- Console dashboard showing live position state.
 
-Run standalone:  python dashboard.py
-Or imported by main.py for status display.
+Uses `rich` for colour table rendering.  Falls back to plain text
+if rich is not installed.
+
+Usage (within bot.py tick or standalone):
+    from dashboard import Dashboard
+    dash = Dashboard()
+    dash.render(position, equity, next_expiry, greeks)
 """
 
 from __future__ import annotations
@@ -10,70 +15,126 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from tabulate import tabulate
+from loguru import logger
 
 
-def render_position_table(positions: list[dict[str, Any]]) -> str:
-    """Render open positions as a console table."""
-    if not positions:
-        return "  No open positions.\n"
-    headers = ["Instrument", "Type", "Strike", "Delta", "Entry Premium", "Unreal. P&L", "DTE"]
-    rows = [
-        [
-            p.get("instrument_name", "—"),
-            p.get("option_type", "—").upper(),
-            f"${p.get('strike', 0):,.0f}",
-            f"{p.get('delta', 0):.3f}",
-            f"${p.get('entry_price', 0):,.2f}",
-            f"${p.get('unrealised_pnl', 0):+,.2f}",
-            p.get("dte", "—"),
+def _try_rich():
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
+        return Console(), Table, box
+    except ImportError:
+        return None, None, None
+
+
+class Dashboard:
+    """
+    Renders a console table with current bot state.
+
+    Columns:
+        Field / Value layout, refreshed each poll.
+    """
+
+    def __init__(self) -> None:
+        self._console, self._Table, self._box = _try_rich()
+
+    def render(
+        self,
+        instrument: str | None,
+        option_type: str | None,
+        strike: float | None,
+        delta: float | None,
+        mark_price: float | None,
+        mark_iv: float | None,
+        theta: float | None,
+        vega: float | None,
+        next_expiry: datetime | None,
+        equity_usd: float,
+        unrealised_pnl_usd: float,
+        btc_price: float,
+        iv_rank: float,
+        mode: str = "paper",
+    ) -> None:
+        """Print a full status panel to the console."""
+        now = datetime.now(timezone.utc)
+        dte = (next_expiry - now).days if next_expiry else None
+
+        if self._console and self._Table and self._box:
+            self._render_rich(
+                instrument, option_type, strike, delta, mark_price, mark_iv,
+                theta, vega, dte, equity_usd, unrealised_pnl_usd, btc_price,
+                iv_rank, mode, now,
+            )
+        else:
+            self._render_plain(
+                instrument, option_type, strike, delta, mark_price, mark_iv,
+                theta, vega, dte, equity_usd, unrealised_pnl_usd, btc_price,
+                iv_rank, mode, now,
+            )
+
+    def _render_rich(self, instrument, option_type, strike, delta, mark_price,
+                     mark_iv, theta, vega, dte, equity_usd, unrealised_pnl_usd,
+                     btc_price, iv_rank, mode, now) -> None:
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
+
+        table = Table(
+            title=f"BTC Wheel Bot  [{mode.upper()}]  {now.strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Field",    style="bold", width=22)
+        table.add_column("Value",    width=24)
+
+        def _fmt(v, fmt="{}", na="--"):
+            return fmt.format(v) if v is not None else na
+
+        rows = [
+            ("BTC Spot",         f"${btc_price:,.0f}" if btc_price else "--"),
+            ("IV Rank",          f"{iv_rank:.0f}%" if iv_rank else "--"),
+            ("Equity (USD)",     f"${equity_usd:,.2f}"),
+            ("Unrealised P&L",   f"${unrealised_pnl_usd:+,.2f}" if unrealised_pnl_usd else "--"),
+            ("─" * 20,          "─" * 22),
+            ("Position",         instrument or "FLAT"),
+            ("Type",             (option_type or "").upper() or "--"),
+            ("Strike",           f"${strike:,.0f}" if strike else "--"),
+            ("Mark IV",          f"{mark_iv:.1f}%" if mark_iv else "--"),
+            ("Delta",            f"{delta:.3f}" if delta is not None else "--"),
+            ("Theta ($/day)",    f"${theta:.2f}" if theta is not None else "--"),
+            ("Vega (per 1% IV)", f"${vega:.2f}" if vega is not None else "--"),
+            ("DTE",              f"{dte}d" if dte is not None else "--"),
         ]
-        for p in positions
-    ]
-    return tabulate(rows, headers=headers, tablefmt="rounded_outline")
 
+        pnl_style = "[green]" if unrealised_pnl_usd and unrealised_pnl_usd >= 0 else "[red]"
+        for field, value in rows:
+            if "P&L" in field and unrealised_pnl_usd is not None:
+                table.add_row(field, f"{pnl_style}{value}[/]")
+            else:
+                table.add_row(field, value)
 
-def render_account_summary(equity: float, starting_equity: float, num_cycles: int) -> str:
-    """Render account summary block."""
-    pnl = equity - starting_equity
-    pnl_pct = (pnl / starting_equity * 100) if starting_equity > 0 else 0
-    rows = [
-        ["Current equity", f"${equity:,.2f}"],
-        ["Total P&L",      f"${pnl:+,.2f} ({pnl_pct:+.1f}%)"],
-        ["Cycles completed", num_cycles],
-        ["Last updated",   datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")],
-    ]
-    return tabulate(rows, tablefmt="simple")
+        self._console.clear()
+        self._console.print(table)
 
-
-def print_dashboard(
-    positions: list[dict[str, Any]],
-    equity: float = 0.0,
-    starting_equity: float = 10000.0,
-    num_cycles: int = 0,
-) -> None:
-    """Print the full dashboard to stdout."""
-    print("\n" + "═" * 55)
-    print("  BTC WHEEL BOT — LIVE DASHBOARD")
-    print("═" * 55)
-    print("\n  ACCOUNT SUMMARY")
-    print(render_account_summary(equity, starting_equity, num_cycles))
-    print("\n  OPEN POSITIONS")
-    print(render_position_table(positions))
-    print()
-
-
-if __name__ == "__main__":
-    # Demo with placeholder data
-    demo_positions = [
-        {
-            "instrument_name": "BTC-28JUN24-60000-P",
-            "option_type": "put",
-            "strike": 60000,
-            "delta": -0.22,
-            "entry_price": 450.0,
-            "unrealised_pnl": 85.50,
-            "dte": 12,
-        }
-    ]
-    print_dashboard(demo_positions, equity=10535.50, starting_equity=10000.0, num_cycles=3)
+    def _render_plain(self, instrument, option_type, strike, delta, mark_price,
+                      mark_iv, theta, vega, dte, equity_usd, unrealised_pnl_usd,
+                      btc_price, iv_rank, mode, now) -> None:
+        sep = "-" * 42
+        print(f"\n{sep}")
+        print(f"  BTC Wheel Bot [{mode.upper()}]  {now.strftime('%H:%M:%S UTC')}")
+        print(sep)
+        print(f"  BTC Spot    : ${btc_price:,.0f}" if btc_price else "  BTC Spot    : --")
+        print(f"  IV Rank     : {iv_rank:.0f}%" if iv_rank else "  IV Rank     : --")
+        print(f"  Equity      : ${equity_usd:,.2f}")
+        if unrealised_pnl_usd is not None:
+            print(f"  Unreal P&L  : ${unrealised_pnl_usd:+,.2f}")
+        print(sep)
+        print(f"  Position    : {instrument or 'FLAT'}")
+        if instrument:
+            print(f"  Type/Strike : {(option_type or '').upper()} ${strike:,.0f}" if strike else "")
+            print(f"  Delta       : {delta:.3f}" if delta is not None else "  Delta       : --")
+            print(f"  Mark IV     : {mark_iv:.1f}%" if mark_iv else "  Mark IV     : --")
+            print(f"  DTE         : {dte}d" if dte is not None else "  DTE         : --")
+        print(sep + "\n")
