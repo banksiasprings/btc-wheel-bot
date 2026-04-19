@@ -117,6 +117,12 @@ st.markdown(f"""
 
     /* Tighten page top padding */
     .block-container {{ padding-top: 1rem; }}
+    .metric-card {{ border-top: 3px solid {C_BLUE} !important; }}
+    section[data-testid="stSidebar"] {{ border-right: 1px solid {C_GRID}; }}
+    div[data-testid="stMetric"] {{ background: {C_CARD}; border-radius: 8px; padding: 10px 14px; border-top: 3px solid {C_BLUE}; }}
+    .stTabs [data-baseweb="tab-list"] {{ background: {C_CARD} !important; border-bottom: 1px solid {C_GRID}; }}
+    .stButton button {{ border-radius: 8px; font-weight: 600; }}
+    h1, h2, h3 {{ color: {C_TEXT}; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -295,6 +301,27 @@ def render_sidebar() -> None:
 
         st.divider()
 
+        # ── Account equity ─────────────────────────────────────────────────
+        try:
+            from core.trades import read_trades
+            trades = read_trades()
+            if trades:
+                import pandas as _pd
+                df = _pd.DataFrame(trades)
+                if "equity" in df.columns:
+                    latest_eq = df["equity"].iloc[-1]
+                    start_eq  = df["equity"].iloc[0]
+                    pnl_pct   = (latest_eq - start_eq) / start_eq * 100 if start_eq else 0
+                    pnl_col   = "🟢" if pnl_pct >= 0 else "🔴"
+                    st.markdown("**💰 Account Equity**")
+                    st.markdown(
+                        f'<div style="font-size:22px;font-weight:700;">${{latest_eq:,.2f}}</div>'
+                        f'<div style="font-size:12px;color:#888;">{pnl_col} {{pnl_pct:+.2f}}% all-time</div>',
+                        unsafe_allow_html=True,
+                    )
+        except Exception:
+            pass
+
         # ── Theme toggle ───────────────────────────────────────────────────────
         st.markdown("**🎨 Theme**")
         chosen_theme = st.radio(
@@ -307,6 +334,22 @@ def render_sidebar() -> None:
         if chosen_theme != st.session_state.get("theme", "🌙 Dark"):
             st.session_state["theme"] = chosen_theme
             st.rerun()
+        if chosen_theme == "☀️ Light":
+            st.markdown("""
+<style>
+    .stApp { background-color: #f5f5f5 !important; color: #1a1a1a !important; }
+    section[data-testid="stSidebar"] { background-color: #e8e8e8 !important; border-right: 1px solid #cccccc; }
+    .metric-card { background: #ffffff !important; border: 1px solid #dddddd !important; }
+    .metric-label { color: #555555 !important; }
+    .metric-value { color: #1a1a1a !important; }
+    .stTabs [data-baseweb="tab"] { color: #555555 !important; }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] { color: #0066cc !important; border-bottom: 2px solid #0066cc !important; }
+    .stTabs [data-baseweb="tab-list"] { background: #ffffff !important; border-bottom: 1px solid #dddddd; }
+    div[data-testid="stMetric"] { background: #ffffff !important; border-top: 3px solid #0066cc !important; }
+    h1, h2, h3 { color: #1a1a1a !important; }
+    .stButton button { border-radius: 8px; font-weight: 600; }
+</style>
+""", unsafe_allow_html=True)
 
         st.divider()
         st.markdown(
