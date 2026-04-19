@@ -754,6 +754,7 @@ class WheelBot:
                 "strike":            p.strike,
                 "delta":             round(p.current_delta, 4),
                 "dte":               dte,
+                "dte_at_entry":      p.dte_at_entry,
                 "entry_price":       p.entry_price,
                 "current_price":     p.current_price,
                 "contracts":         p.contracts,

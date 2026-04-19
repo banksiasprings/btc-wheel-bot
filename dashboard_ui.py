@@ -746,11 +746,27 @@ def tab_paper() -> None:
                     delta   = pos_data.get("delta", 0)
                     dte     = pos_data.get("dte", 0)
                     upnl    = pos_data.get("unrealized_pnl_usd", 0)
-                    upnl_col = "green" if upnl >= 0 else "red"
+                    upnl_col  = "green" if upnl >= 0 else "red"
                     delta_col = "red" if delta > 0.35 else ("amber" if delta > 0.28 else "")
                     dte_col   = "red" if dte <= 2 else ("amber" if dte <= 4 else "")
 
-                    pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+                    # Annualised return on collateral:
+                    #   premium_usd = entry_price × contracts × btc_price
+                    #   collateral_usd = strike × contracts  (1 BTC notional per contract)
+                    #   yield_pct = premium_usd / collateral_usd
+                    #   annualised = yield_pct × (365 / dte_at_entry)
+                    dte_at_entry = pos_data.get("dte_at_entry", 0)
+                    if dte_at_entry > 0:
+                        prem_usd = pos_data.get("entry_price", 0) * pos_data.get("contracts", 0) * btc_price
+                        coll_usd = pos_data.get("strike", 1) * pos_data.get("contracts", 0)
+                        ann_pct  = (prem_usd / coll_usd) * (365 / dte_at_entry) * 100 if coll_usd > 0 else 0
+                        ann_str  = f"{ann_pct:.1f}%"
+                        ann_col  = "green" if ann_pct >= 10 else ("amber" if ann_pct >= 5 else "")
+                    else:
+                        ann_str = "N/A"  # reconciled position — entry DTE unknown
+                        ann_col = ""
+
+                    pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
                     with pc1:
                         metric_card("Position", pos_data.get("name", "—"))
                     with pc2:
@@ -761,6 +777,8 @@ def tab_paper() -> None:
                         metric_card("DTE", f"{dte}d", dte_col)
                     with pc5:
                         metric_card("Unrealised P&L", f"${upnl:+,.0f}", upnl_col)
+                    with pc6:
+                        metric_card("Ann. Return", ann_str, ann_col)
                 else:
                     st.info("📭 No open position — bot is flat, watching for signals.")
 
