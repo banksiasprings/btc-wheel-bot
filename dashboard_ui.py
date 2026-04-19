@@ -18,7 +18,6 @@ Run
 from __future__ import annotations
 
 import copy
-import io
 import json
 import os
 import signal
@@ -1256,9 +1255,9 @@ def main() -> None:
         "📊 Backtest",
         "📈 Paper Trading",
         "🧬 Optimizer",
-        "⚙️ Config",
         "📋 Recommendations",
-        "🔧 Settings",
+        "⚙️ Config",
+        "⚙️ Settings",
     ])
     with tab1:
         tab_backtest()
