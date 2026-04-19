@@ -92,7 +92,7 @@ st.markdown(f"""
         text-align: center;
     }}
     .metric-label {{ font-size: 11px; color: {C_MUTED}; text-transform: uppercase; letter-spacing: 0.08em; }}
-    .metric-value {{ font-size: 24px; font-weight: 700; color: {C_TEXT}; margin-top: 4px; }}
+    .metric-value {{ font-size: 19px; font-weight: 700; color: {C_TEXT}; margin-top: 4px; word-break: break-word; }}
     .metric-value.green {{ color: {C_GREEN}; }}
     .metric-value.red   {{ color: {C_RED}; }}
     .metric-value.amber {{ color: {C_AMBER}; }}
@@ -756,7 +756,9 @@ def tab_paper() -> None:
                 with lc3:
                     metric_card(
                         "Free Capital",
-                        f"{free_capital_pct:.1f}%  (${free_capital_usd:,.0f})",
+                        f"{free_capital_pct:.1f}%<br>"
+                        f"<span style='font-size:13px;font-weight:400;opacity:0.75'>"
+                        f"${free_capital_usd:,.0f} free</span>",
                         free_col,
                     )
                 with lc4:
@@ -799,7 +801,11 @@ def tab_paper() -> None:
 
                     pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
                     with pc1:
-                        metric_card("Position", pos_data.get("name", "—"))
+                        metric_card(
+                            "Position",
+                            f"<span style='font-size:13px;letter-spacing:-0.02em'>"
+                            f"{pos_data.get('name', '—')}</span>",
+                        )
                     with pc2:
                         metric_card("Type", pos_data.get("option_type", "—").upper())
                     with pc3:
@@ -837,10 +843,10 @@ def tab_paper() -> None:
         total_pnl = trades_df["pnl_usd"].sum() if "pnl_usd" in trades_df.columns else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        with c1: metric_card("Equity", f"${end_eq:,.0f}", "green" if end_eq >= start_eq else "red")
-        with c2: metric_card("Total P&L", f"${total_pnl:+,.0f}", "green" if total_pnl >= 0 else "red")
+        with c1: metric_card("Equity at Last Close", f"${end_eq:,.0f}", "green" if end_eq >= start_eq else "red")
+        with c2: metric_card("Total Realised P&L", f"${total_pnl:+,.0f}", "green" if total_pnl >= 0 else "red")
         with c3: metric_card("Win Rate", f"{win_rate:.0f}%", "green" if win_rate >= 60 else "amber")
-        with c4: metric_card("Trades", str(total))
+        with c4: metric_card("Closed Trades", str(total))
 
         st.markdown("")
 
@@ -857,8 +863,9 @@ def tab_paper() -> None:
             st.plotly_chart(make_pnl_bar(trades_df), use_container_width=True)
 
         st.markdown("#### Recent Trades")
-        show = ["cycle_num", "open_date", "close_date", "option_type", "strike",
-                "pnl_usd", "equity_after", "rolled", "itm_at_expiry"]
+        show = ["timestamp", "instrument", "option_type", "strike",
+                "pnl_usd", "equity_before", "equity_after",
+                "dte_at_close", "reason", "mode"]
         show = [c for c in show if c in trades_df.columns]
         st.dataframe(trades_df[show].tail(20), use_container_width=True, height=260)
 
