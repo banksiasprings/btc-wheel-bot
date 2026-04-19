@@ -1045,7 +1045,7 @@ def tab_optimizer() -> None:
     )
 
     mode = st.radio("Mode", ["Sweep (one param at a time)", "Evolve (genetic algorithm)"],
-                    horizontal=True)
+                    horizontal=True, key="optimizer_mode")
     is_sweep = "Sweep" in mode
 
     col_ctrl, col_res = st.columns([1, 2], gap="large")
@@ -1059,13 +1059,14 @@ def tab_optimizer() -> None:
                 "approx_otm_offset", "max_dte", "min_dte",
                 "max_equity_per_leg", "premium_fraction_of_spot", "iv_rank_window_days",
             ]
-            sweep_param = st.selectbox("Parameter to sweep", param_choices)
+            sweep_param = st.selectbox("Parameter to sweep", param_choices,
+                                       key="optimizer_sweep_param")
         else:
             st.markdown("#### Evolution Settings")
-            pop_size    = st.slider("Population size",  min_value=8,  max_value=50, step=4, value=20)
-            generations = st.slider("Generations",      min_value=3,  max_value=20, step=1, value=8)
-            elite_keep  = st.slider("Elite survivors",  min_value=2,  max_value=10, step=1, value=4)
-            mut_rate    = st.slider("Mutation rate",    min_value=0.1, max_value=0.6, step=0.05, value=0.3)
+            pop_size    = st.slider("Population size",  min_value=8,  max_value=50, step=4, value=20, key="optimizer_pop_size")
+            generations = st.slider("Generations",      min_value=3,  max_value=20, step=1, value=8,  key="optimizer_generations")
+            elite_keep  = st.slider("Elite survivors",  min_value=2,  max_value=10, step=1, value=4,  key="optimizer_elite_keep")
+            mut_rate    = st.slider("Mutation rate",    min_value=0.1, max_value=0.6, step=0.05, value=0.3, key="optimizer_mut_rate")
 
         opt_running = (
             st.session_state.get("opt_proc") is not None
@@ -1074,14 +1075,14 @@ def tab_optimizer() -> None:
 
         if opt_running:
             st.warning("Optimizer is running…")
-            if st.button("⏹ Stop Optimizer", use_container_width=True):
+            if st.button("⏹ Stop Optimizer", use_container_width=True, key="optimizer_stop_btn"):
                 p = st.session_state.get("opt_proc")
                 if p:
                     p.terminate()
                 st.session_state["opt_proc"] = None
                 st.rerun()
         else:
-            if st.button("▶ Start Optimizer", type="primary", use_container_width=True):
+            if st.button("▶ Start Optimizer", type="primary", use_container_width=True, key="optimizer_start_btn"):
                 cmd = [PYTHON, str(BOT_DIR / "optimizer.py"), "--mode",
                        "sweep" if is_sweep else "evolve"]
                 if is_sweep and sweep_param != "all (run all params)":
@@ -1093,13 +1094,16 @@ def tab_optimizer() -> None:
                         "--elite", str(elite_keep),
                         "--mutation", str(mut_rate),
                     ]
-                proc = subprocess.Popen(
-                    cmd, cwd=str(BOT_DIR),
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                )
-                st.session_state["opt_proc"] = proc
-                st.session_state["opt_start"] = datetime.utcnow()
-                st.rerun()
+                try:
+                    proc = subprocess.Popen(
+                        cmd, cwd=str(BOT_DIR),
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    )
+                    st.session_state["opt_proc"] = proc
+                    st.session_state["opt_start"] = datetime.utcnow()
+                    st.rerun()
+                except Exception as _exc:
+                    st.error(f"Failed to start optimizer: {_exc}\nCmd: {' '.join(cmd)}")
 
         if opt_running:
             st.markdown("")
@@ -1107,7 +1111,7 @@ def tab_optimizer() -> None:
             if start:
                 secs = int((datetime.utcnow() - start).total_seconds())
                 st.caption(f"Running for {secs // 60}m {secs % 60}s")
-            if st.button("🔄 Refresh Results", use_container_width=True):
+            if st.button("🔄 Refresh Results", use_container_width=True, key="optimizer_refresh_btn"):
                 st.rerun()
 
     with col_res:
@@ -1558,9 +1562,9 @@ def tab_settings() -> None:
     )
     if logs:
         log_names = [p.name for p in logs]
-        selected_log = st.selectbox("Select log file", log_names)
+        selected_log = st.selectbox("Select log file", log_names, key="settings_log_file")
         log_path = log_dir / selected_log
-        n_lines = st.slider("Lines to show", min_value=20, max_value=200, step=20, value=50)
+        n_lines = st.slider("Lines to show", min_value=20, max_value=200, step=20, value=50, key="settings_log_lines")
         try:
             lines = log_path.read_text().splitlines()[-n_lines:]
             st.code("\n".join(lines), language=None)
