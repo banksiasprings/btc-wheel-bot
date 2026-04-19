@@ -995,10 +995,10 @@ def _render_log_tail(n: int = 40, key: str = "log_main") -> None:
         if log_dir.exists() else []
     )
     if logs:
-        with st.expander(f"📋 Live Log (last {n} lines)", expanded=False):
+        with st.expander(f"📋 Live Log (last {n} lines — newest first)", expanded=False):
             try:
                 lines = logs[0].read_text().splitlines()[-n:]
-                st.code("\n".join(lines), language=None)
+                st.code("\n".join(reversed(lines)), language=None)
             except Exception:
                 st.caption("Could not read log file.")
 
