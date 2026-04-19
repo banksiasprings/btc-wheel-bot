@@ -109,7 +109,9 @@ class RiskManager:
         if strike_usd <= 0 or equity_usd <= 0:
             return False
         max_notional = equity_usd * cfg.sizing.max_equity_per_leg
-        collateral_per_contract = strike_usd * cfg.sizing.contract_size_btc
+        # Canonical formula: collateral per contract = strike (1 contract = 1 BTC notional).
+        # contract_size_btc (0.1) is the minimum lot size, NOT a collateral multiplier.
+        collateral_per_contract = strike_usd
         if collateral_per_contract <= 0:
             return False
         raw_contracts = max_notional / collateral_per_contract

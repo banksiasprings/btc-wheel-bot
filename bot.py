@@ -590,7 +590,11 @@ class WheelBot:
             if rec.status == OrderStatus.FILLED:
                 pos.current_price = rec.avg_fill_price
                 slippage_btc = getattr(rec, "slippage_btc", 0.0)
-                fill_time_sec = getattr(rec, "elapsed_sec", 0.0)
+                fill_time_sec = (
+                    rec.filled_at - rec.created_at
+                    if rec.filled_at is not None
+                    else rec.elapsed_seconds
+                )
                 logger.info(
                     f"Close confirmed: {pos.instrument_name} "
                     f"@ {rec.avg_fill_price:.6f} BTC | slippage={slippage_btc:+.6f}"
