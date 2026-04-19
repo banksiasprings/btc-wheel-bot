@@ -1122,19 +1122,22 @@ def tab_optimizer() -> None:
             st.rerun()
 
 
+OPT_DIR = BOT_DIR / "data" / "optimizer"
+
+
 def _render_optimizer_results(is_sweep: bool) -> None:
     """Display optimizer outputs when available."""
     if is_sweep:
-        img_path = BOT_DIR / "sweep_sensitivity.png"
+        img_path = OPT_DIR / "sweep_sensitivity.png"
         if img_path.exists():
             st.markdown("#### Sweep Sensitivity Chart")
             st.image(str(img_path), use_container_width=True)
         else:
             st.info("Sweep chart will appear here once the run completes.")
     else:
-        leaderboard_path = BOT_DIR / "evolution_leaderboard.csv"
-        evo_img          = BOT_DIR / "evolution_progress.png"
-        best_path        = BOT_DIR / "best_genome.yaml"
+        leaderboard_path = OPT_DIR / "evolution_leaderboard.csv"
+        evo_img          = OPT_DIR / "evolution_progress.png"
+        best_path        = OPT_DIR / "best_genome.yaml"
 
         if evo_img.exists():
             st.markdown("#### Evolution Progress")
