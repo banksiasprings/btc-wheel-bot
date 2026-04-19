@@ -155,6 +155,22 @@ class WheelBot:
             return
 
         try:
+            # Fetch equity FIRST so we can use it for entry_equity on reconciled positions.
+            account = self._client.private.get_account_summary(
+                currency=self._cfg.deribit.currency
+            )
+            logger.info(
+                f"Account equity: {account.equity:.6f} BTC "
+                f"| Available: {account.available_funds:.6f} BTC"
+            )
+            # Rough USD estimate — will be overwritten precisely on first tick.
+            # Use a conservative BTC price floor so we don't under-estimate equity.
+            rough_btc_price = 50_000.0
+            reconcile_equity_usd = max(
+                account.equity * rough_btc_price,
+                self._cfg.backtest.starting_equity,
+            )
+
             exchange_positions = self._client.private.get_positions(
                 currency=self._cfg.deribit.currency
             )
@@ -162,6 +178,10 @@ class WheelBot:
                 # Only import short positions (we are option sellers)
                 if ep.direction != "sell" or ep.size >= 0:
                     continue
+                contracts = abs(ep.size)
+                # ep.delta is the *total position* delta (option_delta × contracts).
+                # Divide back to get the per-contract option delta for risk checks.
+                per_contract_delta = abs(ep.delta) / contracts if contracts > 0 else 0.0
                 pos = Position(
                     instrument_name=ep.instrument_name,
                     strike=float(ep.instrument_name.split("-")[2])
@@ -169,31 +189,20 @@ class WheelBot:
                     option_type=ep.option_type,
                     entry_price=ep.average_price,
                     underlying_at_entry=0.0,   # unknown at reconcile time
-                    contracts=abs(ep.size),
-                    current_delta=abs(ep.delta),
+                    contracts=contracts,
+                    current_delta=per_contract_delta,
                     current_price=ep.mark_price,
-                    entry_equity=self._equity_usd,
+                    entry_equity=reconcile_equity_usd,
                     expiry_ts=ep.expiry_ts,
                 )
                 self._positions.append(pos)
                 logger.info(
                     f"Reconciled position from Deribit: {ep.instrument_name} "
-                    f"× {abs(ep.size)} contracts"
+                    f"× {contracts} contracts | delta={per_contract_delta:.3f}"
                 )
 
             if not exchange_positions:
                 logger.info("No open positions found on Deribit — starting flat")
-
-            # Also sync equity from Deribit
-            account = self._client.private.get_account_summary(
-                currency=self._cfg.deribit.currency
-            )
-            # Convert BTC equity to USD using a rough spot price
-            # (will be updated precisely on first tick)
-            logger.info(
-                f"Account equity: {account.equity:.6f} BTC "
-                f"| Available: {account.available_funds:.6f} BTC"
-            )
 
         except Exception as exc:
             logger.error(f"Position sync failed: {exc} — starting with empty state")
@@ -360,6 +369,17 @@ class WheelBot:
                 ticker = self._client.rest.get_ticker(inst.instrument_name)
                 if ticker:
                     tickers[inst.instrument_name] = ticker
+            # Always fetch tickers for open positions so their deltas/marks
+            # stay current even if they've drifted outside the DTE window.
+            for pos in self._positions:
+                if pos.instrument_name not in tickers:
+                    ticker = self._client.rest.get_ticker(pos.instrument_name)
+                    if ticker:
+                        tickers[pos.instrument_name] = ticker
+                        logger.debug(
+                            f"Fetched ticker for open position "
+                            f"{pos.instrument_name} (outside DTE window)"
+                        )
         except Exception as exc:
             logger.error(f"Market data fetch failed: {exc}")
             return
