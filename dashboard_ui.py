@@ -725,7 +725,27 @@ def tab_paper() -> None:
                 mode_str   = hb.get("mode", "—").upper()
                 pos_data   = hb.get("position")  # dict or None
 
-                lc1, lc2, lc3, lc4 = st.columns(4)
+                # ── Capital buffer calculations ───────────────────────────────
+                # collateral_locked = strike × contracts (USD notional per contract)
+                # free_capital = equity - collateral_locked
+                # strike_gap = how far BTC must fall before the put goes ITM (%)
+                if pos_data and btc_price > 0:
+                    collateral_locked = pos_data.get("strike", 0) * pos_data.get("contracts", 0)
+                    free_capital_usd  = equity_usd - collateral_locked
+                    free_capital_pct  = (free_capital_usd / equity_usd * 100) if equity_usd > 0 else 0
+                    strike_gap_pct    = ((btc_price - pos_data.get("strike", btc_price)) / btc_price * 100)
+                    # Colours: tighter buffer = more alarming
+                    free_col  = "red" if free_capital_pct < 15 else ("amber" if free_capital_pct < 30 else "green")
+                    gap_col   = "red" if strike_gap_pct < 5  else ("amber" if strike_gap_pct < 10 else "green")
+                else:
+                    free_capital_usd = equity_usd
+                    free_capital_pct = 100.0
+                    strike_gap_pct   = None
+                    free_col  = "green"
+                    gap_col   = ""
+
+                # ── Row 1: account-level metrics ─────────────────────────────
+                lc1, lc2, lc3, lc4, lc5, lc6 = st.columns(6)
                 with lc1:
                     metric_card("BTC Price", f"${btc_price:,.0f}")
                 with lc2:
@@ -734,14 +754,26 @@ def tab_paper() -> None:
                     eq_col = "green" if equity_usd >= cfg_start else "red"
                     metric_card("Account Equity", f"${equity_usd:,.0f}", eq_col)
                 with lc3:
+                    metric_card(
+                        "Free Capital",
+                        f"{free_capital_pct:.1f}%  (${free_capital_usd:,.0f})",
+                        free_col,
+                    )
+                with lc4:
+                    if strike_gap_pct is not None:
+                        metric_card("Strike Gap", f"−{strike_gap_pct:.1f}% to ITM", gap_col)
+                    else:
+                        metric_card("Strike Gap", "—")
+                with lc5:
                     iv_str = f"{iv_rank:.0%}" if iv_rank is not None else "—"
                     iv_col = "amber" if iv_rank is not None and iv_rank > 0.85 else ""
                     metric_card("IV Rank", iv_str, iv_col)
-                with lc4:
+                with lc6:
                     metric_card("Mode", mode_str)
 
                 st.markdown("")
 
+                # ── Row 2: position-level metrics ─────────────────────────────
                 if pos_data:
                     delta   = pos_data.get("delta", 0)
                     dte     = pos_data.get("dte", 0)
@@ -753,8 +785,7 @@ def tab_paper() -> None:
                     # Annualised return on collateral:
                     #   premium_usd = entry_price × contracts × btc_price
                     #   collateral_usd = strike × contracts  (1 BTC notional per contract)
-                    #   yield_pct = premium_usd / collateral_usd
-                    #   annualised = yield_pct × (365 / dte_at_entry)
+                    #   yield = premium / collateral × (365 / dte_at_entry)
                     dte_at_entry = pos_data.get("dte_at_entry", 0)
                     if dte_at_entry > 0:
                         prem_usd = pos_data.get("entry_price", 0) * pos_data.get("contracts", 0) * btc_price
