@@ -1624,6 +1624,26 @@ def tab_settings() -> None:
 
 def main() -> None:
     render_sidebar()
+
+    # ── JS patch: BaseWeb hard-codes overflow-y:hidden on the tab-list which clips
+    # the button tops.  We override it after each render via a MutationObserver so
+    # it re-applies whenever Streamlit re-renders the component.
+    st.markdown("""
+<script>
+(function patchTabOverflow() {
+    function fix() {
+        const tl = document.querySelector('[data-baseweb="tab-list"]');
+        if (tl) {
+            tl.style.setProperty('overflow', 'visible', 'important');
+            tl.style.setProperty('padding-top', '10px', 'important');
+        }
+    }
+    fix();
+    new MutationObserver(fix).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+""", unsafe_allow_html=True)
+
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 Backtest",
         "📈 Paper Trading",
