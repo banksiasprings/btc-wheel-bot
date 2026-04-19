@@ -1195,6 +1195,66 @@ def tab_recommendations() -> None:
 def tab_settings() -> None:
     st.markdown("### 🔧 Settings")
 
+    # ── Live Connection ────────────────────────────────────────────────────────
+    st.markdown("#### 🔌 Live Connection")
+
+    col_env, col_btn = st.columns([1, 1])
+    with col_env:
+        conn_env = st.radio(
+            "Environment", ["Mainnet", "Testnet"],
+            horizontal=True, key="preflight_env",
+        )
+    use_testnet = conn_env == "Testnet"
+
+    with col_btn:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        run_checks = st.button("🔍 Run Pre-flight Checks", use_container_width=True)
+
+    if run_checks:
+        try:
+            from preflight import run_preflight
+            check_results: list = []
+
+            def _on_check(result) -> None:
+                check_results.append(result)
+
+            with st.spinner("Checking connectivity and credentials…"):
+                report = run_preflight(
+                    testnet=use_testnet, bot_dir=BOT_DIR, on_check=_on_check
+                )
+
+            for result in report.checks:
+                icon   = "✅" if result.passed else "❌"
+                border = C_GREEN if result.passed else C_RED
+                detail_html = (
+                    f'<br><span style="color:{C_MUTED};font-size:11px;">{result.detail}</span>'
+                    if result.detail else ""
+                )
+                st.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {border};'
+                    f'border-radius:6px;padding:10px 14px;margin-bottom:6px;">'
+                    f'{icon} <strong style="color:{C_TEXT};font-size:14px;">{result.name}</strong>'
+                    f'<br><span style="color:{C_MUTED};font-size:12px;">{result.message}</span>'
+                    f'{detail_html}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            if report.ready_for_live or report.ready_for_testnet:
+                env_label = "testnet" if use_testnet else "live"
+                st.success(f"🟢 Ready for {env_label} trading — all critical checks passed.")
+                st.code(
+                    f"python main.py --mode={'testnet' if use_testnet else 'live'}",
+                    language="bash",
+                )
+            else:
+                st.error("🔴 Not ready — fix the failures above before trading.")
+        except ImportError:
+            st.warning("preflight.py not found in bot directory.")
+        except Exception as exc:
+            st.error(f"Pre-flight check error: {exc}")
+
+    st.divider()
+
     # ── Kill Switch ────────────────────────────────────────────────────────────
     st.markdown("#### Kill Switch")
     if kill_switch_active():
@@ -1300,7 +1360,7 @@ def main() -> None:
         "🧬 Optimizer",
         "📋 Recommendations",
         "⚙️ Config",
-        "⚙️ Settings",
+        "🔧 Settings",
     ])
     with tab1:
         tab_backtest()

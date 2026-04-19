@@ -31,6 +31,7 @@ from loguru import logger
 from ai_overseer import AIOverSeer
 from config import Config, cfg
 from deribit_client import DeribitClient, DeribitPublicREST
+from order_tracker import OrderTracker, OrderStatus
 from risk_manager import Position, RiskManager
 from strategy import WheelStrategy
 
@@ -77,6 +78,9 @@ class WheelBot:
             maxlen=_BTC_PRICE_HISTORY_MAX
         )
 
+        # Stage 3: OrderTracker (initialised in live mode after WS connect)
+        self._tracker: OrderTracker | None = None
+
         # AI Overseer
         if self._cfg.overseer.enabled:
             self._overseer = AIOverSeer()
@@ -102,6 +106,14 @@ class WheelBot:
         if not self._paper:
             # LIVE_ONLY: connect WebSocket (auth + subscribe)
             await self._client.connect_live()
+            # Stage 3: initialise order tracker with fill callback
+            self._tracker = OrderTracker(
+                ws_client=self._client.ws,
+                on_fill=lambda rec: logger.info(
+                    f"Fill confirmed: {rec.instrument_name} × {rec.filled_amount} "
+                    f"@ {rec.avg_fill_price:.6f} BTC | slippage={rec.slippage_btc:+.6f}"
+                ),
+            )
             await self._setup_live_subscriptions()
             # Reconcile open positions from Deribit
             await self._sync_positions_from_exchange()
@@ -450,21 +462,29 @@ class WheelBot:
                 f"| cycle={signal.cycle} | DTE={signal.dte}"
             )
         else:
-            if self._client.ws is None:
+            if self._client.ws is None or self._tracker is None:
                 logger.error("WebSocket not connected — cannot place order")
                 return
-            try:
-                result = await self._client.ws.sell_option(
-                    instrument_name=signal.instrument_name,
-                    amount=contracts,
-                    order_type="limit",
-                    price=signal.mark_price,
-                    label="wheel_bot",
+            # Stage 3: use OrderTracker for confirmed fills + slippage tracking
+            rec = await self._tracker.place_and_track(
+                side="sell",
+                instrument_name=signal.instrument_name,
+                amount=contracts,
+                price=signal.mark_price,
+                label="wheel_bot",
+                timeout_seconds=self._cfg.execution.order_timeout_seconds
+                if hasattr(self._cfg.execution, "order_timeout_seconds") else 45.0,
+                fallback_market=True,
+            )
+            if rec.status != OrderStatus.FILLED:
+                logger.error(
+                    f"Open order did not fill: {rec.status.value} — "
+                    f"skipping position entry"
                 )
-                logger.info(f"Live sell order placed: {result}")
-            except Exception as exc:
-                logger.error(f"Order failed: {exc}")
                 return
+            # Use the actual fill price for position tracking
+            signal = signal._replace(mark_price=rec.avg_fill_price) \
+                if hasattr(signal, "_replace") else signal
 
         pos = Position(
             instrument_name=signal.instrument_name,
@@ -493,21 +513,32 @@ class WheelBot:
                 f"x{pos.contracts} @ {pos.current_price:.4f} BTC | {reason}"
             )
         else:
-            # LIVE_ONLY: buy to close via WebSocket
-            if self._client.ws is None:
+            # LIVE_ONLY: buy to close via OrderTracker (confirmed fill)
+            if self._client.ws is None or self._tracker is None:
                 logger.error("WebSocket not connected — cannot close position")
             else:
-                try:
-                    result = await self._client.ws.buy_option(
-                        instrument_name=pos.instrument_name,
-                        amount=pos.contracts,
-                        order_type="limit",
-                        price=pos.current_price,
-                        label="wheel_bot_close",
+                rec = await self._tracker.place_and_track(
+                    side="buy",
+                    instrument_name=pos.instrument_name,
+                    amount=pos.contracts,
+                    price=pos.current_price,
+                    label="wheel_bot_close",
+                    timeout_seconds=self._cfg.execution.order_timeout_seconds
+                    if hasattr(self._cfg.execution, "order_timeout_seconds") else 45.0,
+                    fallback_market=True,
+                )
+                if rec.status == OrderStatus.FILLED:
+                    # Use actual fill price for accurate P&L
+                    pos.current_price = rec.avg_fill_price
+                    logger.info(
+                        f"Close confirmed: {pos.instrument_name} "
+                        f"@ {rec.avg_fill_price:.6f} BTC"
                     )
-                    logger.info(f"Live buy-to-close placed: {result}")
-                except Exception as exc:
-                    logger.error(f"Close order failed: {exc}")
+                else:
+                    logger.error(
+                        f"Close order did not fill: {rec.status.value} — "
+                        f"position may still be open on exchange"
+                    )
 
         # Record P&L
         eff_price = underlying_price if underlying_price > 0 else pos.underlying_at_entry
