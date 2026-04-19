@@ -112,16 +112,8 @@ st.markdown(f"""
         background: {C_BG} !important;
         border-bottom: 1px solid {C_GRID} !important;
         gap: 6px !important;
-        padding: 14px 12px 8px 12px !important;
-        overflow: visible !important;
-        margin-top: 8px !important;
-    }}
-
-    /* Prevent any ancestor from clipping the pills */
-    .stTabs,
-    .stTabs > div,
-    .stTabs > div:first-child {{
-        overflow: visible !important;
+        padding: 8px 12px !important;
+        align-items: center !important;
     }}
 
     /* Kill the sliding underline highlight bar */
@@ -132,20 +124,21 @@ st.markdown(f"""
         background: transparent !important;
     }}
 
-    /* Inactive pill */
+    /* Inactive button */
     .stTabs [data-baseweb="tab"] {{
         background: {C_CARD} !important;
         border: 1px solid {C_GRID} !important;
-        border-radius: 100px !important;
+        border-radius: 8px !important;
         color: {C_MUTED} !important;
         font-weight: 500 !important;
         font-size: 13px !important;
-        padding: 5px 16px !important;
+        padding: 6px 14px !important;
         margin: 0 !important;
+        line-height: 1.4 !important;
         transition: background 0.15s, color 0.15s, border-color 0.15s !important;
     }}
 
-    /* Active pill */
+    /* Active button */
     .stTabs [data-baseweb="tab"][aria-selected="true"] {{
         background: {C_BLUE} !important;
         border-color: {C_BLUE} !important;
