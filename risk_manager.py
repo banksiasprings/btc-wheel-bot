@@ -26,6 +26,7 @@ class Position:
     current_delta: float       # current absolute delta
     current_price: float       # current mark price (BTC)
     entry_equity: float        # account equity at time of entry
+    expiry_ts: int = 0         # Deribit expiry timestamp (ms) — used for DTE tracking
 
 
 class RiskManager:

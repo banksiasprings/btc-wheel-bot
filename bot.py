@@ -1,21 +1,28 @@
 """
-bot.py -- Async main trading loop (paper and live modes).
+bot.py — Async main trading loop (paper and live modes).
 
 Architecture:
   - WheelBot.run() is the top-level async entry point
   - 60-second poll loop fetches market state and decides actions
-  - 08:00 UTC daily: expiry check -> auto-settle -> open next leg
+  - 08:00 UTC daily: expiry check → auto-settle → open next leg
   - All orders are confirmed via WebSocket before loop proceeds
   - KILL_SWITCH file halts everything immediately
 
-This module is SCAFFOLDED for Phase 1.
-Live order execution is not active; paper mode logs simulated actions.
+Phase 2 additions:
+  - DeribitPrivateREST: position reconciliation on startup (live mode)
+  - WebSocket settlement subscriptions: on_settlement_event callback
+    sets strategy._put_cycle_complete from real Deribit settlement data
+  - 7-day BTC price history tracked for AI overseer BTC change % metric
+  - DTE properly tracked on Position objects (expiry_ts field)
+  - buy_option via WebSocket for close orders in live mode
+  - Wheel alternation fixed: call leg now fires after OTM put expiry too
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
+import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,14 +34,28 @@ from deribit_client import DeribitClient, DeribitPublicREST
 from risk_manager import Position, RiskManager
 from strategy import WheelStrategy
 
+# ── BTC price ring-buffer (7 days × 24h × 1 sample/min ≈ 10 080 entries max) ──
+# We just need the oldest and newest values, so we keep a lightweight deque.
+_BTC_PRICE_HISTORY_MAX = 10_080  # 7 days at 1-per-minute
+
 
 class WheelBot:
     """
     Async wheel-strategy bot.
 
     Modes:
-        paper=True  -- fetches live data, logs simulated orders
-        paper=False -- fetches live data, places real orders (LIVE_ONLY)
+        paper=True  — fetches live market data, logs simulated orders
+        paper=False — fetches live market data, places real orders (LIVE_ONLY)
+
+    Paper mode fully runs both the put and call legs of the wheel using
+    simulated expiry detection via _check_expired_positions().
+
+    Live mode additionally:
+        • Syncs positions from Deribit on startup via DeribitPrivateREST
+        • Subscribes to "user.changes.any.BTC.raw" WebSocket channel for
+          real settlement event callbacks
+        • Uses actual equity from get_account_summary() each tick
+        • Closes positions via WebSocket buy_option()
     """
 
     def __init__(self, config: Config | None = None, paper: bool = True) -> None:
@@ -47,11 +68,16 @@ class WheelBot:
         self._equity_usd: float = self._cfg.backtest.starting_equity
         self._equity_history: list[float] = []
         self._kill_path  = Path(self._cfg.risk.kill_switch_file)
-        self._trades_log: list[dict] = []          # lightweight in-memory trade log
+        self._trades_log: list[dict] = []
         self._iv_history_cache: list = []
         self._last_overseer_check: datetime | None = None
 
-        # AI Overseer (disabled if no LLM key found or config disabled)
+        # Phase 2: 7-day BTC price ring-buffer for overseer BTC-change-% metric
+        self._btc_price_history: deque[tuple[datetime, float]] = deque(
+            maxlen=_BTC_PRICE_HISTORY_MAX
+        )
+
+        # AI Overseer
         if self._cfg.overseer.enabled:
             self._overseer = AIOverSeer()
             if self._overseer.is_enabled():
@@ -72,9 +98,13 @@ class WheelBot:
         logger.info(
             f"WheelBot starting ({'PAPER' if self._paper else 'LIVE'} mode)"
         )
+
         if not self._paper:
-            # LIVE_ONLY: connect and authenticate WebSocket
+            # LIVE_ONLY: connect WebSocket (auth + subscribe)
             await self._client.connect_live()
+            await self._setup_live_subscriptions()
+            # Reconcile open positions from Deribit
+            await self._sync_positions_from_exchange()
 
         try:
             while True:
@@ -86,8 +116,147 @@ class WheelBot:
             await self._client.disconnect()
             logger.info("WheelBot shut down")
 
+    # ── Phase 2: live startup helpers ──────────────────────────────────────────
+
+    async def _setup_live_subscriptions(self) -> None:
+        """Subscribe to WebSocket channels for real-time settlement events (LIVE_ONLY)."""
+        if self._client.ws is None:
+            return
+        channels = [
+            f"user.changes.any.{self._cfg.deribit.currency}.raw",
+            f"user.portfolio.{self._cfg.deribit.currency.lower()}",
+        ]
+        await self._client.ws.subscribe(channels, self._on_settlement_event)
+        logger.info(f"Live subscriptions active: {channels}")
+
+    async def _sync_positions_from_exchange(self) -> None:
+        """
+        Reconcile internal position state with open positions on Deribit (LIVE_ONLY).
+        Called once on startup so the bot doesn't start with a clean slate
+        when it's restarted mid-trade.
+        """
+        if not self._client.has_private_access():
+            logger.warning(
+                "No private REST access — skipping position sync. "
+                "Set DERIBIT_API_KEY and DERIBIT_API_SECRET to enable."
+            )
+            return
+
+        try:
+            exchange_positions = self._client.private.get_positions(
+                currency=self._cfg.deribit.currency
+            )
+            for ep in exchange_positions:
+                # Only import short positions (we are option sellers)
+                if ep.direction != "sell" or ep.size >= 0:
+                    continue
+                pos = Position(
+                    instrument_name=ep.instrument_name,
+                    strike=float(ep.instrument_name.split("-")[2])
+                    if len(ep.instrument_name.split("-")) >= 3 else 0.0,
+                    option_type=ep.option_type,
+                    entry_price=ep.average_price,
+                    underlying_at_entry=0.0,   # unknown at reconcile time
+                    contracts=abs(ep.size),
+                    current_delta=abs(ep.delta),
+                    current_price=ep.mark_price,
+                    entry_equity=self._equity_usd,
+                    expiry_ts=ep.expiry_ts,
+                )
+                self._positions.append(pos)
+                logger.info(
+                    f"Reconciled position from Deribit: {ep.instrument_name} "
+                    f"× {abs(ep.size)} contracts"
+                )
+
+            if not exchange_positions:
+                logger.info("No open positions found on Deribit — starting flat")
+
+            # Also sync equity from Deribit
+            account = self._client.private.get_account_summary(
+                currency=self._cfg.deribit.currency
+            )
+            # Convert BTC equity to USD using a rough spot price
+            # (will be updated precisely on first tick)
+            logger.info(
+                f"Account equity: {account.equity:.6f} BTC "
+                f"| Available: {account.available_funds:.6f} BTC"
+            )
+
+        except Exception as exc:
+            logger.error(f"Position sync failed: {exc} — starting with empty state")
+
+    def _on_settlement_event(self, data: dict) -> None:
+        """
+        WebSocket callback for user.changes.any.BTC.raw (LIVE_ONLY).
+
+        Deribit sends settlement notifications as trades of type "settlement".
+        When we detect our option was settled:
+          - Update the strategy cycle completion flag
+          - Remove the position from internal tracking
+
+        This is the Phase 2 mechanism that enables the wheel's call leg
+        based on real Deribit settlement events rather than simulated expiry.
+        """
+        trades = data.get("trades", [])
+        for trade in trades:
+            settlement_type = trade.get("settlement_type", "")
+            if settlement_type not in ("settlement", "delivery"):
+                continue  # not a settlement — it's a fill or other event
+
+            instrument = trade.get("instrument_name", "")
+            # Find our position for this instrument
+            matching = [p for p in self._positions if p.instrument_name == instrument]
+            if not matching:
+                continue
+
+            pos = matching[0]
+            settlement_price = float(trade.get("price", 0.0))
+            profit_loss = float(trade.get("profit_loss", 0.0))
+
+            # ITM if there was a non-zero settlement payout against us
+            expired_itm = profit_loss < 0
+
+            if pos.option_type == "put":
+                # After ANY put settlement (ITM or OTM), the put leg is complete
+                # and the call leg may now fire.
+                self._strategy._put_cycle_complete = True
+                logger.info(
+                    f"WebSocket settlement: {instrument} expired "
+                    f"{'ITM' if expired_itm else 'OTM'} | P&L: {profit_loss:+.6f} BTC "
+                    f"→ put cycle complete, call leg now enabled"
+                )
+            elif pos.option_type == "call":
+                # After a call settlement, reset so next cycle starts with a put
+                self._strategy._put_cycle_complete = False
+                logger.info(
+                    f"WebSocket settlement: {instrument} (call) expired "
+                    f"{'ITM' if expired_itm else 'OTM'} | P&L: {profit_loss:+.6f} BTC "
+                    f"→ call cycle complete, reverting to put leg"
+                )
+
+            # Record P&L and remove from internal tracking
+            # (position will be confirmed gone on next REST sync)
+            pnl_btc = profit_loss
+            pnl_usd = pnl_btc * (self._btc_price_history[-1][1]
+                                  if self._btc_price_history else pos.underlying_at_entry)
+            trade_record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "instrument": instrument,
+                "option_type": pos.option_type,
+                "entry_price": pos.entry_price,
+                "exit_price": settlement_price,
+                "contracts": pos.contracts,
+                "pnl_btc": round(pnl_btc, 6),
+                "pnl_usd": round(pnl_usd, 2),
+                "reason": f"ws_settlement_{'itm' if expired_itm else 'otm'}",
+            }
+            self._trades_log.append(trade_record)
+            self._positions = [p for p in self._positions if p.instrument_name != instrument]
+
+    # ── Overseer helpers ───────────────────────────────────────────────────────
+
     def _should_run_overseer(self, now: datetime) -> bool:
-        """Return True if enough time has elapsed since the last LLM oversight check."""
         if self._overseer is None or not self._overseer.is_enabled():
             return False
         if self._last_overseer_check is None:
@@ -95,27 +264,44 @@ class WheelBot:
         interval = timedelta(minutes=self._cfg.overseer.check_interval_minutes)
         return now - self._last_overseer_check >= interval
 
+    def _btc_change_7d(self) -> float:
+        """Return BTC 7-day price change % using the ring-buffer history."""
+        if len(self._btc_price_history) < 2:
+            return 0.0
+        oldest_ts, oldest_price = self._btc_price_history[0]
+        newest_ts, newest_price = self._btc_price_history[-1]
+        # Only use as "7d" if we have at least 1 day of history
+        if (newest_ts - oldest_ts).total_seconds() < 3600:
+            return 0.0
+        return (newest_price - oldest_price) / oldest_price * 100.0
+
     def _run_overseer_check(self, now: datetime, btc_price: float, iv_rank: float) -> None:
-        """Build a MarketBrief and ask the LLM whether to CONTINUE or HALT."""
         if self._overseer is None:
             return
 
         open_pos: dict | None = None
         if self._positions:
             p = self._positions[0]
+            # Phase 2: compute DTE from expiry_ts if available
+            if p.expiry_ts:
+                dte = max(0, int(
+                    (p.expiry_ts / 1000 - time.time()) / 86_400
+                ))
+            else:
+                dte = 0
             open_pos = {
                 "option_type": p.option_type,
                 "strike": p.strike,
                 "delta": p.current_delta,
                 "unrealised_pnl": (p.entry_price - p.current_price) * p.contracts * btc_price,
-                "dte": 0,          # DTE not tracked at this stage; Phase 2 TODO
+                "dte": dte,
             }
 
         brief = self._overseer.build_brief(
             equity_curve=self._equity_history or [self._equity_usd],
             trades=self._trades_log,
             current_btc_price=btc_price,
-            btc_change_7d_pct=0.0,   # TODO: track 7d price in Phase 2
+            btc_change_7d_pct=self._btc_change_7d(),   # Phase 2: real 7d BTC Δ
             current_iv=float(self._iv_history_cache[-1][1]) if self._iv_history_cache else 80.0,
             iv_rank=iv_rank,
             open_position=open_pos,
@@ -123,29 +309,26 @@ class WheelBot:
 
         safe = self._overseer.check(brief)
         self._last_overseer_check = now
-
         if not safe:
-            # Kill switch already written by overseer — kill switch check on
-            # next tick will halt the loop cleanly.
             logger.critical("AI Overseer issued HALT — kill switch activated.")
+
+    # ── Main tick ──────────────────────────────────────────────────────────────
 
     async def _tick(self) -> None:
         """Single poll iteration."""
         now = datetime.now(timezone.utc)
 
-        # Kill switch check (highest priority — catches both manual and AI-triggered halts)
         if not self._risk.check_kill_switch():
             return
 
         # Fetch market state
         try:
-            iv_history   = self._client.rest.get_historical_volatility(
+            iv_history  = self._client.rest.get_historical_volatility(
                 currency=self._cfg.deribit.currency
             )
-            instruments  = self._client.rest.get_instruments(
+            instruments = self._client.rest.get_instruments(
                 currency=self._cfg.deribit.currency
             )
-            # Fetch tickers for qualifying strikes
             tickers = {}
             for inst in instruments[:self._cfg.strategy.liquidity_top_n]:
                 ticker = self._client.rest.get_ticker(inst.instrument_name)
@@ -159,8 +342,23 @@ class WheelBot:
             logger.warning("No tickers fetched — skipping tick")
             return
 
-        # Underlying price and current IV rank
         underlying_price = next(iter(tickers.values())).underlying_price
+
+        # Phase 2: update 7d BTC price ring-buffer
+        self._btc_price_history.append((now, underlying_price))
+
+        # Phase 2 (live mode): refresh equity from Deribit account summary each tick
+        if not self._paper and self._client.has_private_access():
+            try:
+                account = self._client.private.get_account_summary(
+                    currency=self._cfg.deribit.currency
+                )
+                # Equity in BTC → convert to USD
+                self._equity_usd = account.equity * underlying_price
+            except Exception as exc:
+                logger.warning(f"Account summary fetch failed: {exc} — using cached equity")
+
+        # IV rank
         if iv_history:
             self._iv_history_cache = iv_history
         recent_ivs = [row[1] for row in iv_history[-365:]] if iv_history else []
@@ -170,39 +368,38 @@ class WheelBot:
         else:
             iv_rank = 0.5
 
-        # Settle any expired positions first (BUG 4)
-        await self._check_expired_positions(now, underlying_price)
+        # Settle any expired positions (paper mode — live mode uses WebSocket callback)
+        if self._paper:
+            await self._check_expired_positions(now, underlying_price)
 
-        # Update open position mark prices and deltas from live tickers (BUG 1)
+        # Update open position mark prices and deltas
         for pos in self._positions:
             ticker = tickers.get(pos.instrument_name)
             if ticker:
                 pos.current_price = ticker.mark_price
-                if hasattr(ticker, 'greeks') and ticker.greeks:
-                    pos.current_delta = abs(ticker.greeks.get('delta', pos.current_delta))
+                if ticker.greeks:
+                    pos.current_delta = abs(ticker.greeks.get("delta", pos.current_delta))
 
-        # Update equity: starting equity + realised PnL + unrealised PnL (BUG 2)
-        realised_pnl = sum(t.get('pnl_usd', 0.0) for t in self._trades_log)
-        unrealised_pnl = sum(
-            (pos.entry_price - pos.current_price) * pos.contracts * underlying_price
-            for pos in self._positions
-        )
-        self._equity_usd = self._cfg.backtest.starting_equity + realised_pnl + unrealised_pnl
+        # Recalculate equity (paper mode): starting equity + realised + unrealised P&L
+        if self._paper:
+            realised_pnl = sum(t.get("pnl_usd", 0.0) for t in self._trades_log)
+            unrealised_pnl = sum(
+                (pos.entry_price - pos.current_price) * pos.contracts * underlying_price
+                for pos in self._positions
+            )
+            self._equity_usd = self._cfg.backtest.starting_equity + realised_pnl + unrealised_pnl
         self._equity_history.append(self._equity_usd)
 
-        # Drawdown guard
         if not self._risk.check_drawdown(self._equity_history):
             logger.warning("Drawdown limit breached — no new positions this tick")
             return
 
-        # AI Overseer (runs on its own cadence, not every tick)
         if self._should_run_overseer(now):
             self._run_overseer_check(now, underlying_price, iv_rank)
-            # Overseer may have written a kill switch; re-check before continuing
             if not self._risk.check_kill_switch():
                 return
 
-        # In-trade checks
+        # In-trade checks (roll if needed)
         for pos in list(self._positions):
             should_roll, reason = self._risk.should_roll(pos)
             if should_roll:
@@ -212,19 +409,19 @@ class WheelBot:
 
         # Open new leg if flat
         if not self._positions:
-            last_cycle = None  # strategy decides based on internal state
             signal = self._strategy.generate_signal(
                 iv_history=iv_history,
                 instruments=instruments,
                 tickers=tickers,
                 underlying_price=underlying_price,
-                last_cycle=last_cycle,
+                last_cycle=None,
             )
             if signal:
                 await self._open_position(signal, underlying_price)
 
-        # Dashboard tick
         self._print_status(now, underlying_price)
+
+    # ── Position management ────────────────────────────────────────────────────
 
     async def _open_position(self, signal, underlying_price: float) -> None:
         """Open a new option position (paper or live)."""
@@ -236,7 +433,6 @@ class WheelBot:
             logger.warning("Zero contracts sized — skipping open")
             return
 
-        # Full pre-trade check (kill switch, max legs, collateral, free margin)
         if not self._risk.full_pre_trade_check(
             open_positions=self._positions,
             equity_usd=self._equity_usd,
@@ -250,10 +446,10 @@ class WheelBot:
             logger.info(
                 f"[PAPER OPEN] SELL {signal.instrument_name} "
                 f"x{contracts} @ {signal.mark_price:.4f} BTC "
-                f"| delta={signal.delta:.3f} | IV={signal.mark_iv:.1f}%"
+                f"| delta={signal.delta:.3f} | IV={signal.mark_iv:.1f}% "
+                f"| cycle={signal.cycle} | DTE={signal.dte}"
             )
         else:
-            # LIVE_ONLY: place real sell order via WebSocket
             if self._client.ws is None:
                 logger.error("WebSocket not connected — cannot place order")
                 return
@@ -265,12 +461,11 @@ class WheelBot:
                     price=signal.mark_price,
                     label="wheel_bot",
                 )
-                logger.info(f"Order placed: {result}")
+                logger.info(f"Live sell order placed: {result}")
             except Exception as exc:
                 logger.error(f"Order failed: {exc}")
                 return
 
-        # Track position in memory (live mode would use exchange state)
         pos = Position(
             instrument_name=signal.instrument_name,
             strike=signal.strike,
@@ -281,94 +476,133 @@ class WheelBot:
             current_delta=abs(signal.delta),
             current_price=signal.mark_price,
             entry_equity=self._equity_usd,
+            expiry_ts=signal.expiry_ts,   # Phase 2: store expiry for DTE tracking
         )
         self._positions.append(pos)
 
-    async def _close_position(self, pos: Position, reason: str, underlying_price: float = 0.0) -> None:
+    async def _close_position(
+        self, pos: Position, reason: str, underlying_price: float = 0.0
+    ) -> None:
         """Close / roll a position (paper or live)."""
         import csv as _csv
         import os as _os
+
         if self._paper:
             logger.info(
                 f"[PAPER CLOSE] BUY BACK {pos.instrument_name} "
                 f"x{pos.contracts} @ {pos.current_price:.4f} BTC | {reason}"
             )
         else:
-            # LIVE_ONLY: place buy-to-close order
-            logger.warning(f"[LIVE CLOSE] {pos.instrument_name} | {reason}")
+            # LIVE_ONLY: buy to close via WebSocket
+            if self._client.ws is None:
+                logger.error("WebSocket not connected — cannot close position")
+            else:
+                try:
+                    result = await self._client.ws.buy_option(
+                        instrument_name=pos.instrument_name,
+                        amount=pos.contracts,
+                        order_type="limit",
+                        price=pos.current_price,
+                        label="wheel_bot_close",
+                    )
+                    logger.info(f"Live buy-to-close placed: {result}")
+                except Exception as exc:
+                    logger.error(f"Close order failed: {exc}")
 
-        # Record trade P&L (BUG 2 + BUG 6)
+        # Record P&L
         eff_price = underlying_price if underlying_price > 0 else pos.underlying_at_entry
         pnl_btc = (pos.entry_price - pos.current_price) * pos.contracts
         pnl_usd = pnl_btc * eff_price
         trade_record = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'instrument': pos.instrument_name,
-            'option_type': pos.option_type,
-            'entry_price': pos.entry_price,
-            'exit_price': pos.current_price,
-            'contracts': pos.contracts,
-            'pnl_btc': round(pnl_btc, 6),
-            'pnl_usd': round(pnl_usd, 2),
-            'reason': reason,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "instrument": pos.instrument_name,
+            "option_type": pos.option_type,
+            "entry_price": pos.entry_price,
+            "exit_price": pos.current_price,
+            "contracts": pos.contracts,
+            "pnl_btc": round(pnl_btc, 6),
+            "pnl_usd": round(pnl_usd, 2),
+            "reason": reason,
         }
         self._trades_log.append(trade_record)
 
-        # Write to CSV so dashboard Paper Trading tab can display it (BUG 6)
-        csv_path = 'data/trades.csv'
-        _os.makedirs('data', exist_ok=True)
+        # Write to CSV for the dashboard Paper Trading tab
+        csv_path = "data/trades.csv"
+        _os.makedirs("data", exist_ok=True)
         file_exists = _os.path.exists(csv_path)
-        with open(csv_path, 'a', newline='') as f:
+        with open(csv_path, "a", newline="") as f:
             writer = _csv.DictWriter(
                 f,
-                fieldnames=['timestamp', 'instrument', 'option_type',
-                            'entry_price', 'exit_price', 'contracts',
-                            'pnl_btc', 'pnl_usd', 'reason'],
+                fieldnames=["timestamp", "instrument", "option_type",
+                            "entry_price", "exit_price", "contracts",
+                            "pnl_btc", "pnl_usd", "reason"],
             )
             if not file_exists:
                 writer.writeheader()
             writer.writerow(trade_record)
 
-    async def _check_expired_positions(self, now: datetime, underlying_price: float) -> None:
-        """Settle positions whose expiry date has passed (BUG 4)."""
+    async def _check_expired_positions(
+        self, now: datetime, underlying_price: float
+    ) -> None:
+        """
+        Settle positions whose expiry date has passed (paper mode only).
+
+        Phase 2 fix: After ANY put expiry (OTM or ITM), set _put_cycle_complete=True
+        so the call leg can fire on the next cycle. After a call expiry, reset to False.
+        Previously, OTM put expiry was leaving the flag False, blocking the call leg forever.
+        """
         for pos in list(self._positions):
             expiry = self._parse_expiry(pos.instrument_name)
-            if expiry and now >= expiry:
-                if pos.option_type == 'put':
-                    expired_itm = underlying_price < pos.strike
+            if not (expiry and now >= expiry):
+                continue
+
+            if pos.option_type == "put":
+                expired_itm = underlying_price < pos.strike
+            else:
+                expired_itm = underlying_price > pos.strike
+
+            if expired_itm:
+                if pos.option_type == "put":
+                    settlement_price = (pos.strike - underlying_price) / underlying_price
                 else:
-                    expired_itm = underlying_price > pos.strike
+                    settlement_price = (underlying_price - pos.strike) / underlying_price
+                pos.current_price = max(settlement_price, 0.0)
+                logger.warning(
+                    f"Position {pos.instrument_name} expired ITM at "
+                    f"{underlying_price:.0f} (strike {pos.strike:.0f}) — settled at loss"
+                )
+            else:
+                pos.current_price = 0.0   # expired worthless — full premium kept
+                logger.info(
+                    f"Position {pos.instrument_name} expired OTM — full premium kept"
+                )
 
-                if expired_itm:
-                    if pos.option_type == 'put':
-                        settlement_price = (pos.strike - underlying_price) / underlying_price
-                    else:
-                        settlement_price = (underlying_price - pos.strike) / underlying_price
-                    pos.current_price = max(settlement_price, 0.0)
-                    logger.warning(
-                        f'Position {pos.instrument_name} expired ITM at '
-                        f'{underlying_price:.0f} (strike {pos.strike:.0f}) — settled at loss'
-                    )
-                    if pos.option_type == 'put':
-                        self._strategy._last_put_was_assigned = True
-                else:
-                    pos.current_price = 0.0  # expired worthless — full premium kept
-                    logger.info(
-                        f'Position {pos.instrument_name} expired OTM — full premium kept'
-                    )
-                    if pos.option_type == 'put':
-                        self._strategy._last_put_was_assigned = False
+            # Phase 2 fix: update cycle completion flag regardless of ITM/OTM
+            if pos.option_type == "put":
+                # Both OTM and ITM put expiry unlock the call leg
+                self._strategy._put_cycle_complete = True
+                logger.info(
+                    f"Put cycle complete ({'ITM' if expired_itm else 'OTM'}) — "
+                    f"call leg now enabled for next cycle"
+                )
+            elif pos.option_type == "call":
+                # After a call completes, go back to selling puts
+                self._strategy._put_cycle_complete = False
+                logger.info(
+                    f"Call cycle complete ({'ITM' if expired_itm else 'OTM'}) — "
+                    f"returning to put-selling mode"
+                )
 
-                await self._close_position(pos, 'expiry_settlement', underlying_price)
-                self._positions.remove(pos)
+            await self._close_position(pos, "expiry_settlement", underlying_price)
+            self._positions.remove(pos)
 
-    def _parse_expiry(self, instrument_name: str):
+    def _parse_expiry(self, instrument_name: str) -> datetime | None:
         """Parse expiry datetime from Deribit instrument like BTC-25APR25-90000-P."""
         try:
-            parts = instrument_name.split('-')
-            expiry_str = parts[1]  # e.g. '25APR25'
+            parts = instrument_name.split("-")
+            expiry_str = parts[1]   # e.g. "25APR25"
             from datetime import datetime as _dt
-            expiry = _dt.strptime(expiry_str, '%d%b%y').replace(
+            expiry = _dt.strptime(expiry_str, "%d%b%y").replace(
                 hour=8, minute=0, second=0, tzinfo=timezone.utc
             )
             return expiry
@@ -377,12 +611,24 @@ class WheelBot:
 
     def _print_status(self, now: datetime, spot: float) -> None:
         """Log a brief status line each tick."""
-        pos_str = (
-            f"{self._positions[0].instrument_name} "
-            f"delta={self._positions[0].current_delta:.3f}"
-            if self._positions else "FLAT"
-        )
+        if self._positions:
+            p = self._positions[0]
+            # Phase 2: show DTE if expiry_ts is available
+            if p.expiry_ts:
+                dte = max(0, int((p.expiry_ts / 1000 - time.time()) / 86_400))
+                dte_str = f" | DTE={dte}d"
+            else:
+                dte_str = ""
+            pos_str = (
+                f"{p.instrument_name} "
+                f"delta={p.current_delta:.3f}{dte_str}"
+            )
+        else:
+            pos_str = "FLAT"
+
+        cycle_state = "✓call-ok" if self._strategy._put_cycle_complete else "→put-mode"
         logger.info(
             f"[{now.strftime('%H:%M:%S')} UTC] "
-            f"BTC=${spot:,.0f} | equity=${self._equity_usd:,.0f} | {pos_str}"
+            f"BTC=${spot:,.0f} | equity=${self._equity_usd:,.0f} | "
+            f"{pos_str} | wheel={cycle_state}"
         )

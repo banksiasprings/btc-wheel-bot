@@ -2,11 +2,12 @@
 deribit_client.py — Deribit REST + WebSocket client wrapper.
 
 Public endpoints (no auth) are used for backtest mode.
-Authenticated endpoints are scaffolded for paper/live modes.
+DeribitPrivateREST uses OAuth2 client_credentials for authenticated
+account queries (positions, equity, settlements).
+DeribitWebSocket handles real-time data, order execution, and settlement
+event subscriptions for live/paper mode.
 
-All live order methods are marked # LIVE_ONLY and raise NotImplementedError
-when called in backtest mode, ensuring the backtester never accidentally
-touches real or paper trading infrastructure.
+All live order methods are marked # LIVE_ONLY.
 """
 
 from __future__ import annotations
@@ -14,9 +15,10 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import aiohttp
 import requests
@@ -40,6 +42,7 @@ class Ticker:
     vega: float
     underlying_price: float
     timestamp: datetime
+    greeks: dict | None = None   # raw greeks dict for easy access
 
 
 @dataclass
@@ -49,6 +52,29 @@ class Instrument:
     expiry_ts: int        # Unix timestamp ms
     option_type: str      # "put" | "call"
     dte: int              # days to expiry
+
+
+@dataclass
+class AccountSummary:
+    equity: float          # total account equity in BTC
+    balance: float         # cash balance in BTC
+    available_funds: float # funds available for new positions
+    margin_balance: float  # margin balance
+    currency: str = "BTC"
+
+
+@dataclass
+class ExchangePosition:
+    """An open position as reported by Deribit (live mode)."""
+    instrument_name: str
+    size: float            # positive = long, negative = short
+    direction: str         # "buy" | "sell"
+    average_price: float   # average entry price (BTC)
+    mark_price: float
+    floating_profit_loss: float
+    delta: float
+    option_type: str       # "put" | "call"
+    expiry_ts: int
 
 
 # ── REST client (public endpoints — no auth required) ─────────────────────────
@@ -108,21 +134,22 @@ class DeribitPublicREST:
         """Fetch current ticker + Greeks for a single instrument."""
         try:
             raw = self._get("ticker", {"instrument_name": instrument_name})
-            greeks = raw.get("greeks", {})
+            greeks_raw = raw.get("greeks", {})
             return Ticker(
                 instrument_name=instrument_name,
                 mark_price=float(raw.get("mark_price", 0)),
                 bid=float(raw.get("best_bid_price", 0)),
                 ask=float(raw.get("best_ask_price", 0)),
                 mark_iv=float(raw.get("mark_iv", 0)),
-                delta=float(greeks.get("delta", 0)),
-                gamma=float(greeks.get("gamma", 0)),
-                theta=float(greeks.get("theta", 0)),
-                vega=float(greeks.get("vega", 0)),
+                delta=float(greeks_raw.get("delta", 0)),
+                gamma=float(greeks_raw.get("gamma", 0)),
+                theta=float(greeks_raw.get("theta", 0)),
+                vega=float(greeks_raw.get("vega", 0)),
                 underlying_price=float(raw.get("underlying_price", 0)),
                 timestamp=datetime.fromtimestamp(
                     raw["timestamp"] / 1000, tz=timezone.utc
                 ),
+                greeks=greeks_raw,
             )
         except Exception as exc:
             logger.warning(f"Could not fetch ticker for {instrument_name}: {exc}")
@@ -134,7 +161,6 @@ class DeribitPublicREST:
         Returns list of (timestamp_ms, iv_value) tuples.
         """
         raw = self._get("get_historical_volatility", {"currency": currency})
-        # Response is [[timestamp_ms, iv], ...]
         return [(int(row[0]), float(row[1])) for row in raw]
 
     def get_tradingview_chart_data(
@@ -164,11 +190,11 @@ class DeribitPublicREST:
         })
         if raw.get("status") == "no_data":
             return []
-        ticks = raw.get("ticks", [])
-        opens = raw.get("open", [])
-        highs = raw.get("high", [])
-        lows = raw.get("low", [])
-        closes = raw.get("close", [])
+        ticks   = raw.get("ticks", [])
+        opens   = raw.get("open", [])
+        highs   = raw.get("high", [])
+        lows    = raw.get("low", [])
+        closes  = raw.get("close", [])
         volumes = raw.get("volume", [])
         return [
             {
@@ -183,15 +209,191 @@ class DeribitPublicREST:
         ]
 
 
+# ── Private REST client (authenticated — Phase 2) ─────────────────────────────
+
+
+class DeribitPrivateREST:
+    """
+    Authenticated REST client for Deribit private endpoints.
+
+    Uses OAuth2 client_credentials flow to obtain an access token,
+    then includes it as a Bearer token in all private requests.
+
+    Requires DERIBIT_API_KEY and DERIBIT_API_SECRET environment variables.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        testnet: bool = False,
+        timeout: int = 10,
+    ) -> None:
+        self._api_key    = api_key
+        self._api_secret = api_secret
+        self._timeout    = timeout
+        self._access_token: str = ""
+        self._token_expires_at: float = 0.0
+
+        base = "https://test.deribit.com" if testnet else "https://www.deribit.com"
+        self._pub_url  = f"{base}/api/v2/public"
+        self._priv_url = f"{base}/api/v2/private"
+        self.session = requests.Session()
+        self.session.headers["Accept"] = "application/json"
+
+    def _authenticate(self) -> None:
+        """Obtain an OAuth2 access token via client_credentials grant."""
+        if not self._api_key or not self._api_secret:
+            raise ValueError(
+                "DERIBIT_API_KEY and DERIBIT_API_SECRET must be set in environment "
+                "to use private REST endpoints."
+            )
+        url = f"{self._pub_url}/auth"
+        params = {
+            "grant_type": "client_credentials",
+            "client_id": self._api_key,
+            "client_secret": self._api_secret,
+        }
+        resp = self.session.get(url, params=params, timeout=self._timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(f"Authentication failed: {data['error']}")
+        result = data["result"]
+        self._access_token = result["access_token"]
+        # Refresh 30s before the token actually expires
+        self._token_expires_at = time.time() + result.get("expires_in", 900) - 30
+        logger.info("Deribit private REST authenticated (token valid ~15min)")
+
+    def _ensure_auth(self) -> None:
+        """Re-authenticate if the token has expired."""
+        if time.time() >= self._token_expires_at:
+            self._authenticate()
+
+    def _get(self, method: str, params: dict | None = None) -> Any:
+        """Authenticated GET to a private endpoint."""
+        self._ensure_auth()
+        url = f"{self._priv_url}/{method}"
+        headers = {"Authorization": f"Bearer {self._access_token}"}
+        try:
+            resp = self.session.get(
+                url, params=params or {}, headers=headers, timeout=self._timeout
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if "error" in data:
+                raise RuntimeError(f"Deribit API error [{method}]: {data['error']}")
+            return data["result"]
+        except requests.RequestException as exc:
+            logger.error(f"Private REST error [{method}]: {exc}")
+            raise
+
+    # ── Account state ──────────────────────────────────────────────────────────
+
+    def get_account_summary(self, currency: str = "BTC") -> AccountSummary:
+        """Fetch live account equity, balance, and available funds."""
+        raw = self._get("get_account_summary", {
+            "currency": currency,
+            "extended": True,
+        })
+        return AccountSummary(
+            equity=float(raw.get("equity", 0.0)),
+            balance=float(raw.get("balance", 0.0)),
+            available_funds=float(raw.get("available_funds", 0.0)),
+            margin_balance=float(raw.get("margin_balance", 0.0)),
+            currency=currency,
+        )
+
+    def get_positions(
+        self, currency: str = "BTC", kind: str = "option"
+    ) -> list[ExchangePosition]:
+        """Fetch all currently open option positions."""
+        raw_list = self._get("get_positions", {
+            "currency": currency,
+            "kind": kind,
+        })
+        positions: list[ExchangePosition] = []
+        for raw in raw_list:
+            inst = raw.get("instrument_name", "")
+            # Parse option type and expiry from instrument name e.g. BTC-25APR25-90000-P
+            parts = inst.split("-")
+            opt_type = "put" if parts[-1] == "P" else "call"
+            try:
+                from datetime import datetime as _dt
+                expiry_str = parts[1]
+                expiry_dt = _dt.strptime(expiry_str, "%d%b%y").replace(
+                    hour=8, minute=0, second=0, tzinfo=timezone.utc
+                )
+                expiry_ts = int(expiry_dt.timestamp() * 1000)
+            except Exception:
+                expiry_ts = 0
+
+            positions.append(ExchangePosition(
+                instrument_name=inst,
+                size=float(raw.get("size", 0.0)),
+                direction=raw.get("direction", "sell"),
+                average_price=float(raw.get("average_price", 0.0)),
+                mark_price=float(raw.get("mark_price", 0.0)),
+                floating_profit_loss=float(raw.get("floating_profit_loss", 0.0)),
+                delta=float(raw.get("delta", 0.0)),
+                option_type=opt_type,
+                expiry_ts=expiry_ts,
+            ))
+        logger.debug(f"Fetched {len(positions)} open {kind} positions for {currency}")
+        return positions
+
+    def get_open_orders(
+        self, currency: str = "BTC", kind: str = "option"
+    ) -> list[dict]:
+        """Fetch all open (unfilled) orders."""
+        return self._get("get_open_orders_by_currency", {
+            "currency": currency,
+            "kind": kind,
+        })
+
+    def get_settlement_history_by_instrument(
+        self,
+        instrument_name: str,
+        settlement_type: str = "settlement",
+        count: int = 5,
+    ) -> list[dict]:
+        """
+        Fetch recent settlement records for a specific instrument.
+
+        settlement_type: "settlement" | "delivery" | "bankruptcy"
+        Returns list of settlement records (newest first).
+        """
+        return self._get("get_settlement_history_by_instrument", {
+            "instrument_name": instrument_name,
+            "type": settlement_type,
+            "count": count,
+        })
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a specific open order by ID."""
+        return self._get("cancel", {"order_id": order_id})
+
+    def cancel_all_by_instrument(self, instrument_name: str) -> int:
+        """Cancel all orders for a given instrument. Returns number cancelled."""
+        return self._get("cancel_all_by_instrument", {
+            "instrument_name": instrument_name,
+        })
+
+
 # ── WebSocket client (live/paper mode) ────────────────────────────────────────
 
 
 class DeribitWebSocket:
     """
-    Async WebSocket client for real-time data and order management.
-    Used in paper and live modes only.
+    Async WebSocket client for real-time data, order management, and
+    settlement event subscriptions.
 
     # LIVE_ONLY — this class is NOT used in backtest mode.
+
+    Phase 2 additions:
+      - subscribe() — subscribe to private channels (e.g. settlement events)
+      - buy_option() — close a short option position (buy to close)
+      - Settlement callback routing via _subscriptions dict
     """
 
     def __init__(self) -> None:
@@ -200,6 +402,8 @@ class DeribitWebSocket:
         self._msg_id: int = 1
         self._pending: dict[int, asyncio.Future] = {}
         self._authenticated: bool = False
+        # channel_name → callback(data: dict)
+        self._subscriptions: dict[str, Callable[[dict], None]] = {}
 
     async def connect(self) -> None:
         """Open WebSocket connection to Deribit."""
@@ -209,23 +413,47 @@ class DeribitWebSocket:
         logger.info(f"WebSocket connected to {cfg.deribit.ws_url}")
 
     async def authenticate(self) -> None:
-        """Authenticate with API key/secret. Required for order placement."""
+        """Authenticate with API key/secret. Required for order placement and private subscriptions."""
         if not cfg.deribit.api_key:
             raise ValueError("DERIBIT_API_KEY not set in environment")
-        result = await self._rpc("public/auth", {
+        await self._rpc("public/auth", {
             "grant_type": "client_credentials",
             "client_id": cfg.deribit.api_key,
             "client_secret": cfg.deribit.api_secret,
         })
         self._authenticated = True
         logger.info("WebSocket authenticated")
+
+    async def subscribe(
+        self,
+        channels: list[str],
+        callback: Callable[[dict], None],
+    ) -> None:
+        """
+        Subscribe to one or more private WebSocket channels.
+
+        All channels share the same callback; route internally if needed.
+
+        Example channels:
+            "user.changes.any.BTC.raw"   — all account changes (fills, settlements)
+            "user.portfolio.btc"          — portfolio/equity updates
+
+        # LIVE_ONLY
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must authenticate before subscribing to private channels")
+        for channel in channels:
+            self._subscriptions[channel] = callback
+        result = await self._rpc("private/subscribe", {"channels": channels})
+        logger.info(f"Subscribed to WebSocket channels: {channels}")
         return result
 
     async def _rpc(self, method: str, params: dict) -> Any:
         """Send a JSON-RPC request and await the response."""
         msg_id = self._msg_id
         self._msg_id += 1
-        fut: asyncio.Future = asyncio.get_event_loop().create_future()
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future = loop.create_future()
         self._pending[msg_id] = fut
         payload = json.dumps({
             "jsonrpc": "2.0",
@@ -237,16 +465,47 @@ class DeribitWebSocket:
         return await asyncio.wait_for(fut, timeout=cfg.execution.order_confirm_timeout)
 
     async def _recv_loop(self) -> None:
-        """Receive loop — routes messages to pending futures or subscriptions."""
+        """
+        Receive loop — routes messages to:
+          1. Pending RPC futures (request/response pairs)
+          2. Subscription callbacks (push notifications)
+        """
         async for msg in self._ws:
-            if msg.type == aiohttp.WSMsgType.TEXT:
+            if msg.type != aiohttp.WSMsgType.TEXT:
+                continue
+            try:
                 data = json.loads(msg.data)
-                if "id" in data and data["id"] in self._pending:
-                    fut = self._pending.pop(data["id"])
-                    if "error" in data:
-                        fut.set_exception(RuntimeError(data["error"]["message"]))
-                    else:
-                        fut.set_result(data.get("result"))
+            except json.JSONDecodeError:
+                continue
+
+            # Route RPC responses
+            if "id" in data and data["id"] in self._pending:
+                fut = self._pending.pop(data["id"])
+                if "error" in data:
+                    fut.set_exception(RuntimeError(data["error"]["message"]))
+                else:
+                    fut.set_result(data.get("result"))
+
+            # Route subscription push messages
+            elif data.get("method") == "subscription":
+                params = data.get("params", {})
+                channel = params.get("channel", "")
+                channel_data = params.get("data", {})
+                cb = self._subscriptions.get(channel)
+                if cb:
+                    try:
+                        cb(channel_data)
+                    except Exception as exc:
+                        logger.error(f"Subscription callback error [{channel}]: {exc}")
+                else:
+                    # Wildcard: match channel prefix e.g. "user.changes.any.BTC.raw"
+                    for sub_channel, sub_cb in self._subscriptions.items():
+                        if channel.startswith(sub_channel.rstrip("*")):
+                            try:
+                                sub_cb(channel_data)
+                            except Exception as exc:
+                                logger.error(f"Subscription callback error [{channel}]: {exc}")
+                            break
 
     # ── Order methods (LIVE_ONLY) ──────────────────────────────────────────────
 
@@ -259,8 +518,8 @@ class DeribitWebSocket:
         label: str = "",
     ) -> dict:
         """
-        Place a sell order for an option.
-        # LIVE_ONLY — only called in paper/live modes.
+        Place a sell order for an option (open short position).
+        # LIVE_ONLY
         """
         if not self._authenticated:
             raise RuntimeError("Must authenticate before placing orders")
@@ -274,6 +533,32 @@ class DeribitWebSocket:
             params["price"] = price
         result = await self._rpc("private/sell", params)
         logger.info(f"Sell order placed: {instrument_name} × {amount} @ {price}")
+        return result
+
+    async def buy_option(
+        self,
+        instrument_name: str,
+        amount: float,
+        order_type: str = "limit",
+        price: float | None = None,
+        label: str = "",
+    ) -> dict:
+        """
+        Place a buy order to close a short option position (buy to close).
+        # LIVE_ONLY
+        """
+        if not self._authenticated:
+            raise RuntimeError("Must authenticate before placing orders")
+        params: dict[str, Any] = {
+            "instrument_name": instrument_name,
+            "amount": amount,
+            "type": order_type,
+            "label": label,
+        }
+        if price is not None:
+            params["price"] = price
+        result = await self._rpc("private/buy", params)
+        logger.info(f"Buy-to-close order placed: {instrument_name} × {amount} @ {price}")
         return result
 
     async def close(self) -> None:
@@ -290,13 +575,38 @@ class DeribitWebSocket:
 
 class DeribitClient:
     """
-    Unified Deribit client — exposes public REST for backtest,
-    and scaffolds WebSocket for live/paper modes.
+    Unified Deribit client — exposes public REST for backtest/paper,
+    private REST for live account sync, and WebSocket for real-time
+    data and order execution.
     """
 
     def __init__(self) -> None:
         self.rest = DeribitPublicREST(timeout=cfg.deribit.request_timeout)
         self.ws: DeribitWebSocket | None = None
+        # Private REST — instantiated only when API keys are available
+        self._private: DeribitPrivateREST | None = None
+        if cfg.deribit.api_key and cfg.deribit.api_secret:
+            self._private = DeribitPrivateREST(
+                api_key=cfg.deribit.api_key,
+                api_secret=cfg.deribit.api_secret,
+                testnet=cfg.deribit.testnet,
+                timeout=cfg.deribit.request_timeout,
+            )
+            logger.info("DeribitPrivateREST initialised (API keys found)")
+        else:
+            logger.info(
+                "No DERIBIT_API_KEY/SECRET — private REST unavailable; "
+                "running in public-only mode (paper trading with simulated state)"
+            )
+
+    @property
+    def private(self) -> DeribitPrivateREST | None:
+        """Return the private REST client, or None if API keys are not configured."""
+        return self._private
+
+    def has_private_access(self) -> bool:
+        """True if API keys are set and private REST is available."""
+        return self._private is not None
 
     async def connect_live(self) -> None:
         """Connect and authenticate WebSocket for paper/live mode."""

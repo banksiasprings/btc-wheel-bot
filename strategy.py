@@ -68,7 +68,12 @@ class WheelStrategy:
     def __init__(self, rest_client: DeribitPublicREST) -> None:
         self._rest = rest_client
         self._current_cycle: Cycle = cfg.strategy.initial_cycle
-        self._last_put_was_assigned: bool = False  # safety guard: only sell calls after confirmed assignment
+        # Phase 2: track whether the current put leg has completed (OTM or ITM expiry).
+        # Set to True after ANY put expiry so the call leg can fire.
+        # Reset to False after any call expiry so the next cycle starts with a put.
+        # Defaults to False so the bot always starts by selling puts.
+        _put_cycle_complete: bool = False
+        self._put_cycle_complete: bool = _put_cycle_complete
 
     # ── IV rank ───────────────────────────────────────────────────────────────
 
@@ -250,11 +255,13 @@ class WheelStrategy:
         # Step 2: Cycle decision
         cycle = self.decide_cycle(last_cycle)
 
-        # Safety guard: never sell naked calls without confirmed BTC assignment
-        if cycle == "call" and not self._last_put_was_assigned:
+        # Wheel guard: only sell a call after the put leg has fully completed (OTM or ITM).
+        # Cash-settled BTC options on Deribit don't deliver BTC, but we still need the
+        # put leg to expire before opening the call leg to avoid running two short legs
+        # simultaneously (which doubles exposure).
+        if cycle == "call" and not self._put_cycle_complete:
             logger.info(
-                "Wheel guard: last put was NOT assigned — staying in put-selling mode "
-                "(prevents naked call exposure)"
+                "Wheel guard: put leg not yet complete — staying in put-selling mode"
             )
             cycle = "put"
             self._current_cycle = "put"
