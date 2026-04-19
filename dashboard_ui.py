@@ -1659,9 +1659,9 @@ def main() -> None:
     with tab3:
         tab_optimizer()
     with tab4:
-        tab_config()
-    with tab5:
         tab_recommendations()
+    with tab5:
+        tab_config()
     with tab6:
         tab_settings()
 
