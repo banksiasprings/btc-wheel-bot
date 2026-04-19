@@ -1067,6 +1067,16 @@ def tab_optimizer() -> None:
             generations = st.slider("Generations",      min_value=3,  max_value=20, step=1, value=8,  key="optimizer_generations")
             elite_keep  = st.slider("Elite survivors",  min_value=2,  max_value=10, step=1, value=4,  key="optimizer_elite_keep")
             mut_rate    = st.slider("Mutation rate",    min_value=0.1, max_value=0.6, step=0.05, value=0.3, key="optimizer_mut_rate")
+            _sweep_results_exist = (OPT_DIR / "sweep_results.json").exists()
+            seed_from_sweep = st.checkbox(
+                "🌱 Seed initial population from sweep results",
+                value=True,
+                help="Uses sweep's best-per-parameter values as starting genes for 30% of generation 0. Much faster convergence.",
+                key="optimizer_seed_from_sweep",
+                disabled=not _sweep_results_exist,
+            )
+            if not _sweep_results_exist:
+                st.caption("Run a sweep first to enable seeding.")
 
         opt_running = (
             st.session_state.get("opt_proc") is not None
@@ -1094,6 +1104,8 @@ def tab_optimizer() -> None:
                         "--elite", str(elite_keep),
                         "--mutation", str(mut_rate),
                     ]
+                    if seed_from_sweep and _sweep_results_exist:
+                        cmd += ["--seed-from-sweep"]
                 try:
                     proc = subprocess.Popen(
                         cmd, cwd=str(BOT_DIR),
@@ -1134,6 +1146,33 @@ def _render_optimizer_results(is_sweep: bool) -> None:
             st.image(str(img_path), use_container_width=True)
         else:
             st.info("Sweep chart will appear here once the run completes.")
+
+        sweep_results_path = OPT_DIR / "sweep_results.json"
+        if sweep_results_path.exists():
+            try:
+                with open(sweep_results_path) as _f:
+                    _sweep_data = json.load(_f)
+                _table_rows = []
+                for _param_name, _param_results in _sweep_data.items():
+                    _valid = [r for r in _param_results if not r.get("error")]
+                    if _valid:
+                        _best = max(_valid, key=lambda r: r["fitness"])
+                        _table_rows.append({
+                            "Parameter": _param_name,
+                            "Best Value": _best["params"][_param_name],
+                            "Fitness Score": round(_best["fitness"], 3),
+                        })
+                if _table_rows:
+                    st.markdown("#### Best Value per Parameter")
+                    st.caption("Each row shows the single value that maximised fitness when that parameter was swept individually.")
+                    st.dataframe(
+                        pd.DataFrame(_table_rows),
+                        use_container_width=True,
+                        height=min(60 + 35 * len(_table_rows), 400),
+                        key="sweep_best_table",
+                    )
+            except Exception as _e:
+                st.warning(f"Could not parse sweep_results.json: {_e}")
     else:
         leaderboard_path = OPT_DIR / "evolution_leaderboard.csv"
         evo_img          = OPT_DIR / "evolution_progress.png"
@@ -1149,7 +1188,8 @@ def _render_optimizer_results(is_sweep: bool) -> None:
             st.markdown("#### 🏆 Best Genome Found")
             best_df = pd.DataFrame(list(best.items()), columns=["Parameter", "Value"])
             st.dataframe(best_df, use_container_width=True, height=200)
-            if st.button("Apply Best Genome to Config", use_container_width=True):
+            if st.button("Apply Best Genome to Config", use_container_width=True,
+                         key="optimizer_apply_genome_btn"):
                 _apply_genome_to_config(best)
                 st.success("Best genome applied to config.yaml! Re-run a backtest to verify.")
 
@@ -1286,8 +1326,62 @@ def tab_config() -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def tab_recommendations() -> None:
-    st.markdown("### 📋 Recommendations — Batch Backtest Analysis")
-    st.caption("Results from 36 backtests across 7 parameter groups. Winners selected by Sharpe ratio (primary) then total return (secondary).")
+    st.markdown("### 📋 Recommendations")
+
+    # ── Live Optimizer Results (shown when best_genome.yaml exists) ────────────
+    _best_genome_path = OPT_DIR / "best_genome.yaml"
+    if _best_genome_path.exists():
+        try:
+            with open(_best_genome_path) as _f:
+                _best_genome = yaml.safe_load(_f)
+
+            # Pull top-row metrics from leaderboard CSV if available
+            _leaderboard_path = OPT_DIR / "evolution_leaderboard.csv"
+            _top_metrics: dict = {}
+            if _leaderboard_path.exists():
+                try:
+                    _lb = pd.read_csv(_leaderboard_path)
+                    if not _lb.empty:
+                        _top = _lb.iloc[0]
+                        _top_metrics = {
+                            "fitness": round(float(_top.get("fitness", 0)), 3),
+                            "total_return_pct": round(float(_top.get("total_return_pct", 0)), 1),
+                            "sharpe_ratio": round(float(_top.get("sharpe_ratio", 0)), 2),
+                            "max_drawdown_pct": round(float(_top.get("max_drawdown_pct", 0)), 1),
+                            "win_rate_pct": round(float(_top.get("win_rate_pct", 0)), 1),
+                        }
+                except Exception:
+                    pass
+
+            st.markdown("#### 🏆 Optimizer Best Genome")
+            st.caption("These are live results from your optimizer run — more reliable than the static baseline below.")
+
+            if _top_metrics:
+                _m1, _m2, _m3, _m4 = st.columns(4)
+                _m1.metric("Fitness", f"{_top_metrics['fitness']:.3f}")
+                _m2.metric("Return", f"{_top_metrics['total_return_pct']:+.1f}%")
+                _m3.metric("Sharpe", f"{_top_metrics['sharpe_ratio']:.2f}")
+                _m4.metric("Win Rate", f"{_top_metrics['win_rate_pct']:.1f}%")
+
+            _genome_df = pd.DataFrame(
+                list(_best_genome.items()), columns=["Parameter", "Optimal Value"]
+            )
+            st.dataframe(_genome_df, use_container_width=True,
+                         height=min(60 + 35 * len(_best_genome), 360),
+                         key="reco_best_genome_table")
+
+            if st.button("✅ Apply Best Genome to Config", type="primary",
+                         use_container_width=True, key="reco_apply_genome_btn"):
+                _apply_genome_to_config(_best_genome)
+                st.success("Best genome applied to config.yaml! Re-run a backtest to verify.")
+
+            st.divider()
+        except Exception as _e:
+            st.warning(f"Could not load best_genome.yaml: {_e}")
+
+    # ── Baseline Analysis (Static) ─────────────────────────────────────────────
+    st.markdown("#### 📊 Baseline Analysis (Static)")
+    st.caption("Results from 36 backtests across 7 parameter groups from an earlier manual sweep. Winners selected by Sharpe ratio (primary) then total return (secondary).")
 
     BACKTEST_RESULTS = [
         {"label": "IV rank >= 20%",   "group": "iv_rank_threshold", "sharpe":  0.19, "total_return":  8.52, "max_dd": -11.75, "win_rate": 60.0, "trades": 5,  "avg_yield": 0.86},

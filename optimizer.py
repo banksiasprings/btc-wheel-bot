@@ -362,6 +362,7 @@ class Optimizer:
         generations: int = 8,
         elite_keep: int = 4,
         mutation_rate: float = 0.3,
+        seed_from_sweep: bool = False,
     ) -> ParamSet:
         """
         Genetic algorithm over all parameters simultaneously.
@@ -373,14 +374,58 @@ class Optimizer:
           4. Fill rest of population with crossover + mutation of survivors
           5. Repeat for K generations
           6. Return the best genome found
+
+        If seed_from_sweep=True, reads sweep_results.json and seeds 30% of
+        generation 0 with mutated copies of the best-per-parameter genome
+        found by the sweep, giving evolution a head start.
         """
         logger.info(
             f"Starting genetic evolution: "
             f"pop={population_size}, gens={generations}, elite={elite_keep}"
         )
 
-        # Generation 0: random population
+        # Generation 0: random population (optionally seeded from sweep)
         population = [_random_genome() for _ in range(population_size)]
+
+        if seed_from_sweep:
+            sweep_path = self._results_dir / "sweep_results.json"
+            if sweep_path.exists():
+                with open(sweep_path) as f:
+                    sweep_data = json.load(f)
+
+                # Find the best value for each parameter from the sweep
+                seed_params: dict[str, Any] = {}
+                for param_name, param_results in sweep_data.items():
+                    valid = [r for r in param_results if not r.get("error")]
+                    if valid:
+                        best = max(valid, key=lambda r: r["fitness"])
+                        seed_params[param_name] = best["params"][param_name]
+
+                if seed_params:
+                    # Build the seed genome from best-per-param values
+                    seed_genome = ParamSet()
+                    for attr, val in seed_params.items():
+                        if hasattr(seed_genome, attr):
+                            setattr(seed_genome, attr, val)
+                    # Repair constraint violations
+                    if seed_genome.target_delta_min >= seed_genome.target_delta_max:
+                        seed_genome.target_delta_max = seed_genome.target_delta_min + 0.05
+                    if seed_genome.min_dte >= seed_genome.max_dte:
+                        seed_genome.max_dte = int(seed_genome.min_dte) + 7
+
+                    # Replace 30% of population with lightly-mutated copies of seed
+                    seed_count = max(1, int(population_size * 0.30))
+                    seeded = [_mutate(seed_genome, mutation_rate=0.15) for _ in range(seed_count)]
+                    population = seeded + population[seed_count:]
+                    logger.info(
+                        f"Seeded {seed_count}/{population_size} genomes from sweep "
+                        f"best-per-parameter values"
+                    )
+            else:
+                logger.warning(
+                    "seed_from_sweep=True but sweep_results.json not found — "
+                    "starting from random population"
+                )
 
         all_generations: list[list[dict]] = []
         best_ever: dict | None = None
@@ -581,8 +626,16 @@ Examples:
     parser.add_argument("--mode", choices=["sweep", "evolve"], default="sweep")
     parser.add_argument("--param", type=str, default=None,
                         help="For sweep mode: which parameter to sweep (default: all)")
-    parser.add_argument("--pop",  type=int, default=20,  help="Population size (evolve mode)")
-    parser.add_argument("--gen",  type=int, default=8,   help="Number of generations (evolve mode)")
+    parser.add_argument("--population", "--pop", dest="population", type=int, default=20,
+                        help="Population size (evolve mode)")
+    parser.add_argument("--generations", "--gen", dest="generations", type=int, default=8,
+                        help="Number of generations (evolve mode)")
+    parser.add_argument("--elite", type=int, default=4,
+                        help="Number of elite survivors to keep (evolve mode)")
+    parser.add_argument("--mutation", type=float, default=0.3,
+                        help="Mutation rate 0.0–1.0 (evolve mode)")
+    parser.add_argument("--seed-from-sweep", action="store_true", default=False,
+                        help="Seed 30%% of gen-0 population from sweep best-per-param values")
     parser.add_argument("--workers", type=int, default=None, help="Parallel worker processes")
     args = parser.parse_args()
 
@@ -602,7 +655,13 @@ Examples:
         opt.run_sweep(target_param=args.param)
 
     elif args.mode == "evolve":
-        best = opt.run_evolution(population_size=args.pop, generations=args.gen)
+        best = opt.run_evolution(
+            population_size=args.population,
+            generations=args.generations,
+            elite_keep=args.elite,
+            mutation_rate=args.mutation,
+            seed_from_sweep=args.seed_from_sweep,
+        )
         # Save best genome to YAML for easy copy-paste into config.yaml
         import yaml
         out_path = Path("data/optimizer/best_genome.yaml")

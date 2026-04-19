@@ -182,6 +182,11 @@ st.button("Start Optimizer")
 **Fix in place:** Now uses `rec.filled_at - rec.created_at` for exact fill duration. Committed in bbc4df6.
 **Rule:** When reading properties off Deribit order record objects, verify the exact attribute name in `deribit_client.py` before using it. Silent `getattr` defaults are dangerous — they mask missing data as zeros.
 
+### Optimizer pipeline disconnect — sweep results not feeding into evolve
+**What happened:** Sweep ran and charted but results were never consumed by Evolve mode. Evolve always started from random genomes. Recommendations tab had hardcoded static data from a one-off manual run. Also, the dashboard was passing `--population`/`--generations`/`--elite`/`--mutation` subprocess flags but optimizer.py only accepted `--pop`/`--gen` and ignored `--elite`/`--mutation` entirely.
+**Fix in place:** (1) `optimizer.py` now accepts `--seed-from-sweep` flag and `seed_from_sweep` parameter in `run_evolution()` — reads `sweep_results.json`, builds a seed `ParamSet` from best-per-param values, uses mutated copies as 30% of generation 0. (2) `optimizer.py` argparse renamed to `--population`/`--generations`, added `--elite`/`--mutation` wired through to `run_evolution()`. (3) Dashboard adds "🌱 Seed initial population from sweep results" checkbox (disabled until sweep_results.json exists). (4) `_render_optimizer_results()` sweep mode now shows a best-value-per-parameter table below the chart. (5) `tab_recommendations()` reads `best_genome.yaml` dynamically and shows "🏆 Optimizer Best Genome" section with metrics and one-click Apply button at the top; hardcoded data relabelled "📊 Baseline Analysis (Static)". Committed in [current commit].
+**Rule:** Whenever adding a new optimizer CLI flag, update both `optimizer.py` argparse AND the subprocess `cmd` list in `tab_optimizer()` simultaneously.
+
 ### Dashboard restart path issues
 **When restarting the dashboard via osascript:**
 ```applescript
