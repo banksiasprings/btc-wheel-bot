@@ -763,7 +763,14 @@ def tab_paper() -> None:
                     )
                 with lc4:
                     if strike_gap_pct is not None:
-                        metric_card("Strike Gap", f"−{strike_gap_pct:.1f}% to ITM", gap_col)
+                        _opt_type_g = pos_data.get("option_type", "put") if pos_data else "put"
+                        if _opt_type_g == "put":
+                            # Positive gap = BTC above strike (OTM) → safe buffer
+                            _gap_disp = f"{strike_gap_pct:.1f}% buffer" if strike_gap_pct >= 0 else f"ITM {abs(strike_gap_pct):.1f}%"
+                        else:
+                            # For calls: negative gap means BTC below strike (OTM) → safe
+                            _gap_disp = f"{abs(strike_gap_pct):.1f}% buffer" if strike_gap_pct <= 0 else f"ITM {strike_gap_pct:.1f}%"
+                        metric_card("Strike Gap", _gap_disp, gap_col)
                     else:
                         metric_card("Strike Gap", "—")
                 with lc5:
@@ -823,6 +830,100 @@ def tab_paper() -> None:
                 st.caption(
                     f"Heartbeat {int(hb_age)}s ago · PID {hb.get('pid', '?')} · Wheel: {wheel}"
                 )
+
+                # ── Black Swan Stress Test ────────────────────────────────────
+                if pos_data:
+                    with st.expander("⚡ Black Swan Stress Test", expanded=False):
+                        _strike    = pos_data.get("strike", 0)
+                        _contracts = pos_data.get("contracts", 0)
+                        _entry_px  = pos_data.get("entry_price", 0)
+                        _opt_type  = pos_data.get("option_type", "put")
+
+                        # Premium received in USD (entry_price BTC × contracts × current spot)
+                        _premium_usd = _entry_px * _contracts * btc_price
+
+                        # Margin safety: equity / max theoretical loss
+                        # Short put max loss (USD) = strike × contracts (if BTC → $0)
+                        # Short call max loss is unbounded; use 10× spike as practical ceiling
+                        if _opt_type == "put":
+                            _max_loss_usd = _strike * _contracts
+                            _scenario_label = "BTC crash scenarios (put risk)"
+                            _moves  = [-0.05, -0.10, -0.20, -0.30, -0.50, -0.70, -1.00]
+                            _labels = ["-5%", "-10%", "-20%", "-30%", "-50%", "-70%", "→ $0"]
+                        else:  # call
+                            _max_loss_usd = max(0, btc_price * 10 - _strike) * _contracts
+                            _scenario_label = "BTC spike scenarios (call risk)"
+                            _moves  = [+0.10, +0.20, +0.50, +1.00, +2.00, +5.00]
+                            _labels = ["+10%", "+20%", "+50%", "+100%", "+200%", "+500%"]
+
+                        _margin_safety = equity_usd / _max_loss_usd if _max_loss_usd > 0 else float("inf")
+                        _ms_hex = C_GREEN if _margin_safety >= 2 else (C_AMBER if _margin_safety >= 1.2 else C_RED)
+
+                        # Margin safety summary banner
+                        _ms_inf = _margin_safety == float("inf")
+                        _ms_val = "∞" if _ms_inf else f"{_margin_safety:.1f}×"
+                        _ms_detail = (
+                            f"Max loss if BTC → $0: ${_max_loss_usd:,.0f}" if _opt_type == "put"
+                            else f"Practical ceiling (10× BTC spike): ${_max_loss_usd:,.0f}"
+                        )
+                        st.markdown(
+                            f'<div style="padding:10px 16px;background:{C_CARD};border:1px solid {C_GRID};'
+                            f'border-radius:6px;margin-bottom:12px;display:flex;align-items:baseline;gap:10px;">'
+                            f'<span style="color:{C_MUTED};font-size:12px;">Margin Safety:</span>'
+                            f'<span style="color:{_ms_hex};font-size:22px;font-weight:700;">{_ms_val}</span>'
+                            f'<span style="color:{C_MUTED};font-size:12px;">'
+                            f'equity covers theoretical max loss {_ms_val} &nbsp;·&nbsp; {_ms_detail}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                        # Scenario table
+                        st.markdown(
+                            f'<div style="color:{C_MUTED};font-size:12px;margin-bottom:6px;">'
+                            f'📊 {_scenario_label}</div>',
+                            unsafe_allow_html=True,
+                        )
+                        _rows = []
+                        for _lbl, _move in zip(_labels, _moves):
+                            _s_price = max(1.0, btc_price * (1.0 + _move))
+                            if _opt_type == "put":
+                                _intrinsic_usd = max(0.0, _strike - _s_price) * _contracts
+                            else:
+                                _intrinsic_usd = max(0.0, _s_price - _strike) * _contracts
+                            _pnl_usd      = _premium_usd - _intrinsic_usd
+                            _eq_after     = equity_usd + _pnl_usd
+                            _loss_pct     = (_intrinsic_usd - _premium_usd) / equity_usd * 100
+                            _loss_pct     = max(0.0, _loss_pct)   # positive = loss
+
+                            if _eq_after <= 0:
+                                _status = "❌ Liquidated"
+                            elif _loss_pct > 30:
+                                _status = "🔴 Critical"
+                            elif _loss_pct > 10:
+                                _status = "🟡 Warning"
+                            else:
+                                _status = "🟢 Safe"
+
+                            _rows.append({
+                                "Move":         _lbl,
+                                "BTC Price":    f"${_s_price:,.0f}",
+                                "Est. P&L":     f"${_pnl_usd:+,.0f}",
+                                "Equity After": f"${_eq_after:,.0f}",
+                                "Acct. Loss":   f"{_loss_pct:.1f}%",
+                                "Status":       _status,
+                            })
+
+                        st.dataframe(
+                            pd.DataFrame(_rows),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                        st.caption(
+                            "Estimates use intrinsic value only (no time value). "
+                            "Real losses at intermediate DTEs will be smaller due to remaining theta. "
+                            "Kill switch + drawdown checks monitor live for automatic halt."
+                        )
+
                 st.divider()
         except Exception:
             pass  # never let a bad heartbeat crash the tab
