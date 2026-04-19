@@ -46,7 +46,7 @@ sizing:
   max_open_legs: 1
 
   # Collateral buffer (1.5 = 150%)
-  collateral_buffer: 1.50
+  collateral_buffer: 1.00
 
   # Minimum fraction of equity that must remain FREE (unreserved) after opening any new leg.
   # e.g. 0.25 = always keep 25% of account unencumbered as a liquidity buffer.

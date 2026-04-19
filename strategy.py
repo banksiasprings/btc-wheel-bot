@@ -68,6 +68,7 @@ class WheelStrategy:
     def __init__(self, rest_client: DeribitPublicREST) -> None:
         self._rest = rest_client
         self._current_cycle: Cycle = cfg.strategy.initial_cycle
+        self._last_put_was_assigned: bool = False  # safety guard: only sell calls after confirmed assignment
 
     # ── IV rank ───────────────────────────────────────────────────────────────
 
@@ -248,6 +249,15 @@ class WheelStrategy:
 
         # Step 2: Cycle decision
         cycle = self.decide_cycle(last_cycle)
+
+        # Safety guard: never sell naked calls without confirmed BTC assignment
+        if cycle == "call" and not self._last_put_was_assigned:
+            logger.info(
+                "Wheel guard: last put was NOT assigned — staying in put-selling mode "
+                "(prevents naked call exposure)"
+            )
+            cycle = "put"
+            self._current_cycle = "put"
 
         # Step 3: Strike selection
         candidate = self.select_strike(instruments, tickers, cycle, underlying_price)

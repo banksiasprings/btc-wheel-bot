@@ -170,7 +170,24 @@ class WheelBot:
         else:
             iv_rank = 0.5
 
-        # Update equity (placeholder — live mode would query account API)
+        # Settle any expired positions first (BUG 4)
+        await self._check_expired_positions(now, underlying_price)
+
+        # Update open position mark prices and deltas from live tickers (BUG 1)
+        for pos in self._positions:
+            ticker = tickers.get(pos.instrument_name)
+            if ticker:
+                pos.current_price = ticker.mark_price
+                if hasattr(ticker, 'greeks') and ticker.greeks:
+                    pos.current_delta = abs(ticker.greeks.get('delta', pos.current_delta))
+
+        # Update equity: starting equity + realised PnL + unrealised PnL (BUG 2)
+        realised_pnl = sum(t.get('pnl_usd', 0.0) for t in self._trades_log)
+        unrealised_pnl = sum(
+            (pos.entry_price - pos.current_price) * pos.contracts * underlying_price
+            for pos in self._positions
+        )
+        self._equity_usd = self._cfg.backtest.starting_equity + realised_pnl + unrealised_pnl
         self._equity_history.append(self._equity_usd)
 
         # Drawdown guard
@@ -190,7 +207,7 @@ class WheelBot:
             should_roll, reason = self._risk.should_roll(pos)
             if should_roll:
                 logger.warning(f"Rolling {pos.instrument_name}: {reason}")
-                await self._close_position(pos, reason)
+                await self._close_position(pos, reason, underlying_price)
                 self._positions.remove(pos)
 
         # Open new leg if flat
@@ -267,8 +284,10 @@ class WheelBot:
         )
         self._positions.append(pos)
 
-    async def _close_position(self, pos: Position, reason: str) -> None:
+    async def _close_position(self, pos: Position, reason: str, underlying_price: float = 0.0) -> None:
         """Close / roll a position (paper or live)."""
+        import csv as _csv
+        import os as _os
         if self._paper:
             logger.info(
                 f"[PAPER CLOSE] BUY BACK {pos.instrument_name} "
@@ -277,6 +296,84 @@ class WheelBot:
         else:
             # LIVE_ONLY: place buy-to-close order
             logger.warning(f"[LIVE CLOSE] {pos.instrument_name} | {reason}")
+
+        # Record trade P&L (BUG 2 + BUG 6)
+        eff_price = underlying_price if underlying_price > 0 else pos.underlying_at_entry
+        pnl_btc = (pos.entry_price - pos.current_price) * pos.contracts
+        pnl_usd = pnl_btc * eff_price
+        trade_record = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'instrument': pos.instrument_name,
+            'option_type': pos.option_type,
+            'entry_price': pos.entry_price,
+            'exit_price': pos.current_price,
+            'contracts': pos.contracts,
+            'pnl_btc': round(pnl_btc, 6),
+            'pnl_usd': round(pnl_usd, 2),
+            'reason': reason,
+        }
+        self._trades_log.append(trade_record)
+
+        # Write to CSV so dashboard Paper Trading tab can display it (BUG 6)
+        csv_path = 'data/trades.csv'
+        _os.makedirs('data', exist_ok=True)
+        file_exists = _os.path.exists(csv_path)
+        with open(csv_path, 'a', newline='') as f:
+            writer = _csv.DictWriter(
+                f,
+                fieldnames=['timestamp', 'instrument', 'option_type',
+                            'entry_price', 'exit_price', 'contracts',
+                            'pnl_btc', 'pnl_usd', 'reason'],
+            )
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(trade_record)
+
+    async def _check_expired_positions(self, now: datetime, underlying_price: float) -> None:
+        """Settle positions whose expiry date has passed (BUG 4)."""
+        for pos in list(self._positions):
+            expiry = self._parse_expiry(pos.instrument_name)
+            if expiry and now >= expiry:
+                if pos.option_type == 'put':
+                    expired_itm = underlying_price < pos.strike
+                else:
+                    expired_itm = underlying_price > pos.strike
+
+                if expired_itm:
+                    if pos.option_type == 'put':
+                        settlement_price = (pos.strike - underlying_price) / underlying_price
+                    else:
+                        settlement_price = (underlying_price - pos.strike) / underlying_price
+                    pos.current_price = max(settlement_price, 0.0)
+                    logger.warning(
+                        f'Position {pos.instrument_name} expired ITM at '
+                        f'{underlying_price:.0f} (strike {pos.strike:.0f}) — settled at loss'
+                    )
+                    if pos.option_type == 'put':
+                        self._strategy._last_put_was_assigned = True
+                else:
+                    pos.current_price = 0.0  # expired worthless — full premium kept
+                    logger.info(
+                        f'Position {pos.instrument_name} expired OTM — full premium kept'
+                    )
+                    if pos.option_type == 'put':
+                        self._strategy._last_put_was_assigned = False
+
+                await self._close_position(pos, 'expiry_settlement', underlying_price)
+                self._positions.remove(pos)
+
+    def _parse_expiry(self, instrument_name: str):
+        """Parse expiry datetime from Deribit instrument like BTC-25APR25-90000-P."""
+        try:
+            parts = instrument_name.split('-')
+            expiry_str = parts[1]  # e.g. '25APR25'
+            from datetime import datetime as _dt
+            expiry = _dt.strptime(expiry_str, '%d%b%y').replace(
+                hour=8, minute=0, second=0, tzinfo=timezone.utc
+            )
+            return expiry
+        except Exception:
+            return None
 
     def _print_status(self, now: datetime, spot: float) -> None:
         """Log a brief status line each tick."""

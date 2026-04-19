@@ -258,8 +258,9 @@ class Optimizer:
         from config import cfg
 
         bt = Backtester()
-        self._ohlcv_df = bt._fetch_btc_ohlcv(cfg.backtest.lookback_months)
-        self._iv_history = bt._fetch_iv_history()
+        self._ohlcv_df = bt._fetch_prices()
+        raw_iv = bt._rest._get("get_historical_volatility", {"currency": "BTC"})
+        self._iv_history = raw_iv if raw_iv else []
 
         logger.info("Market data loaded and cached.")
         return self._ohlcv_df, self._iv_history

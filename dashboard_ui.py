@@ -661,9 +661,13 @@ def tab_paper() -> None:
         _render_log_tail()
 
     # ── Auto-refresh ──────────────────────────────────────────────────────────
-    if auto_refresh and bot_running():
-        time.sleep(15)
-        st.rerun()
+    # Replace blocking sleep+rerun with a manual refresh button (BUG 8)
+    col_ref, col_ts = st.columns([1, 3])
+    with col_ref:
+        if st.button("🔄 Refresh", key="paper_refresh"):
+            st.rerun()
+    with col_ts:
+        st.caption(f"Last updated: {datetime.now().strftime('%H:%M:%S')}")
 
 
 def _render_log_tail() -> None:
