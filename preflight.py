@@ -213,7 +213,7 @@ def check_api_permissions(access_token: str, testnet: bool = False) -> CheckResu
     try:
         resp = requests.get(
             f"{base}/api/v2/private/get_account_summary",
-            params={"currency": "BTC", "extended": True},
+            params={"currency": "BTC"},
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
