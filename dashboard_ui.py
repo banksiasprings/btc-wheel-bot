@@ -698,9 +698,79 @@ def tab_paper() -> None:
         if start:
             secs = int((datetime.utcnow() - start).total_seconds())
             elapsed = f" · running {secs // 60}m {secs % 60}s"
-        st.success(f"✅ Bot is running in paper mode{elapsed}")
+        # Read mode from heartbeat instead of hardcoding "paper mode"
+        hb_path = BOT_DIR / "bot_heartbeat.json"
+        mode_label = "paper mode"
+        if hb_path.exists():
+            try:
+                _hb = json.loads(hb_path.read_text())
+                mode_label = _hb.get("mode", "paper") + " mode"
+            except Exception:
+                pass
+        st.success(f"✅ Bot is running in {mode_label}{elapsed}")
     else:
         st.warning("⚠️ Bot is not running — click **Start Paper Trading** above.")
+
+    # ── Live status card (reads heartbeat) ────────────────────────────────────
+    hb_path = BOT_DIR / "bot_heartbeat.json"
+    if hb_path.exists():
+        try:
+            hb = json.loads(hb_path.read_text())
+            hb_age = time.time() - hb.get("timestamp", 0)
+            if hb_age < 120:
+                st.markdown("#### 📡 Live Status")
+                btc_price  = hb.get("btc_price", 0)
+                equity_usd = hb.get("equity_usd", 0)
+                iv_rank    = hb.get("iv_rank")
+                mode_str   = hb.get("mode", "—").upper()
+                pos_data   = hb.get("position")  # dict or None
+
+                lc1, lc2, lc3, lc4 = st.columns(4)
+                with lc1:
+                    metric_card("BTC Price", f"${btc_price:,.0f}")
+                with lc2:
+                    raw = load_yaml()
+                    cfg_start = float(raw.get("backtest", {}).get("starting_equity", 10_000))
+                    eq_col = "green" if equity_usd >= cfg_start else "red"
+                    metric_card("Account Equity", f"${equity_usd:,.0f}", eq_col)
+                with lc3:
+                    iv_str = f"{iv_rank:.0%}" if iv_rank is not None else "—"
+                    iv_col = "amber" if iv_rank is not None and iv_rank > 0.85 else ""
+                    metric_card("IV Rank", iv_str, iv_col)
+                with lc4:
+                    metric_card("Mode", mode_str)
+
+                st.markdown("")
+
+                if pos_data:
+                    delta   = pos_data.get("delta", 0)
+                    dte     = pos_data.get("dte", 0)
+                    upnl    = pos_data.get("unrealized_pnl_usd", 0)
+                    upnl_col = "green" if upnl >= 0 else "red"
+                    delta_col = "red" if delta > 0.35 else ("amber" if delta > 0.28 else "")
+                    dte_col   = "red" if dte <= 2 else ("amber" if dte <= 4 else "")
+
+                    pc1, pc2, pc3, pc4, pc5 = st.columns(5)
+                    with pc1:
+                        metric_card("Position", pos_data.get("name", "—"))
+                    with pc2:
+                        metric_card("Type", pos_data.get("option_type", "—").upper())
+                    with pc3:
+                        metric_card("Delta", f"{delta:.3f}", delta_col)
+                    with pc4:
+                        metric_card("DTE", f"{dte}d", dte_col)
+                    with pc5:
+                        metric_card("Unrealised P&L", f"${upnl:+,.0f}", upnl_col)
+                else:
+                    st.info("📭 No open position — bot is flat, watching for signals.")
+
+                wheel = hb.get("wheel", "")
+                st.caption(
+                    f"Heartbeat {int(hb_age)}s ago · PID {hb.get('pid', '?')} · Wheel: {wheel}"
+                )
+                st.divider()
+        except Exception:
+            pass  # never let a bad heartbeat crash the tab
 
     # ── Trade data ────────────────────────────────────────────────────────────
     trades_df = read_trades()

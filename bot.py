@@ -74,6 +74,7 @@ class WheelBot:
         self._trades_log: list[dict] = []
         self._iv_history_cache: list = []
         self._last_overseer_check: datetime | None = None
+        self._last_iv_rank: float = 0.5  # cached IV rank for position entry metadata
 
         # Phase 2: 7-day BTC price ring-buffer for overseer BTC-change-% metric
         self._btc_price_history: deque[tuple[datetime, float]] = deque(
@@ -415,6 +416,7 @@ class WheelBot:
             iv_rank = (recent_ivs[-1] - lo) / (hi - lo) if hi > lo else 0.5
         else:
             iv_rank = 0.5
+        self._last_iv_rank = iv_rank
 
         # Settle any expired positions (paper mode — live mode uses WebSocket callback)
         if self._paper:
@@ -452,8 +454,14 @@ class WheelBot:
             should_roll, reason = self._risk.should_roll(pos)
             if should_roll:
                 logger.warning(f"Rolling {pos.instrument_name}: {reason}")
-                await self._close_position(pos, reason, underlying_price)
-                self._positions.remove(pos)
+                closed = await self._close_position(pos, reason, underlying_price)
+                if closed:
+                    self._positions.remove(pos)
+                else:
+                    logger.error(
+                        f"Close failed for {pos.instrument_name} — keeping in position list; "
+                        f"will retry next tick"
+                    )
 
         # Open new leg if flat
         if not self._positions:
@@ -532,16 +540,31 @@ class WheelBot:
             current_delta=abs(signal.delta),
             current_price=signal.mark_price,
             entry_equity=self._equity_usd,
-            expiry_ts=signal.expiry_ts,   # Phase 2: store expiry for DTE tracking
+            expiry_ts=signal.expiry_ts,       # Phase 2: store expiry for DTE tracking
+            iv_rank_at_entry=self._last_iv_rank,  # for trades.csv enrichment
+            dte_at_entry=signal.dte,              # for trades.csv enrichment
         )
         self._positions.append(pos)
 
     async def _close_position(
         self, pos: Position, reason: str, underlying_price: float = 0.0
-    ) -> None:
-        """Close / roll a position (paper or live)."""
+    ) -> bool:
+        """
+        Close / roll a position (paper or live).
+
+        Returns True if the close was confirmed (or paper mode).
+        Returns False if the live order failed — caller should NOT remove the
+        position from self._positions and should retry next tick.
+
+        Phantom-trade fix: in live mode, P&L is only recorded to CSV after a
+        confirmed fill.  A failed order is logged but does not pollute the
+        trade history.
+        """
         import csv as _csv
         import os as _os
+
+        slippage_btc = 0.0
+        fill_time_sec = 0.0
 
         if self._paper:
             logger.info(
@@ -552,61 +575,95 @@ class WheelBot:
             # LIVE_ONLY: buy to close via OrderTracker (confirmed fill)
             if self._client.ws is None or self._tracker is None:
                 logger.error("WebSocket not connected — cannot close position")
-            else:
-                rec = await self._tracker.place_and_track(
-                    side="buy",
-                    instrument_name=pos.instrument_name,
-                    amount=pos.contracts,
-                    price=pos.current_price,
-                    label="wheel_bot_close",
-                    timeout_seconds=self._cfg.execution.order_timeout_seconds
-                    if hasattr(self._cfg.execution, "order_timeout_seconds") else 45.0,
-                    fallback_market=True,
-                )
-                if rec.status == OrderStatus.FILLED:
-                    # Use actual fill price for accurate P&L
-                    pos.current_price = rec.avg_fill_price
-                    logger.info(
-                        f"Close confirmed: {pos.instrument_name} "
-                        f"@ {rec.avg_fill_price:.6f} BTC"
-                    )
-                else:
-                    logger.error(
-                        f"Close order did not fill: {rec.status.value} — "
-                        f"position may still be open on exchange"
-                    )
+                return False  # caller keeps position in list; retry next tick
 
-        # Record P&L
+            rec = await self._tracker.place_and_track(
+                side="buy",
+                instrument_name=pos.instrument_name,
+                amount=pos.contracts,
+                price=pos.current_price,
+                label="wheel_bot_close",
+                timeout_seconds=self._cfg.execution.order_timeout_seconds
+                if hasattr(self._cfg.execution, "order_timeout_seconds") else 45.0,
+                fallback_market=True,
+            )
+            if rec.status == OrderStatus.FILLED:
+                pos.current_price = rec.avg_fill_price
+                slippage_btc = getattr(rec, "slippage_btc", 0.0)
+                fill_time_sec = getattr(rec, "elapsed_sec", 0.0)
+                logger.info(
+                    f"Close confirmed: {pos.instrument_name} "
+                    f"@ {rec.avg_fill_price:.6f} BTC | slippage={slippage_btc:+.6f}"
+                )
+            else:
+                logger.error(
+                    f"Close order did not fill: {rec.status.value} — "
+                    f"position NOT removed; will retry next tick"
+                )
+                return False  # ← phantom-trade fix: do NOT write CSV
+
+        # ── Record P&L (only reached on confirmed close or paper mode) ──────────
         eff_price = underlying_price if underlying_price > 0 else pos.underlying_at_entry
         pnl_btc = (pos.entry_price - pos.current_price) * pos.contracts
         pnl_usd = pnl_btc * eff_price
+        equity_before = self._equity_usd
+        equity_after  = equity_before + pnl_usd
+
+        # DTE remaining at close time
+        if pos.expiry_ts:
+            dte_at_close = max(0, int((pos.expiry_ts / 1000 - time.time()) / 86_400))
+        else:
+            dte_at_close = 0
+
+        mode_str = "paper" if self._paper else (
+            "testnet" if self._cfg.deribit.testnet else "live"
+        )
+
         trade_record = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "instrument": pos.instrument_name,
-            "option_type": pos.option_type,
-            "entry_price": pos.entry_price,
-            "exit_price": pos.current_price,
-            "contracts": pos.contracts,
-            "pnl_btc": round(pnl_btc, 6),
-            "pnl_usd": round(pnl_usd, 2),
-            "reason": reason,
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+            "instrument":      pos.instrument_name,
+            "option_type":     pos.option_type,
+            "strike":          pos.strike,
+            "entry_price":     pos.entry_price,
+            "exit_price":      pos.current_price,
+            "contracts":       pos.contracts,
+            "pnl_btc":         round(pnl_btc, 6),
+            "pnl_usd":         round(pnl_usd, 2),
+            "equity_before":   round(equity_before, 2),
+            "equity_after":    round(equity_after, 2),
+            "btc_price":       round(eff_price, 2),
+            "iv_rank_at_entry": round(pos.iv_rank_at_entry, 4),
+            "dte_at_entry":    pos.dte_at_entry,
+            "dte_at_close":    dte_at_close,
+            "slippage_btc":    round(slippage_btc, 6),
+            "fill_time_sec":   round(fill_time_sec, 2),
+            "reason":          reason,
+            "mode":            mode_str,
         }
         self._trades_log.append(trade_record)
 
-        # Write to CSV for the dashboard Paper Trading tab
-        csv_path = "data/trades.csv"
-        _os.makedirs("data", exist_ok=True)
-        file_exists = _os.path.exists(csv_path)
+        # ── Write to CSV ─────────────────────────────────────────────────────────
+        csv_path = Path(__file__).parent / "data" / "trades.csv"
+        _os.makedirs(str(csv_path.parent), exist_ok=True)
+        file_exists = csv_path.exists()
+        fieldnames = [
+            "timestamp", "instrument", "option_type", "strike",
+            "entry_price", "exit_price", "contracts",
+            "pnl_btc", "pnl_usd", "equity_before", "equity_after",
+            "btc_price", "iv_rank_at_entry", "dte_at_entry", "dte_at_close",
+            "slippage_btc", "fill_time_sec", "reason", "mode",
+        ]
         with open(csv_path, "a", newline="") as f:
-            writer = _csv.DictWriter(
-                f,
-                fieldnames=["timestamp", "instrument", "option_type",
-                            "entry_price", "exit_price", "contracts",
-                            "pnl_btc", "pnl_usd", "reason"],
-            )
+            writer = _csv.DictWriter(f, fieldnames=fieldnames)
             if not file_exists:
                 writer.writeheader()
             writer.writerow(trade_record)
+
+        logger.info(
+            f"Trade recorded: {pos.instrument_name} P&L ${pnl_usd:+,.2f} | "
+            f"equity ${equity_before:,.0f} → ${equity_after:,.0f}"
+        )
+        return True
 
     async def _check_expired_positions(
         self, now: datetime, underlying_price: float
@@ -660,8 +717,9 @@ class WheelBot:
                     f"returning to put-selling mode"
                 )
 
-            await self._close_position(pos, "expiry_settlement", underlying_price)
-            self._positions.remove(pos)
+            closed = await self._close_position(pos, "expiry_settlement", underlying_price)
+            if closed:
+                self._positions.remove(pos)
 
     def _parse_expiry(self, instrument_name: str) -> datetime | None:
         """Parse expiry datetime from Deribit instrument like BTC-25APR25-90000-P."""
@@ -677,21 +735,34 @@ class WheelBot:
             return None
 
     def _print_status(self, now: datetime, spot: float) -> None:
-        """Log a brief status line each tick."""
+        """Log a brief status line each tick, write tick_log.csv and heartbeat."""
+        import csv as _csv
+
+        # ── Compute position snapshot ─────────────────────────────────────────
+        pos_data: dict | None = None
         if self._positions:
             p = self._positions[0]
-            # Phase 2: show DTE if expiry_ts is available
             if p.expiry_ts:
                 dte = max(0, int((p.expiry_ts / 1000 - time.time()) / 86_400))
-                dte_str = f" | DTE={dte}d"
             else:
-                dte_str = ""
-            pos_str = (
-                f"{p.instrument_name} "
-                f"delta={p.current_delta:.3f}{dte_str}"
-            )
+                dte = 0
+            unrealized_pnl_usd = (p.entry_price - p.current_price) * p.contracts * spot
+            pos_str = f"{p.instrument_name} delta={p.current_delta:.3f} | DTE={dte}d"
+            pos_data = {
+                "name":              p.instrument_name,
+                "option_type":       p.option_type,
+                "strike":            p.strike,
+                "delta":             round(p.current_delta, 4),
+                "dte":               dte,
+                "entry_price":       p.entry_price,
+                "current_price":     p.current_price,
+                "contracts":         p.contracts,
+                "unrealized_pnl_usd": round(unrealized_pnl_usd, 2),
+            }
         else:
             pos_str = "FLAT"
+            unrealized_pnl_usd = 0.0
+            dte = 0
 
         cycle_state = "✓call-ok" if self._strategy._put_cycle_complete else "→put-mode"
         logger.info(
@@ -700,17 +771,43 @@ class WheelBot:
             f"{pos_str} | wheel={cycle_state}"
         )
 
-        # Write heartbeat so the dashboard can detect we're alive regardless
-        # of how the bot was launched (subprocess, terminal, osascript, etc.)
+        # ── Write tick_log.csv (one row per tick for charting / analysis) ─────
         try:
+            tick_log_path = Path(__file__).parent / "data" / "tick_log.csv"
+            tick_log_path.parent.mkdir(exist_ok=True)
+            file_exists = tick_log_path.exists()
+            tick_row = {
+                "timestamp":          now.isoformat(),
+                "btc_price":          round(spot, 2),
+                "equity_usd":         round(self._equity_usd, 2),
+                "position_name":      pos_data["name"] if pos_data else "",
+                "delta":              pos_data["delta"] if pos_data else 0.0,
+                "dte":                pos_data["dte"]   if pos_data else 0,
+                "iv_rank":            round(self._last_iv_rank, 4),
+                "unrealized_pnl_usd": round(unrealized_pnl_usd, 2),
+            }
+            with open(tick_log_path, "a", newline="") as f:
+                writer = _csv.DictWriter(f, fieldnames=list(tick_row.keys()))
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(tick_row)
+        except Exception:
+            pass  # tick log is non-critical
+
+        # ── Write heartbeat for dashboard cross-process detection ─────────────
+        try:
+            mode_str = "paper" if self._paper else (
+                "testnet" if self._cfg.deribit.testnet else "live"
+            )
             heartbeat = {
-                "pid": os.getpid(),
+                "pid":       os.getpid(),
                 "timestamp": time.time(),
-                "mode": "paper" if self._paper else "live",
+                "mode":      mode_str,
                 "equity_usd": self._equity_usd,
                 "btc_price": spot,
-                "position": pos_str,
-                "wheel": cycle_state,
+                "iv_rank":   round(self._last_iv_rank, 4),
+                "wheel":     cycle_state,
+                "position":  pos_data,   # None when flat, dict when in trade
             }
             hb_path = Path(__file__).parent / "bot_heartbeat.json"
             hb_path.write_text(json.dumps(heartbeat))
