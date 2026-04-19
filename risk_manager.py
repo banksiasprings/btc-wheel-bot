@@ -85,12 +85,16 @@ class RiskManager:
         # Maximum notional exposure
         max_notional = equity_usd * cfg.sizing.max_equity_per_leg
 
-        # Collateral per contract = strike price (USD) for cash-secured put
-        collateral_per_contract = strike_usd * cfg.sizing.contract_size_btc
+        # On Deribit: 1 contract = 1 BTC notional, minimum lot = contract_size_btc (0.1)
+        # Collateral per FULL contract = strike_usd (USD value of 1 BTC at strike)
+        collateral_per_contract = strike_usd
 
-        contracts = max_notional / collateral_per_contract
-        # Floor to 1 decimal place (Deribit minimum 0.1 BTC contracts)
-        contracts = max(0.1, round(contracts, 1))
+        raw_contracts = max_notional / collateral_per_contract
+
+        # Floor to nearest minimum lot (0.1 contracts on Deribit)
+        min_lot = cfg.sizing.contract_size_btc  # 0.1
+        import math
+        contracts = max(min_lot, math.floor(raw_contracts / min_lot) * min_lot)
 
         logger.debug(
             f"Sizing: equity=${equity_usd:,.0f}, strike=${strike_usd:,.0f}, "

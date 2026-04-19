@@ -341,8 +341,22 @@ class WheelBot:
             instruments = self._client.rest.get_instruments(
                 currency=self._cfg.deribit.currency
             )
+            # Pre-filter by DTE and option_type before fetching tickers —
+            # Deribit returns 900+ instruments alphabetically; the first N
+            # are almost always deep-ITM and never qualify by delta.
+            dte_min = self._cfg.strategy.min_dte
+            dte_max = self._cfg.strategy.max_dte
+            candidate_insts = [
+                inst for inst in instruments
+                if dte_min <= inst.dte <= dte_max
+                and inst.option_type in ("put", "call")
+            ]
+            logger.debug(
+                f"Pre-filtered to {len(candidate_insts)} instruments "
+                f"(DTE {dte_min}–{dte_max}) from {len(instruments)} total"
+            )
             tickers = {}
-            for inst in instruments[:self._cfg.strategy.liquidity_top_n]:
+            for inst in candidate_insts[:self._cfg.strategy.liquidity_top_n]:
                 ticker = self._client.rest.get_ticker(inst.instrument_name)
                 if ticker:
                     tickers[inst.instrument_name] = ticker

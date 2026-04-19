@@ -35,7 +35,7 @@ strategy:
   expiry_execution_hour: 8
 
   # Number of top liquid strikes to consider
-  liquidity_top_n: 20
+  liquidity_top_n: 100
 
 # ── Position Sizing ────────────────────────────────────────────────────────────
 sizing:

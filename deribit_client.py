@@ -294,7 +294,6 @@ class DeribitPrivateREST:
         """Fetch live account equity, balance, and available funds."""
         raw = self._get("get_account_summary", {
             "currency": currency,
-            "extended": True,
         })
         return AccountSummary(
             equity=float(raw.get("equity", 0.0)),
