@@ -105,14 +105,43 @@ st.markdown(f"""
     /* Sidebar */
     div[data-testid="stSidebarContent"] {{ background-color: {C_BG}; }}
 
-    /* Tab text — make visible regardless of Streamlit theme */
-    .stTabs [data-baseweb="tab"] {{
-        color: {C_MUTED} !important;
-        font-weight: 500;
+    /* ── Pill-button tab bar (Chrome-style) ── */
+
+    /* Tab bar background strip */
+    .stTabs [data-baseweb="tab-list"] {{
+        background: {C_BG} !important;
+        border-bottom: 1px solid {C_GRID} !important;
+        gap: 6px !important;
+        padding: 8px 12px !important;
     }}
+
+    /* Kill the sliding underline highlight bar */
+    .stTabs [data-baseweb="tab-highlight"],
+    .stTabs [data-baseweb="tab-border"] {{
+        display: none !important;
+        height: 0 !important;
+        background: transparent !important;
+    }}
+
+    /* Inactive pill */
+    .stTabs [data-baseweb="tab"] {{
+        background: {C_CARD} !important;
+        border: 1px solid {C_GRID} !important;
+        border-radius: 100px !important;
+        color: {C_MUTED} !important;
+        font-weight: 500 !important;
+        font-size: 13px !important;
+        padding: 5px 16px !important;
+        margin: 0 !important;
+        transition: background 0.15s, color 0.15s, border-color 0.15s !important;
+    }}
+
+    /* Active pill */
     .stTabs [data-baseweb="tab"][aria-selected="true"] {{
-        color: {C_BLUE} !important;
-        border-bottom: 2px solid {C_BLUE} !important;
+        background: {C_BLUE} !important;
+        border-color: {C_BLUE} !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
     }}
 
     /* Tighten page top padding */
@@ -120,7 +149,6 @@ st.markdown(f"""
     .metric-card {{ border-top: 3px solid {C_BLUE} !important; }}
     section[data-testid="stSidebar"] {{ border-right: 1px solid {C_GRID}; }}
     div[data-testid="stMetric"] {{ background: {C_CARD}; border-radius: 8px; padding: 10px 14px; border-top: 3px solid {C_BLUE}; }}
-    .stTabs [data-baseweb="tab-list"] {{ background: {C_CARD} !important; border-bottom: 1px solid {C_GRID}; }}
     .stButton button {{ border-radius: 8px; font-weight: 600; }}
     h1, h2, h3 {{ color: {C_TEXT}; }}
 </style>
