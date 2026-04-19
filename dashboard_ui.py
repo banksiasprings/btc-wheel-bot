@@ -160,8 +160,21 @@ def read_overseer_log() -> pd.DataFrame:
 
 
 def bot_running() -> bool:
+    # Check subprocess started by the dashboard
     proc = st.session_state.get("bot_proc")
-    return proc is not None and proc.poll() is None
+    if proc is not None and proc.poll() is None:
+        return True
+    # Fallback: check heartbeat file written by bot every tick.
+    # This detects bots launched externally (terminal, osascript, etc.).
+    hb_path = BOT_DIR / "bot_heartbeat.json"
+    if hb_path.exists():
+        try:
+            data = json.loads(hb_path.read_text())
+            age_seconds = time.time() - data.get("timestamp", 0)
+            return age_seconds < 120  # alive if heartbeat < 2 minutes old
+        except Exception:
+            pass
+    return False
 
 
 def kill_switch_active() -> bool:

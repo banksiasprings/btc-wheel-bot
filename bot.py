@@ -21,6 +21,8 @@ Phase 2 additions:
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -697,3 +699,20 @@ class WheelBot:
             f"BTC=${spot:,.0f} | equity=${self._equity_usd:,.0f} | "
             f"{pos_str} | wheel={cycle_state}"
         )
+
+        # Write heartbeat so the dashboard can detect we're alive regardless
+        # of how the bot was launched (subprocess, terminal, osascript, etc.)
+        try:
+            heartbeat = {
+                "pid": os.getpid(),
+                "timestamp": time.time(),
+                "mode": "paper" if self._paper else "live",
+                "equity_usd": self._equity_usd,
+                "btc_price": spot,
+                "position": pos_str,
+                "wheel": cycle_state,
+            }
+            hb_path = Path(__file__).parent / "bot_heartbeat.json"
+            hb_path.write_text(json.dumps(heartbeat))
+        except Exception:
+            pass  # never let heartbeat write block the tick
