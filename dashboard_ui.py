@@ -112,12 +112,14 @@ st.markdown(f"""
         background: {C_BG} !important;
         border-bottom: 1px solid {C_GRID} !important;
         gap: 6px !important;
-        padding: 10px 12px 8px 12px !important;
+        padding: 14px 12px 8px 12px !important;
         overflow: visible !important;
-        margin-top: 6px !important;
+        margin-top: 8px !important;
     }}
 
-    /* Prevent parent from clipping the pills */
+    /* Prevent any ancestor from clipping the pills */
+    .stTabs,
+    .stTabs > div,
     .stTabs > div:first-child {{
         overflow: visible !important;
     }}
