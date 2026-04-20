@@ -436,3 +436,65 @@ iteration. Peak/drawdown guard also uses MTM equity.
 
 The `_metrics()` calculation was already correct (running peak-to-trough on the curve); the
 bug was in the curve values fed to it.
+
+---
+
+## Mobile App (api.py + mobile-app/)
+
+The bot can be remotely controlled from an iPhone via a FastAPI REST server exposed through
+a Cloudflare Tunnel.
+
+### Architecture
+```
+iPhone (PWA)  ←──HTTPS──►  Cloudflare Tunnel  ←──►  api.py :8765  ←──►  data/*.json
+                                                                          bot.py writes
+```
+
+### Starting everything
+```bash
+# Terminal 1: start the bot + API together
+bash scripts/start_bot_with_api.sh          # paper mode
+bash scripts/start_bot_with_api.sh --live   # live mode (real money!)
+
+# Terminal 2: expose API to the internet
+bash scripts/start_tunnel.sh
+# → prints:  https://XXXXXX.trycloudflare.com
+```
+
+### First-launch setup on iPhone
+1. Open `https://banksiasprings.github.io/btc-wheel-bot/` in Safari
+2. Safari → Share → "Add to Home Screen" to install as PWA
+3. On first open, paste the tunnel URL and WHEEL_API_KEY from `.env`
+4. Tap "Test & Save" — must get ✅ before the app unlocks
+
+### API server (api.py)
+- Port: 8765 (override with WHEEL_API_PORT env var)
+- Auth: `X-API-Key: <WHEEL_API_KEY>` header required on every call
+- Auto-generates WHEEL_API_KEY in `.env` on first run
+- CORS: allow all origins (required for PWA)
+- Start manually: `/usr/local/bin/python3.11 -m uvicorn api:app --host 0.0.0.0 --port 8765`
+
+### State files written by bot.py (read by api.py)
+```
+data/bot_state.json         {running, mode, started_at, last_heartbeat, uptime_seconds}
+data/current_position.json  {open:false} or {open:true, name, strike, delta, dte, ...}
+data/equity_curve.json      [{date, equity}, ...]  — appended on each trade close
+data/bot_commands.json      written by API, read+deleted by bot._process_commands() each tick
+data/optimizer_pid.txt      PID of running optimizer subprocess
+```
+
+### Command flow (api.py → bot.py)
+The API writes a single-record JSON to `data/bot_commands.json`. The bot reads and deletes it
+each tick (~60s latency). Supported commands: `start`, `stop`, `close_position`, `set_mode`.
+The file is cleared immediately after reading to prevent replay.
+
+### PWA deployment
+- GitHub Actions: `.github/workflows/deploy-mobile.yml`
+- Trigger: push to main when `mobile-app/**` changes
+- Deploys `mobile-app/dist` → `gh-pages` branch
+- Public URL: `https://banksiasprings.github.io/btc-wheel-bot/`
+
+### Key cross-file dependency
+If you add a new API endpoint in `api.py` that reads a new state file, the bot must write
+that file — add the write in `bot.py → _print_status()` or `_close_position()` wrapped in
+try/except. Never let a file write interrupt the trading loop.
