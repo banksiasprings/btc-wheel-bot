@@ -1259,7 +1259,11 @@ def _render_optimizer_results(is_sweep: bool) -> None:
             st.markdown("#### 🏆 Best Genome Found")
             _bg_col1, _bg_col2 = st.columns([2, 1])
             with _bg_col1:
-                best_df = pd.DataFrame(list(best.items()), columns=["Parameter", "Optimal Value"])
+                best_df = pd.DataFrame(
+                    [(k, str(round(v, 6)) if isinstance(v, float) else str(v))
+                     for k, v in best.items()],
+                    columns=["Parameter", "Optimal Value"]
+                )
                 st.dataframe(best_df, use_container_width=True,
                              height=min(60 + 35 * len(best), 340),
                              key="evo_best_genome_table")
@@ -1302,8 +1306,15 @@ def _render_optimizer_results(is_sweep: bool) -> None:
                 _m3.metric("Return",        f"{_top.get('total_return_pct', 0):+.1f}%")
                 _m4.metric("Sharpe",        f"{_top.get('sharpe_ratio', 0):.2f}")
 
-            # Full table with all data
-            st.dataframe(_lb_sorted.head(20), use_container_width=True,
+            # Full table — format floats as strings to avoid heatmap colouring
+            _lb_display = _lb_sorted.head(20).copy()
+            for _c in _lb_display.select_dtypes(include="number").columns:
+                _lb_display[_c] = _lb_display[_c].apply(
+                    lambda v: f"{v:+.2f}" if _c in ("total_return_pct", "max_drawdown_pct")
+                    else f"{v:.4f}" if _c == "fitness"
+                    else f"{v:.2f}"
+                )
+            st.dataframe(_lb_display, use_container_width=True,
                          height=320, key="evo_leaderboard_table")
             st.download_button(
                 "⬇️ Download full leaderboard (CSV)",
