@@ -667,6 +667,47 @@ class WheelBot:
             f"Trade recorded: {pos.instrument_name} P&L ${pnl_usd:+,.2f} | "
             f"equity ${equity_before:,.0f} → ${equity_after:,.0f}"
         )
+
+        # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
+        try:
+            import json as _json
+            _exp_path = Path(__file__).parent / "data" / "experience.jsonl"
+            _exp_record = {
+                "timestamp": time.time(),
+                "mode": mode_str,
+                "params": {
+                    "iv_rank_threshold":        self._cfg.strategy.iv_rank_threshold,
+                    "target_delta_min":         self._cfg.strategy.target_delta_min,
+                    "target_delta_max":         self._cfg.strategy.target_delta_max,
+                    "approx_otm_offset":        self._cfg.backtest.approx_otm_offset,
+                    "max_dte":                  self._cfg.strategy.max_dte,
+                    "min_dte":                  self._cfg.strategy.min_dte,
+                    "max_equity_per_leg":       self._cfg.sizing.max_equity_per_leg,
+                    "premium_fraction_of_spot": self._cfg.backtest.premium_fraction_of_spot,
+                    "iv_rank_window_days":      getattr(
+                        self._cfg.strategy, "iv_rank_window_days", 365
+                    ),
+                },
+                "conditions_at_open": {
+                    "iv_rank":      round(pos.iv_rank_at_entry, 4),
+                    "btc_price":    round(pos.underlying_at_entry, 2),
+                    "option_type":  pos.option_type,
+                    "strike":       pos.strike,
+                    "dte_at_entry": pos.dte_at_entry,
+                },
+                "outcome": {
+                    "pnl_usd":   round(pnl_usd, 2),
+                    "pnl_pct":   round(pnl_usd / equity_before, 4) if equity_before > 0 else 0.0,
+                    "hold_days": max(0, pos.dte_at_entry - dte_at_close),
+                    "reason":    reason,
+                    "win":       pnl_usd > 0,
+                },
+            }
+            with open(_exp_path, "a") as _expf:
+                _expf.write(_json.dumps(_exp_record) + "\n")
+        except Exception:
+            pass  # experience log MUST NEVER interrupt the trade close
+
         return True
 
     async def _check_expired_positions(
