@@ -543,6 +543,7 @@ class WheelBot:
             expiry_ts=signal.expiry_ts,       # Phase 2: store expiry for DTE tracking
             iv_rank_at_entry=self._last_iv_rank,  # for trades.csv enrichment
             dte_at_entry=signal.dte,              # for trades.csv enrichment
+            iv_at_entry=float(getattr(signal, "mark_iv", 0.0)),
         )
         self._positions.append(pos)
 
@@ -707,6 +708,50 @@ class WheelBot:
                 _expf.write(_json.dumps(_exp_record) + "\n")
         except Exception:
             pass  # experience log MUST NEVER interrupt the trade close
+
+        # ── Write paper trade log (paper mode only — for backtest reconciliation) ─
+        if self._paper:
+            try:
+                import json as _json2
+                _pt_dir = Path(__file__).parent / "data" / "paper_trades"
+                _pt_dir.mkdir(parents=True, exist_ok=True)
+                _pt_path = _pt_dir / "paper_trades.json"
+
+                # Determine outcome label
+                if reason == "expiry_settlement":
+                    _outcome = "expired_worthless" if pnl_usd >= 0 else "assigned"
+                else:
+                    _outcome = "closed_early"
+
+                # Collateral for pnl_pct denominator = strike * contracts (USD notional)
+                _collateral = pos.strike * pos.contracts
+                _pt_record = {
+                    "entry_date":        trade_record["timestamp"],
+                    "expiry_date":       datetime.fromtimestamp(
+                        pos.expiry_ts / 1000, tz=timezone.utc
+                    ).isoformat() if pos.expiry_ts else None,
+                    "strike":            pos.strike,
+                    "contracts":         pos.contracts,
+                    "premium_collected": round(
+                        pos.entry_price * pos.contracts * pos.underlying_at_entry, 2
+                    ),
+                    "pnl_usd":           round(pnl_usd, 2),
+                    "pnl_pct":           round(pnl_usd / _collateral, 4) if _collateral > 0 else 0.0,
+                    "outcome":           _outcome,
+                    "spot_at_entry":     round(pos.underlying_at_entry, 2),
+                    "spot_at_expiry":    round(eff_price, 2),
+                    "iv_at_entry":       round(pos.iv_at_entry, 4),
+                }
+                # Load existing list, append, save
+                _pt_existing: list = []
+                if _pt_path.exists():
+                    with open(_pt_path) as _ptf:
+                        _pt_existing = _json2.load(_ptf)
+                _pt_existing.append(_pt_record)
+                with open(_pt_path, "w") as _ptf:
+                    _json2.dump(_pt_existing, _ptf, indent=2)
+            except Exception:
+                pass  # paper trade log MUST NEVER interrupt the trade close
 
         return True
 

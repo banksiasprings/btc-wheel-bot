@@ -333,14 +333,15 @@ At 30+ trades: 30% backtest / 70% experience (experience dominates)
 
 ## Optimizer Modes (optimizer.py)
 
-Four CLI modes:
+Five CLI modes:
 
 ```
 python optimizer.py --mode sweep                         # sensitivity sweep (all params)
 python optimizer.py --mode sweep --param iv_rank_threshold
 python optimizer.py --mode evolve --population 20 --generations 8
 python optimizer.py --mode walk_forward                  # requires best_genome.yaml
-python optimizer.py --mode monte_carlo --simulations 200 # requires best_genome.yaml
+python optimizer.py --mode monte_carlo --simulations 200
+python optimizer.py --mode reconcile                     # requires paper_trades.json
 ```
 
 ### sweep / evolve
@@ -360,6 +361,41 @@ Runs N simulations (default 200) each starting from a different random date in t
 Verdict: p5 Sharpe > 0.5 = robust, 0–0.5 = marginal, < 0 = fails under stress.
 Output: `data/optimizer/monte_carlo_results.json`.
 Dashboard: shown at the bottom of the Optimizer tab with return + Sharpe histograms.
+
+### reconcile
+Compares backtester Black-Scholes premium predictions against actual Deribit prices from
+paper trading. Detects systematic IV model bias. Requires `data/paper_trades/paper_trades.json`
+with at least 3 closed trades.
+Output: `data/optimizer/reconcile_results.json`.
+Dashboard: shown at the bottom of the Optimizer tab as "Backtest Accuracy" section with
+traffic-light banner, 4 metric cards, scatter plot (predicted vs actual P&L), and detail table.
+
+**Accuracy thresholds:** RMSE < $50 and |bias| < $30 = good; RMSE < $150 or |bias| < $100 = moderate; else = poor.
+
+---
+
+## paper_trades log format (data/paper_trades/paper_trades.json)
+
+Written by `bot.py → _close_position()` in paper mode only. JSON array, one object per trade.
+Each object has:
+```
+entry_date:          ISO 8601 timestamp when the trade opened
+expiry_date:         ISO 8601 expiry timestamp (null if expiry_ts was 0)
+strike:              strike price (USD)
+contracts:           number of contracts
+premium_collected:   actual USD premium received at open
+                     = entry_price_btc * contracts * spot_at_entry
+pnl_usd:             realized P&L in USD
+pnl_pct:             P&L as fraction of collateral (strike * contracts)
+outcome:             "expired_worthless" | "assigned" | "closed_early"
+spot_at_entry:       BTC spot price when opened
+spot_at_expiry:      BTC spot price when closed (may be close price for early closes)
+iv_at_entry:         Actual Deribit IV % (mark_iv from signal) at time of open
+```
+
+**Cross-file dependency:** `risk_manager.py → Position.iv_at_entry` must be populated in
+`bot.py → _open_position()` via `iv_at_entry=float(getattr(signal, "mark_iv", 0.0))`.
+Without this, reconcile has no IV for BS pricing and skips those trades.
 
 ---
 

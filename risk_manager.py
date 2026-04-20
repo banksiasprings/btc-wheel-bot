@@ -29,6 +29,7 @@ class Position:
     expiry_ts: int = 0         # Deribit expiry timestamp (ms) — used for DTE tracking
     iv_rank_at_entry: float = 0.0  # IV rank at time of entry (0–1)
     dte_at_entry: int = 0          # Days to expiry when position was opened
+    iv_at_entry: float = 0.0       # Actual IV % from Deribit at time of entry
 
 
 class RiskManager:

@@ -1344,6 +1344,9 @@ def _render_optimizer_results(is_sweep: bool) -> None:
     # ── Monte Carlo Simulation (always shown when file exists) ────────────
     _render_monte_carlo()
 
+    # ── Backtest Accuracy (always shown when file exists) ─────────────────
+    _render_reconciliation()
+
 
 def _render_walk_forward() -> None:
     """Display walk-forward validation results if available."""
@@ -1543,6 +1546,155 @@ def _render_monte_carlo() -> None:
             })
         st.dataframe(pd.DataFrame(_pct_rows), use_container_width=True,
                      hide_index=True, key="mc_percentile_table")
+
+
+def _render_reconciliation() -> None:
+    """Display backtest accuracy vs actual paper trades if reconcile_results.json exists."""
+    _rc_path = Path(__file__).parent / "data" / "optimizer" / "reconcile_results.json"
+    _pt_path = Path(__file__).parent / "data" / "paper_trades" / "paper_trades.json"
+
+    st.markdown("---")
+    st.markdown("### 🎯 Backtest Accuracy")
+
+    if not _rc_path.exists():
+        _pt_count = 0
+        if _pt_path.exists():
+            try:
+                with open(_pt_path) as _f:
+                    _pt_count = len(json.load(_f))
+            except Exception:
+                pass
+        if _pt_count >= 3:
+            st.info(
+                f"Found {_pt_count} paper trades. Run reconciliation to compare backtester "
+                "predictions against actual results:\n\n"
+                "```\npython optimizer.py --mode reconcile\n```"
+            )
+        else:
+            st.caption(
+                "No reconciliation data yet. Close at least 3 paper trades, then run "
+                "`python optimizer.py --mode reconcile`."
+            )
+        return
+
+    try:
+        with open(_rc_path) as _f:
+            _rc = json.load(_f)
+    except Exception as _e:
+        st.warning(f"Could not read reconcile_results.json: {_e}")
+        return
+
+    if "error" in _rc:
+        st.warning(f"Reconciliation could not run: {_rc['error']}")
+        return
+
+    _m = _rc.get("metrics", {})
+    _accuracy = _m.get("accuracy", "unknown")
+    _bias_dir = _m.get("bias_direction", "")
+    _rmse = _m.get("premium_rmse_usd", None)
+    _bias = _m.get("premium_bias_usd", None)
+    _corr = _m.get("pnl_correlation", None)
+    _actual_wr = _m.get("actual_win_rate_pct", None)
+    _bt_wr = _m.get("bt_win_rate_pct", None)
+    _n_valid = _rc.get("n_valid", 0)
+    _n_trades = _rc.get("n_trades", 0)
+
+    # Traffic-light banner
+    _banner_color = {"good": "#238636", "moderate": "#9e6a03", "poor": "#da3633"}.get(_accuracy, "#58a6ff")
+    _banner_emoji = {"good": "✅", "moderate": "⚠️", "poor": "❌"}.get(_accuracy, "ℹ️")
+    st.markdown(
+        f'<div style="background:{_banner_color};padding:10px 18px;border-radius:6px;'
+        f'color:white;font-weight:600;margin-bottom:12px;">'
+        f'{_banner_emoji} Model accuracy: <b>{_accuracy.upper()}</b> — {_bias_dir}'
+        f' ({_n_valid}/{_n_trades} valid trades)</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Metric cards
+    _c1, _c2, _c3, _c4 = st.columns(4)
+    _c1.metric("Premium RMSE", f"${_rmse:.2f}" if _rmse is not None else "N/A")
+    _c2.metric(
+        "Premium Bias",
+        f"${_bias:+.2f}" if _bias is not None else "N/A",
+        help="Positive = backtester overestimates; negative = underestimates",
+    )
+    _c3.metric(
+        "P&L Correlation",
+        f"{_corr:.2f}" if _corr is not None else "N/A",
+        help="Correlation between backtester-predicted P&L and actual P&L",
+    )
+    if _actual_wr is not None and _bt_wr is not None:
+        _c4.metric(
+            "Win Rate",
+            f"Actual {_actual_wr:.0f}% / BT {_bt_wr:.0f}%",
+            delta=f"{_actual_wr - _bt_wr:+.1f}pp vs backtest",
+        )
+    else:
+        _c4.metric("Win Rate", "N/A")
+
+    # Scatter plot — predicted vs actual P&L
+    _rows = _rc.get("rows", [])
+    _valid_rows = [rw for rw in _rows if rw.get("bt_pnl_usd") is not None]
+    if _valid_rows:
+        _actual = [rw["actual_pnl_usd"] for rw in _valid_rows]
+        _predicted = [rw["bt_pnl_usd"] for rw in _valid_rows]
+        _labels = [rw.get("entry_date", "")[:10] for rw in _valid_rows]
+        _outcomes = [rw.get("outcome", "") for rw in _valid_rows]
+
+        _fig = go.Figure()
+        # Perfect-prediction line
+        _all_vals = _actual + _predicted
+        _ax_min = min(_all_vals) * 1.15
+        _ax_max = max(_all_vals) * 1.15
+        _fig.add_trace(go.Scatter(
+            x=[_ax_min, _ax_max], y=[_ax_min, _ax_max],
+            mode="lines", name="Perfect fit",
+            line=dict(color="#666", dash="dash", width=1),
+        ))
+        _fig.add_trace(go.Scatter(
+            x=_actual, y=_predicted,
+            mode="markers+text",
+            text=_labels,
+            textposition="top center",
+            textfont=dict(size=9),
+            marker=dict(
+                color=[
+                    "#3fb950" if o == "expired_worthless" else
+                    "#da3633" if o == "assigned" else "#58a6ff"
+                    for o in _outcomes
+                ],
+                size=10,
+            ),
+            name="Trade",
+            hovertemplate="Actual: $%{x:.0f}<br>Predicted: $%{y:.0f}<br>%{text}<extra></extra>",
+        ))
+        _fig.update_layout(
+            title="Backtest Predicted vs Actual P&L",
+            xaxis_title="Actual P&L ($)",
+            yaxis_title="Backtester Predicted P&L ($)",
+            plot_bgcolor="#161b22",
+            paper_bgcolor="#0d1117",
+            font=dict(color="white"),
+            height=380,
+            showlegend=True,
+            legend=dict(bgcolor="#21262d", bordercolor="#30363d"),
+        )
+        st.plotly_chart(_fig, use_container_width=True, key="reconcile_scatter")
+
+    # Trade-level detail table
+    if _valid_rows:
+        with st.expander("Trade-level detail", expanded=False):
+            _df_rows = [{
+                "Date":         rw.get("entry_date", "")[:10],
+                "Strike":       rw.get("strike"),
+                "IV%":          rw.get("iv_at_entry"),
+                "Actual $":     rw.get("actual_pnl_usd"),
+                "BT Pred $":    rw.get("bt_pnl_usd"),
+                "Error $":      rw.get("pnl_error_usd"),
+                "Outcome":      rw.get("outcome"),
+            } for rw in _valid_rows]
+            st.dataframe(pd.DataFrame(_df_rows), use_container_width=True,
+                         hide_index=True, key="reconcile_detail_table")
 
 
 def _apply_genome_to_config(genome: dict) -> None:

@@ -999,6 +999,171 @@ class Optimizer:
         print(f"  Verdict: {verdict}")
         print("=" * w + "\n")
 
+    def run_reconcile(self) -> None:
+        """
+        Compare backtester BS-pricing predictions against actual paper trade results.
+
+        Diagnoses systematic bias in the IV model (overestimate/underestimate premium,
+        win rate misalignment).  Requires data/paper_trades/paper_trades.json from
+        at least 3 closed paper-mode trades.
+
+        Saves results to data/optimizer/reconcile_results.json.
+        """
+        from backtester import bs_put_price, bs_call_price
+        from datetime import datetime as _dt, timezone as _tz
+
+        pt_path = Path(__file__).parent / "data" / "paper_trades" / "paper_trades.json"
+        if not pt_path.exists():
+            print("No paper trades found at data/paper_trades/paper_trades.json")
+            print("Run the bot in paper mode and close at least 3 trades first.")
+            return
+
+        with open(pt_path) as f:
+            trades = json.load(f)
+
+        if len(trades) < 3:
+            print(f"Only {len(trades)} paper trade(s) — need at least 3 for reconciliation.")
+            return
+
+        r = cfg.backtest.risk_free_rate
+        rows = []
+        for t in trades:
+            try:
+                spot_entry = float(t["spot_at_entry"])
+                spot_expiry = float(t["spot_at_expiry"])
+                strike = float(t["strike"])
+                contracts = float(t["contracts"])
+                iv_pct = float(t.get("iv_at_entry", 0.0))
+                actual_premium = float(t["premium_collected"])
+                actual_pnl = float(t["pnl_usd"])
+                outcome = t.get("outcome", "unknown")
+                option_type = t.get("option_type", "put")
+
+                # Compute T from entry/expiry dates
+                try:
+                    entry_dt = _dt.fromisoformat(t["entry_date"])
+                    expiry_raw = t.get("expiry_date")
+                    if expiry_raw:
+                        expiry_dt = _dt.fromisoformat(expiry_raw)
+                        T = (expiry_dt - entry_dt).total_seconds() / (365.25 * 86400)
+                    else:
+                        T = 7 / 365.25
+                except Exception:
+                    T = 7 / 365.25
+                T = max(T, 1e-8)
+
+                if iv_pct > 0:
+                    sigma = iv_pct / 100.0
+                    if option_type == "call":
+                        bt_premium = bs_call_price(spot_entry, strike, T, r, sigma) * contracts
+                        intrinsic = max(spot_expiry - strike, 0.0)
+                    else:
+                        bt_premium = bs_put_price(spot_entry, strike, T, r, sigma) * contracts
+                        intrinsic = max(strike - spot_expiry, 0.0)
+                    bt_pnl = bt_premium - intrinsic * contracts
+                else:
+                    bt_premium = None
+                    bt_pnl = None
+
+                premium_err = round(bt_premium - actual_premium, 2) if bt_premium is not None else None
+                pnl_err = round(bt_pnl - actual_pnl, 2) if bt_pnl is not None else None
+
+                rows.append({
+                    "entry_date":          t["entry_date"],
+                    "strike":              strike,
+                    "contracts":           contracts,
+                    "option_type":         option_type,
+                    "spot_at_entry":       spot_entry,
+                    "spot_at_expiry":      spot_expiry,
+                    "iv_at_entry":         iv_pct,
+                    "T_years":             round(T, 4),
+                    "actual_premium_usd":  round(actual_premium, 2),
+                    "bt_premium_usd":      round(bt_premium, 2) if bt_premium is not None else None,
+                    "actual_pnl_usd":      round(actual_pnl, 2),
+                    "bt_pnl_usd":          round(bt_pnl, 2) if bt_pnl is not None else None,
+                    "outcome":             outcome,
+                    "premium_error_usd":   premium_err,
+                    "pnl_error_usd":       pnl_err,
+                })
+            except Exception as e:
+                logger.warning(f"Skipping malformed paper trade record: {e}")
+
+        valid = [rw for rw in rows if rw["bt_premium_usd"] is not None]
+        if not valid:
+            print("No trades with valid iv_at_entry > 0 found. Cannot reconcile.")
+            output = {"error": "no_valid_trades", "rows": rows}
+            out_path = self._results_dir / "reconcile_results.json"
+            with open(out_path, "w") as f:
+                json.dump(output, f, indent=2)
+            return
+
+        # ── Compute summary metrics ──────────────────────────────────────────────
+        premium_errors = [rw["premium_error_usd"] for rw in valid]
+        premium_bias = float(np.mean(premium_errors))
+        premium_rmse = float(np.sqrt(np.mean([e ** 2 for e in premium_errors])))
+
+        pnl_pairs = [(rw["actual_pnl_usd"], rw["bt_pnl_usd"]) for rw in valid
+                     if rw["bt_pnl_usd"] is not None]
+        if len(pnl_pairs) >= 2:
+            ap = [p[0] for p in pnl_pairs]
+            bp = [p[1] for p in pnl_pairs]
+            pnl_corr = float(np.corrcoef(ap, bp)[0, 1])
+        else:
+            pnl_corr = float("nan")
+
+        actual_win_rate = sum(1 for rw in valid if rw["actual_pnl_usd"] > 0) / len(valid)
+        bt_win_rate = sum(1 for rw in valid if (rw["bt_pnl_usd"] or 0) > 0) / len(valid)
+
+        # Accuracy traffic-light
+        if premium_rmse < 50 and abs(premium_bias) < 30:
+            accuracy = "good"
+        elif premium_rmse < 150 or abs(premium_bias) < 100:
+            accuracy = "moderate"
+        else:
+            accuracy = "poor"
+
+        if premium_bias > 50:
+            bias_direction = "backtester overestimates premium"
+        elif premium_bias < -50:
+            bias_direction = "backtester underestimates premium"
+        else:
+            bias_direction = "minimal systematic bias"
+
+        output = {
+            "generated_at": datetime.now().isoformat(),
+            "n_trades":     len(trades),
+            "n_valid":      len(valid),
+            "metrics": {
+                "premium_bias_usd":    round(premium_bias, 2),
+                "premium_rmse_usd":    round(premium_rmse, 2),
+                "pnl_correlation":     round(pnl_corr, 4) if not np.isnan(pnl_corr) else None,
+                "actual_win_rate_pct": round(actual_win_rate * 100, 1),
+                "bt_win_rate_pct":     round(bt_win_rate * 100, 1),
+                "accuracy":            accuracy,
+                "bias_direction":      bias_direction,
+            },
+            "rows": rows,
+        }
+
+        out_path = self._results_dir / "reconcile_results.json"
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2, default=str)
+        logger.info(f"Reconcile results saved: {out_path}")
+
+        w = 55
+        print("\n" + "=" * w)
+        print(f"  BACKTEST RECONCILIATION  ({len(valid)}/{len(trades)} valid trades)")
+        print("=" * w)
+        print(f"  Premium RMSE:          ${premium_rmse:.2f}")
+        print(f"  Premium bias:          ${premium_bias:+.2f}  ({bias_direction})")
+        if not np.isnan(pnl_corr):
+            print(f"  P&L correlation:       {pnl_corr:.2f}")
+        print(f"  Actual win rate:       {actual_win_rate*100:.1f}%")
+        print(f"  Backtester win rate:   {bt_win_rate*100:.1f}%")
+        print("-" * w)
+        print(f"  Model accuracy:        {accuracy.upper()}")
+        print("=" * w + "\n")
+
     # ── Output ────────────────────────────────────────────────────────────────
 
     def _save_sweep_results(self, results: dict[str, list[dict]]) -> None:
@@ -1114,11 +1279,12 @@ Examples:
   python optimizer.py --mode evolve --pop 20 --gen 8
   python optimizer.py --mode walk_forward                 # requires best_genome.yaml
   python optimizer.py --mode monte_carlo --simulations 200
+  python optimizer.py --mode reconcile                    # requires paper_trades.json
         """,
     )
     parser.add_argument(
         "--mode",
-        choices=["sweep", "evolve", "walk_forward", "monte_carlo"],
+        choices=["sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"],
         default="sweep",
     )
     parser.add_argument("--param", type=str, default=None,
@@ -1178,6 +1344,9 @@ Examples:
 
     elif args.mode == "monte_carlo":
         opt.run_monte_carlo(n_simulations=args.simulations)
+
+    elif args.mode == "reconcile":
+        opt.run_reconcile()
 
 
 if __name__ == "__main__":
