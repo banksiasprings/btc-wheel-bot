@@ -328,3 +328,75 @@ At 30+ trades: 30% backtest / 70% experience (experience dominates)
 - `optimizer.py` reads it via `load_experience_calibration()` in `_run_parallel()`
 - `dashboard_ui.py` reads it directly in `tab_recommendations()` and imports `summarise_experience` from optimizer.py
 - Use `--no-experience` flag on optimizer CLI to bypass calibration for pure backtest mode
+
+---
+
+## Optimizer Modes (optimizer.py)
+
+Four CLI modes:
+
+```
+python optimizer.py --mode sweep                         # sensitivity sweep (all params)
+python optimizer.py --mode sweep --param iv_rank_threshold
+python optimizer.py --mode evolve --population 20 --generations 8
+python optimizer.py --mode walk_forward                  # requires best_genome.yaml
+python optimizer.py --mode monte_carlo --simulations 200 # requires best_genome.yaml
+```
+
+### sweep / evolve
+Sweep varies one parameter at a time; evolve runs a genetic algorithm over all parameters.
+Output: `data/optimizer/sweep_results.json`, `data/optimizer/best_genome.yaml`.
+
+### walk_forward
+Splits the full available history 75% / 25%. Runs `best_genome.yaml` on both halves and
+also runs a default baseline. Computes a **robustness score** = out-of-sample fitness /
+in-sample fitness. ≥ 0.70 = robust, 0.40–0.70 = marginal, < 0.40 = likely overfit.
+Output: `data/optimizer/walk_forward_results.json`.
+Dashboard: shown at the bottom of the Optimizer tab as a persistent section.
+
+### monte_carlo
+Runs N simulations (default 200) each starting from a different random date in the first
+50% of available history. Tests strategy robustness across regimes.
+Verdict: p5 Sharpe > 0.5 = robust, 0–0.5 = marginal, < 0 = fails under stress.
+Output: `data/optimizer/monte_carlo_results.json`.
+Dashboard: shown at the bottom of the Optimizer tab with return + Sharpe histograms.
+
+---
+
+## ParamSet fields (optimizer.py)
+
+All 13 parameters, with their sweep ranges:
+
+| Parameter               | Default  | Sweep range      | Notes                              |
+|-------------------------|----------|------------------|------------------------------------|
+| iv_rank_threshold       | 0.50     | 0.20–0.80 ×0.05  |                                    |
+| target_delta_min        | 0.15     | 0.10–0.25 ×0.025 |                                    |
+| target_delta_max        | 0.30     | 0.20–0.45 ×0.025 |                                    |
+| approx_otm_offset       | 0.08     | 0.03–0.18 ×0.01  |                                    |
+| max_dte                 | 35       | 7–45 ×7          |                                    |
+| min_dte                 | 5        | 2–14 ×1          |                                    |
+| max_equity_per_leg      | 0.05     | 0.02–0.12 ×0.01  |                                    |
+| premium_fraction_of_spot| 0.015    | 0.008–0.030×0.002|                                    |
+| iv_rank_window_days     | 365      | 90–365 ×30       |                                    |
+| min_free_equity_fraction| 0.25     | 0.00–0.40 ×0.05  |                                    |
+| starting_equity         | 10000    | 1000–100000×5000 |                                    |
+| use_regime_filter       | 0        | 0 or 1           | 0=off, 1=skip puts below MA        |
+| regime_ma_days          | 50       | 20–100 ×10       | MA window for regime filter        |
+
+Config.yaml keys: `strategy.use_regime_filter`, `strategy.regime_ma_days`.
+
+---
+
+## Drawdown calculation (backtester.py — fixed 2026-04)
+
+**Bug found and fixed**: `_simulate()` previously only updated `equity` when a position
+closed (expiry or roll breach). While a short put was open, the equity_curve was flat —
+unrealized MTM losses from a BTC crash were invisible. Result: max_drawdown was severely
+understated (e.g. −2% when the true peak-to-trough was −20%+).
+
+**Fix**: Track `_mtm_unreal` = unrealized P&L from the open leg each day (in the roll-check
+`else` branch). Append `equity + _mtm_unreal` (mark-to-market equity) to equity_curve every
+iteration. Peak/drawdown guard also uses MTM equity.
+
+The `_metrics()` calculation was already correct (running peak-to-trough on the curve); the
+bug was in the curve values fed to it.
