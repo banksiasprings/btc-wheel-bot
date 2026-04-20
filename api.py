@@ -147,8 +147,15 @@ def _optimizer_is_running() -> bool:
     try:
         pid = int(_PID_FILE.read_text().strip())
         os.kill(pid, 0)
+        # Also check it's not a zombie (defunct) process
+        import subprocess as _sp
+        stat = _sp.run(["ps", "-p", str(pid), "-o", "stat="], capture_output=True, text=True)
+        if "Z" in stat.stdout:  # Z = zombie/defunct = already finished
+            _PID_FILE.unlink(missing_ok=True)
+            return False
         return True
     except (ProcessLookupError, ValueError):
+        _PID_FILE.unlink(missing_ok=True)
         return False
     except PermissionError:
         return True  # process exists, we just can't signal it
