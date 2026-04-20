@@ -84,6 +84,9 @@ class WheelBot:
         # Stage 3: OrderTracker (initialised in live mode after WS connect)
         self._tracker: OrderTracker | None = None
 
+        # API state files — timestamps for uptime calculation
+        self._started_at: datetime = datetime.now(timezone.utc)
+
         # AI Overseer
         if self._cfg.overseer.enabled:
             self._overseer = AIOverSeer()
@@ -344,6 +347,9 @@ class WheelBot:
 
         if not self._risk.check_kill_switch():
             return
+
+        # Process any pending mobile-API commands
+        await self._process_commands()
 
         # Fetch market state
         try:
@@ -669,6 +675,25 @@ class WheelBot:
             f"equity ${equity_before:,.0f} → ${equity_after:,.0f}"
         )
 
+        # ── Append to equity_curve.json for mobile API ───────────────────────
+        try:
+            import json as _json_ec
+            _ec_path = Path(__file__).parent / "data" / "equity_curve.json"
+            _ec_path.parent.mkdir(exist_ok=True)
+            _ec_existing: list = []
+            if _ec_path.exists():
+                try:
+                    _ec_existing = _json_ec.loads(_ec_path.read_text())
+                except Exception:
+                    _ec_existing = []
+            _ec_existing.append({
+                "date":   trade_record["timestamp"][:10],
+                "equity": round(equity_after, 2),
+            })
+            _ec_path.write_text(_json_ec.dumps(_ec_existing))
+        except Exception:
+            pass
+
         # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
         try:
             import json as _json
@@ -824,6 +849,56 @@ class WheelBot:
         except Exception:
             return None
 
+    async def _process_commands(self) -> None:
+        """
+        Read and execute commands from data/bot_commands.json (written by the mobile API).
+        Clears the file after processing to prevent repeat execution.
+        """
+        cmd_path = Path(__file__).parent / "data" / "bot_commands.json"
+        if not cmd_path.exists():
+            return
+        try:
+            record = json.loads(cmd_path.read_text())
+            command = record.get("command", "")
+            cmd_path.unlink(missing_ok=True)   # clear immediately to avoid replay
+
+            if command == "stop":
+                logger.warning("[API] STOP command received — creating KILL_SWITCH file")
+                self._kill_path.touch()
+
+            elif command == "start":
+                if self._kill_path.exists():
+                    logger.info("[API] START command received — removing KILL_SWITCH file")
+                    self._kill_path.unlink(missing_ok=True)
+                else:
+                    logger.info("[API] START command received (bot already running)")
+
+            elif command == "close_position":
+                if self._positions:
+                    logger.warning("[API] CLOSE_POSITION command received")
+                    for pos in list(self._positions):
+                        closed = await self._close_position(pos, "api_close", 0.0)
+                        if closed:
+                            self._positions.remove(pos)
+                else:
+                    logger.info("[API] CLOSE_POSITION command: no open positions")
+
+            elif command == "set_mode":
+                new_mode = record.get("mode", "")
+                logger.warning(f"[API] SET_MODE command received: mode={new_mode}")
+                # Mode change is advisory only at runtime — restart required to take effect
+
+            else:
+                if command:
+                    logger.warning(f"[API] Unknown command: {command!r}")
+
+        except Exception as exc:
+            logger.warning(f"[API] Error processing command file: {exc}")
+            try:
+                cmd_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
     def _print_status(self, now: datetime, spot: float) -> None:
         """Log a brief status line each tick, write tick_log.csv and heartbeat."""
         import csv as _csv
@@ -904,3 +979,28 @@ class WheelBot:
             hb_path.write_text(json.dumps(heartbeat))
         except Exception:
             pass  # never let heartbeat write block the tick
+
+        # ── Write bot_state.json for mobile API ──────────────────────────────
+        try:
+            _state_path = Path(__file__).parent / "data" / "bot_state.json"
+            _state_path.parent.mkdir(exist_ok=True)
+            _uptime = int((now - self._started_at).total_seconds())
+            _state_path.write_text(json.dumps({
+                "running":        True,
+                "mode":           mode_str,
+                "started_at":     self._started_at.isoformat(),
+                "last_heartbeat": now.isoformat(),
+                "uptime_seconds": _uptime,
+            }))
+        except Exception:
+            pass
+
+        # ── Write current_position.json for mobile API ────────────────────────
+        try:
+            _pos_path = Path(__file__).parent / "data" / "current_position.json"
+            if pos_data:
+                _pos_path.write_text(json.dumps({"open": True, **pos_data}))
+            else:
+                _pos_path.write_text(json.dumps({"open": False}))
+        except Exception:
+            pass
