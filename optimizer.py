@@ -415,6 +415,7 @@ class Optimizer:
         self._workers = workers or max(1, mp.cpu_count() - 1)
         self._ohlcv_df: pd.DataFrame | None = None
         self._iv_history: list | None = None
+        self._pool: mp.Pool | None = None
         self._results_dir = Path("data/optimizer")
         self._results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -436,7 +437,11 @@ class Optimizer:
         return self._ohlcv_df, self._iv_history
 
     def _run_parallel(self, genomes: list[ParamSet], calibration: dict | None = None) -> list[dict]:
-        """Run a list of genomes in parallel using multiprocessing."""
+        """Run a list of genomes in parallel using multiprocessing.
+
+        Uses a persistent pool (created once, reused across all sweep/evolve batches)
+        to avoid the heavy macOS spawn overhead of creating a new Pool per batch.
+        """
         ohlcv_df, iv_history = self._load_data()
 
         # Load experience calibration (unless caller explicitly passed empty dict to skip)
@@ -455,13 +460,23 @@ class Optimizer:
         logger.info(f"Running {len(genomes)} backtests on {self._workers} workers...")
         start = time.time()
 
-        with mp.Pool(processes=self._workers) as pool:
-            results = pool.map(_run_backtest_worker, args)
+        # Use a persistent pool to avoid spawn overhead on macOS (pool is created
+        # once on first call and reused; closed explicitly in close_pool()).
+        if self._pool is None:
+            self._pool = mp.Pool(processes=self._workers)
+        results = self._pool.map(_run_backtest_worker, args)
 
         elapsed = time.time() - start
         logger.info(f"Batch complete: {len(results)} results in {elapsed:.1f}s "
                     f"({elapsed/len(results):.1f}s avg)")
         return results
+
+    def close_pool(self) -> None:
+        """Shut down the persistent worker pool gracefully."""
+        if self._pool is not None:
+            self._pool.terminate()
+            self._pool.join()
+            self._pool = None
 
     # ── Sweep mode ────────────────────────────────────────────────────────────
 
@@ -536,6 +551,7 @@ class Optimizer:
 
         self._save_sweep_results(all_sweep_results)
         self._plot_sweep(all_sweep_results)
+        self.close_pool()
 
     # ── Evolve mode ───────────────────────────────────────────────────────────
 
@@ -688,8 +704,10 @@ class Optimizer:
             print(f"  Sharpe:  {best_ever['sharpe_ratio']:.2f}")
             print(f"  MaxDD:   {best_ever['max_drawdown_pct']:.1f}%")
             print(f"  WinRate: {best_ever['win_rate_pct']:.1f}%")
+            self.close_pool()
             return ParamSet(**best_ever["params"])
 
+        self.close_pool()
         return ParamSet()  # fallback to defaults
 
     # ── Output ────────────────────────────────────────────────────────────────
