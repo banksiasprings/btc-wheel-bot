@@ -187,6 +187,35 @@ st.button("Start Optimizer")
 **Fix in place:** (1) `optimizer.py` now accepts `--seed-from-sweep` flag and `seed_from_sweep` parameter in `run_evolution()` — reads `sweep_results.json`, builds a seed `ParamSet` from best-per-param values, uses mutated copies as 30% of generation 0. (2) `optimizer.py` argparse renamed to `--population`/`--generations`, added `--elite`/`--mutation` wired through to `run_evolution()`. (3) Dashboard adds "🌱 Seed initial population from sweep results" checkbox (disabled until sweep_results.json exists). (4) `_render_optimizer_results()` sweep mode now shows a best-value-per-parameter table below the chart. (5) `tab_recommendations()` reads `best_genome.yaml` dynamically and shows "🏆 Optimizer Best Genome" section with metrics and one-click Apply button at the top; hardcoded data relabelled "📊 Baseline Analysis (Static)". Committed in [current commit].
 **Rule:** Whenever adding a new optimizer CLI flag, update both `optimizer.py` argparse AND the subprocess `cmd` list in `tab_optimizer()` simultaneously.
 
+### Deribit historical IV returns intra-day data — optimizer produces 0 trades
+**What happened:** `get_historical_volatility` returns ~384 hourly records but only covering ~17 unique calendar days. `run_with_data()` checked `len(iv_history) >= 60` on the raw list (passes at 384), but after `drop_duplicates("date")` only 17 daily rows remained. The rolling IV-rank window requires `min_periods=30`, so ALL rows became NaN and were dropped — empty dataset, 0 trades, 0 fitness for every backtest. The optimizer sweep showed flat fitness=0 for all parameter values.
+**Fix in place:** In `run_with_data()`, after deduplicating to daily, check `len(_daily) >= 60` before accepting Deribit IV; otherwise fall back to `_synthesise_iv()` (Garman-Klass realised vol × 1.25). `_build_dataset()` already had this check correctly. Committed 6dade83.
+**Rule:** Never trust `len(iv_history)` on raw Deribit historical vol data — always check the daily deduplicated count. If the Deribit endpoint only covers < 60 daily rows, synthesise IV from price data instead.
+
+### Correct Python for running optimizer scripts
+**What happened:** `do shell script "python3 optimizer.py ..."` in osascript fails silently or doesn't have numpy/pandas installed (macOS ships Python 3 without pip packages). Streamlit runs on Homebrew Python 3.11.
+**Fix:** Use `/usr/local/bin/python3.11` — this is the Python that has all project dependencies installed. Never use `/usr/local/bin/python3` (symlink may not exist) or `/usr/bin/python3` (system Python, no packages).
+```applescript
+do shell script "cd ~/Documents/btc-wheel-bot && /usr/local/bin/python3.11 optimizer.py --mode sweep"
+```
+
+### Streamlit dataframe heatmap colouring in dark theme
+**What happened:** `st.dataframe()` on a DataFrame with numeric columns applies an orange/pink gradient (heatmap) to cells. In the dark theme this makes tables almost unreadable — the genome parameter table and leaderboard looked like solid orange blocks with no visible text.
+**Fix:** Convert numeric columns to formatted strings before passing to `st.dataframe()`. This prevents Streamlit's auto-gradient and keeps the dark theme table readable:
+```python
+best_df = pd.DataFrame(
+    [(k, str(round(v, 6)) if isinstance(v, float) else str(v))
+     for k, v in best.items()],
+    columns=["Parameter", "Optimal Value"]
+)
+```
+For leaderboard-style tables with many columns, format each metric column explicitly and use `str` types.
+**Rule:** Any `st.dataframe()` call showing numeric results in dark-theme context — convert to formatted strings first. The heatmap is Streamlit's default for float columns and has no "disable" flag.
+
+### Duplicate keyword argument in Plotly `go.Scatter()`
+**What happened:** `SyntaxError: keyword argument repeated: hovertemplate` crashed the dashboard. Occurred when the Plotly trace builder had two `hovertemplate=` assignments — one from an earlier draft (with a Python list comprehension inside the string) and a corrected one with `%{customdata[0]}` references.
+**Rule:** After any refactor of a `go.Scatter()` or `go.Bar()` trace, grep for duplicate keyword arguments before committing. Python raises `SyntaxError` at import time, which kills the entire Streamlit app.
+
 ### Dashboard restart path issues
 **When restarting the dashboard via osascript:**
 ```applescript
