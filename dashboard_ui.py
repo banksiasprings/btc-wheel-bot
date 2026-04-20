@@ -1338,6 +1338,212 @@ def _render_optimizer_results(is_sweep: bool) -> None:
             st.markdown("#### 📈 Evolution Progress")
             st.image(str(evo_img), use_container_width=True)
 
+    # ── Walk-Forward Validation (always shown when file exists) ───────────
+    _render_walk_forward()
+
+    # ── Monte Carlo Simulation (always shown when file exists) ────────────
+    _render_monte_carlo()
+
+
+def _render_walk_forward() -> None:
+    """Display walk-forward validation results if available."""
+    wf_path = OPT_DIR / "walk_forward_results.json"
+    if not wf_path.exists():
+        return
+
+    try:
+        with open(wf_path) as _f:
+            _wf = json.load(_f)
+    except Exception as _e:
+        st.warning(f"Could not read walk_forward_results.json: {_e}")
+        return
+
+    st.divider()
+    st.markdown("#### 🔄 Walk-Forward Validation")
+    st.caption(
+        "In-sample (first 75% of history) vs out-of-sample (last 25%). "
+        "Robustness score = out-of-sample fitness ÷ in-sample fitness. "
+        "Values near 1.0 indicate the strategy generalises well."
+    )
+
+    _in  = _wf.get("in_sample", {})
+    _out = _wf.get("out_of_sample", {})
+    _bi  = _wf.get("baseline_in", {})
+    _bo  = _wf.get("baseline_out", {})
+    _rob = _wf.get("robustness_score", 0.0)
+
+    # Robustness banner
+    if _rob >= 0.70:
+        st.success(f"✅ Robustness score: **{_rob:.3f}** — Strategy is robust (minimal overfitting)")
+    elif _rob >= 0.40:
+        st.warning(f"⚠️ Robustness score: **{_rob:.3f}** — Strategy is marginal (moderate OOS degradation)")
+    else:
+        st.error(f"🚨 Robustness score: **{_rob:.3f}** — Likely overfit (severe OOS degradation)")
+
+    # Side-by-side metrics
+    _wf_c1, _wf_c2 = st.columns(2)
+    with _wf_c1:
+        st.markdown(f"**In-Sample** ({_in.get('start_date','?')} – {_in.get('end_date','?')})")
+        _wf_mc1, _wf_mc2, _wf_mc3 = st.columns(3)
+        _wf_mc1.metric("Fitness",   f"{_in.get('fitness', 0):.3f}")
+        _wf_mc2.metric("Sharpe",    f"{_in.get('sharpe', 0):.2f}")
+        _wf_mc3.metric("Return",    f"{_in.get('total_return_pct', 0):+.1f}%")
+        _wf_mc4, _wf_mc5, _wf_mc6 = st.columns(3)
+        _wf_mc4.metric("Max DD",    f"{_in.get('max_drawdown_pct', 0):+.1f}%")
+        _wf_mc5.metric("Win Rate",  f"{_in.get('win_rate_pct', 0):.1f}%")
+        _wf_mc6.metric("Trades",    str(int(_in.get("num_cycles", 0))))
+    with _wf_c2:
+        st.markdown(f"**Out-of-Sample** ({_out.get('start_date','?')} – {_out.get('end_date','?')})")
+        _wf_oc1, _wf_oc2, _wf_oc3 = st.columns(3)
+        _wf_oc1.metric("Fitness",   f"{_out.get('fitness', 0):.3f}",
+                        delta=f"{_out.get('fitness',0) - _in.get('fitness',0):+.3f}")
+        _wf_oc2.metric("Sharpe",    f"{_out.get('sharpe', 0):.2f}",
+                        delta=f"{_out.get('sharpe',0) - _in.get('sharpe',0):+.2f}")
+        _wf_oc3.metric("Return",    f"{_out.get('total_return_pct', 0):+.1f}%",
+                        delta=f"{_out.get('total_return_pct',0) - _in.get('total_return_pct',0):+.1f}%")
+        _wf_oc4, _wf_oc5, _wf_oc6 = st.columns(3)
+        _wf_oc4.metric("Max DD",    f"{_out.get('max_drawdown_pct', 0):+.1f}%")
+        _wf_oc5.metric("Win Rate",  f"{_out.get('win_rate_pct', 0):.1f}%")
+        _wf_oc6.metric("Trades",    str(int(_out.get("num_cycles", 0))))
+
+    # Comparison table
+    _wf_rows = []
+    for _metric, _label in [
+        ("fitness",          "Fitness"),
+        ("sharpe",           "Sharpe"),
+        ("total_return_pct", "Return %"),
+        ("max_drawdown_pct", "Max DD %"),
+        ("win_rate_pct",     "Win Rate %"),
+        ("num_cycles",       "# Trades"),
+    ]:
+        _wf_rows.append({
+            "Metric":         _label,
+            "Best IS":        round(_in.get(_metric, 0), 3),
+            "Best OOS":       round(_out.get(_metric, 0), 3),
+            "Baseline IS":    round(_bi.get(_metric, 0), 3),
+            "Baseline OOS":   round(_bo.get(_metric, 0), 3),
+        })
+    st.dataframe(pd.DataFrame(_wf_rows), use_container_width=True,
+                 hide_index=True, key="wf_comparison_table")
+
+
+def _render_monte_carlo() -> None:
+    """Display Monte Carlo simulation results if available."""
+    mc_path = OPT_DIR / "monte_carlo_results.json"
+    if not mc_path.exists():
+        return
+
+    try:
+        with open(mc_path) as _f:
+            _mc = json.load(_f)
+    except Exception as _e:
+        st.warning(f"Could not read monte_carlo_results.json: {_e}")
+        return
+
+    st.divider()
+    st.markdown("#### 🎲 Monte Carlo Simulation")
+    _n_done = _mc.get("n_simulations_completed", 0)
+    _n_req  = _mc.get("n_simulations_requested", 200)
+    st.caption(
+        f"{_n_done}/{_n_req} simulations completed — each with a different random start date "
+        "within the first 50% of available history. Tests strategy robustness across regimes."
+    )
+
+    _summary = _mc.get("summary", {})
+    _pct     = _mc.get("percentiles", {})
+    _sims    = _mc.get("simulations", [])
+
+    _p5_sharpe = _summary.get("p5_sharpe", 0.0)
+    if _p5_sharpe > 0.5:
+        _verdict = "Strategy is robust"
+        st.success(f"✅ **{_verdict}** — 5th-pctile Sharpe = {_p5_sharpe:.2f} (> 0.5)")
+    elif _p5_sharpe >= 0.0:
+        _verdict = "Strategy is marginal"
+        st.warning(f"⚠️ **{_verdict}** — 5th-pctile Sharpe = {_p5_sharpe:.2f} (0–0.5)")
+    else:
+        _verdict = "Strategy fails under stress"
+        st.error(f"🚨 **{_verdict}** — 5th-pctile Sharpe = {_p5_sharpe:.2f} (< 0)")
+
+    # Key stats row
+    _mc_c1, _mc_c2, _mc_c3, _mc_c4 = st.columns(4)
+    _mc_c1.metric("Median Sharpe",   f"{_summary.get('median_sharpe', 0):.2f}")
+    _mc_c2.metric("5th-pctile Sharpe", f"{_p5_sharpe:.2f}")
+    _mc_c3.metric("Median Return",   f"{_summary.get('median_return', 0):+.1f}%")
+    _mc_c4.metric("% Profitable",    f"{_summary.get('pct_profitable', 0):.1f}%")
+
+    # Histogram of simulated returns
+    if _sims:
+        _returns = [s["total_return_pct"] for s in _sims]
+        _sharpes = [s["sharpe_ratio"] for s in _sims]
+
+        _fig_cols = st.columns(2)
+        with _fig_cols[0]:
+            _fig_ret = go.Figure()
+            _fig_ret.add_trace(go.Histogram(
+                x=_returns, nbinsx=30,
+                marker_color="#58a6ff", opacity=0.75,
+                name="Return %",
+            ))
+            _fig_ret.add_vline(
+                x=float(_pct.get("total_return_pct", {}).get("p5", 0)),
+                line_dash="dash", line_color="#f85149",
+                annotation_text="p5", annotation_font_color="#f85149",
+            )
+            _fig_ret.add_vline(
+                x=float(_pct.get("total_return_pct", {}).get("p50", 0)),
+                line_dash="dash", line_color="#3fb950",
+                annotation_text="median", annotation_font_color="#3fb950",
+            )
+            _fig_ret.update_layout(
+                **_dark_layout("Simulated Return Distribution", height=260),
+                xaxis_title="Total Return %", yaxis_title="Count",
+            )
+            st.plotly_chart(_fig_ret, use_container_width=True, key="mc_ret_hist")
+
+        with _fig_cols[1]:
+            _fig_sh = go.Figure()
+            _fig_sh.add_trace(go.Histogram(
+                x=_sharpes, nbinsx=30,
+                marker_color="#3fb950", opacity=0.75,
+                name="Sharpe",
+            ))
+            _fig_sh.add_vline(
+                x=float(_pct.get("sharpe_ratio", {}).get("p5", 0)),
+                line_dash="dash", line_color="#f85149",
+                annotation_text="p5", annotation_font_color="#f85149",
+            )
+            _fig_sh.add_vline(
+                x=0.5, line_dash="dot", line_color="#e3b341",
+                annotation_text="robust threshold",
+                annotation_font_color="#e3b341",
+            )
+            _fig_sh.update_layout(
+                **_dark_layout("Simulated Sharpe Distribution", height=260),
+                xaxis_title="Sharpe Ratio", yaxis_title="Count",
+            )
+            st.plotly_chart(_fig_sh, use_container_width=True, key="mc_sharpe_hist")
+
+    # Percentile table
+    if _pct:
+        _pct_rows = []
+        for _m, _label in [
+            ("total_return_pct", "Return %"),
+            ("sharpe_ratio",     "Sharpe"),
+            ("max_drawdown_pct", "Max DD %"),
+            ("fitness",          "Fitness"),
+        ]:
+            _p = _pct.get(_m, {})
+            _pct_rows.append({
+                "Metric": _label,
+                "p5":  round(_p.get("p5",  0), 3),
+                "p25": round(_p.get("p25", 0), 3),
+                "p50": round(_p.get("p50", 0), 3),
+                "p75": round(_p.get("p75", 0), 3),
+                "p95": round(_p.get("p95", 0), 3),
+            })
+        st.dataframe(pd.DataFrame(_pct_rows), use_container_width=True,
+                     hide_index=True, key="mc_percentile_table")
+
 
 def _apply_genome_to_config(genome: dict) -> None:
     """Apply a best_genome.yaml back to config.yaml."""
@@ -1348,6 +1554,8 @@ def _apply_genome_to_config(genome: dict) -> None:
         "target_delta_max":         ("strategy", "target_delta_max"),
         "max_dte":                  ("strategy", "max_dte"),
         "min_dte":                  ("strategy", "min_dte"),
+        "use_regime_filter":        ("strategy", "use_regime_filter"),
+        "regime_ma_days":           ("strategy", "regime_ma_days"),
         "max_equity_per_leg":       ("sizing",   "max_equity_per_leg"),
         "min_free_equity_fraction": ("sizing",   "min_free_equity_fraction"),
         "approx_otm_offset":        ("backtest", "approx_otm_offset"),

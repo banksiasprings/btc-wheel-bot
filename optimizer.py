@@ -61,6 +61,8 @@ class ParamSet:
     iv_rank_window_days: int = 365    # lookback for IV rank calculation
     min_free_equity_fraction: float = 0.25  # minimum buffer kept free at all times
     starting_equity: float = 10000.0        # backtest starting account size (USD)
+    use_regime_filter: int = 0              # 0=off, 1=on (skip puts below MA)
+    regime_ma_days: int = 50               # MA lookback for regime filter
 
 
 # Define the valid range for each parameter during evolution / sweep
@@ -76,7 +78,9 @@ PARAM_RANGES: dict[str, tuple[float, float, float]] = {
     "premium_fraction_of_spot": (0.008, 0.030, 0.002),
     "iv_rank_window_days":      (90,   365,  30),
     "min_free_equity_fraction": (0.00, 0.40, 0.05),   # 0% to 40% buffer
-    "starting_equity":          (1000, 100000, 5000),   # $1k to $100k account size
+    "starting_equity":          (1000, 100000, 5000),  # $1k to $100k account size
+    "use_regime_filter":        (0, 1, 1),             # 0=off vs 1=on
+    "regime_ma_days":           (20, 100, 10),         # MA window in trading days
 }
 
 # Fitness function weights (tune to your risk preference)
@@ -311,6 +315,8 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
         cfg.strategy.target_delta_max = params.target_delta_max
         cfg.strategy.min_dte = int(params.min_dte)
         cfg.strategy.max_dte = int(params.max_dte)
+        cfg.strategy.use_regime_filter = int(params.use_regime_filter)
+        cfg.strategy.regime_ma_days = int(params.regime_ma_days)
         cfg.sizing.max_equity_per_leg = params.max_equity_per_leg
         cfg.sizing.min_free_equity_fraction = params.min_free_equity_fraction
         cfg.backtest.approx_otm_offset = params.approx_otm_offset
@@ -507,6 +513,8 @@ class Optimizer:
             premium_fraction_of_spot=cfg.backtest.premium_fraction_of_spot,
             min_free_equity_fraction=cfg.sizing.min_free_equity_fraction,
             starting_equity=cfg.backtest.starting_equity,
+            use_regime_filter=int(getattr(cfg.strategy, "use_regime_filter", 0)),
+            regime_ma_days=int(getattr(cfg.strategy, "regime_ma_days", 50)),
         )
 
         params_to_sweep = [target_param] if target_param else list(PARAM_RANGES.keys())
@@ -718,6 +726,279 @@ class Optimizer:
         self.close_pool()
         return ParamSet()  # fallback to defaults
 
+    # ── Walk-forward validation ───────────────────────────────────────────────
+
+    def _apply_params_to_cfg(self, params: ParamSet) -> None:
+        """Apply a ParamSet directly to the module-level cfg (main process only)."""
+        from config import cfg as _cfg
+        _cfg.strategy.iv_rank_threshold = params.iv_rank_threshold
+        _cfg.strategy.target_delta_min = params.target_delta_min
+        _cfg.strategy.target_delta_max = params.target_delta_max
+        _cfg.strategy.min_dte = int(params.min_dte)
+        _cfg.strategy.max_dte = int(params.max_dte)
+        _cfg.strategy.use_regime_filter = int(params.use_regime_filter)
+        _cfg.strategy.regime_ma_days = int(params.regime_ma_days)
+        _cfg.sizing.max_equity_per_leg = params.max_equity_per_leg
+        _cfg.sizing.min_free_equity_fraction = params.min_free_equity_fraction
+        _cfg.backtest.approx_otm_offset = params.approx_otm_offset
+        _cfg.backtest.premium_fraction_of_spot = params.premium_fraction_of_spot
+        _cfg.backtest.starting_equity = params.starting_equity
+
+    def run_walk_forward(self) -> None:
+        """
+        Walk-forward validation: split history 75% in-sample / 25% out-of-sample,
+        run the best_genome on both, compare against a baseline ParamSet.
+
+        Saves results to data/optimizer/walk_forward_results.json.
+        """
+        import yaml as _yaml
+
+        best_path = self._results_dir / "best_genome.yaml"
+        if not best_path.exists():
+            raise FileNotFoundError(
+                "No best_genome.yaml found — run 'evolve' mode first."
+            )
+
+        with open(best_path) as f:
+            best_genome_dict = _yaml.safe_load(f)
+        best_params = ParamSet(**{k: v for k, v in best_genome_dict.items()
+                                  if k in ParamSet.__dataclass_fields__})
+
+        logger.info("Walk-forward: loading market data...")
+        ohlcv_df, iv_history = self._load_data()
+
+        from backtester import Backtester
+        bt = Backtester()
+        full_df = bt._build_ranked_df(
+            ohlcv_df, iv_history, int(best_params.iv_rank_window_days)
+        )
+
+        n = len(full_df)
+        split_idx = int(n * 0.75)
+        in_df  = full_df.iloc[:split_idx].reset_index(drop=True)
+        out_df = full_df.iloc[split_idx:].reset_index(drop=True)
+
+        logger.info(
+            f"Split: in-sample {len(in_df)} days "
+            f"({in_df['date'].iloc[0].date()} – {in_df['date'].iloc[-1].date()}), "
+            f"out-of-sample {len(out_df)} days "
+            f"({out_df['date'].iloc[0].date()} – {out_df['date'].iloc[-1].date()})"
+        )
+
+        def _run_slice(params: ParamSet, df_slice: "pd.DataFrame") -> dict:
+            self._apply_params_to_cfg(params)
+            r = bt._simulate(df_slice)
+            return {
+                "fitness": fitness_score(r),
+                "sharpe": r.sharpe_ratio,
+                "total_return_pct": r.total_return_pct,
+                "max_drawdown_pct": r.max_drawdown_pct,
+                "win_rate_pct": r.win_rate_pct,
+                "num_cycles": r.num_cycles,
+            }
+
+        print("\n  Running walk-forward validation...")
+        in_best   = _run_slice(best_params, in_df)
+        out_best  = _run_slice(best_params, out_df)
+
+        baseline_params = ParamSet()  # default genome
+        in_base  = _run_slice(baseline_params, in_df)
+        out_base = _run_slice(baseline_params, out_df)
+
+        # Robustness: out-of-sample fitness / in-sample fitness (1.0 = perfect)
+        robustness = round(
+            out_best["fitness"] / in_best["fitness"]
+            if in_best["fitness"] > 0 else 0.0,
+            3,
+        )
+
+        results = {
+            "in_sample": {
+                "start_date": str(in_df["date"].iloc[0].date()),
+                "end_date":   str(in_df["date"].iloc[-1].date()),
+                "days": len(in_df),
+                **in_best,
+            },
+            "out_of_sample": {
+                "start_date": str(out_df["date"].iloc[0].date()),
+                "end_date":   str(out_df["date"].iloc[-1].date()),
+                "days": len(out_df),
+                **out_best,
+            },
+            "baseline_in":  {**in_base},
+            "baseline_out": {**out_base},
+            "robustness_score": robustness,
+        }
+
+        out_path = self._results_dir / "walk_forward_results.json"
+        with open(out_path, "w") as f:
+            json.dump(results, f, indent=2, default=str)
+        logger.info(f"Walk-forward results saved: {out_path}")
+
+        # Print summary table
+        w = 66
+        print("\n" + "=" * w)
+        print("  WALK-FORWARD VALIDATION RESULTS")
+        print("=" * w)
+        print(f"  {'Metric':<22} {'In-Sample':>12} {'Out-of-Sample':>14} {'Baseline IS':>12} {'Baseline OOS':>13}")
+        print("-" * w)
+        for key, label in [
+            ("fitness",          "Fitness"),
+            ("sharpe",           "Sharpe"),
+            ("total_return_pct", "Return %"),
+            ("max_drawdown_pct", "Max DD %"),
+            ("win_rate_pct",     "Win Rate %"),
+            ("num_cycles",       "# Trades"),
+        ]:
+            fmt = "{:+.1f}" if "pct" in key else "{:.3f}" if key in ("fitness", "sharpe") else "{:.0f}"
+            print(
+                f"  {label:<22} "
+                f"{fmt.format(in_best[key]):>12} "
+                f"{fmt.format(out_best[key]):>14} "
+                f"{fmt.format(in_base[key]):>12} "
+                f"{fmt.format(out_base[key]):>13}"
+            )
+        print("-" * w)
+        verdict = (
+            "ROBUST (minimal overfitting)" if robustness >= 0.70
+            else "MARGINAL (moderate degradation)" if robustness >= 0.40
+            else "LIKELY OVERFIT (severe OOS degradation)"
+        )
+        print(f"  Robustness score: {robustness:.3f}  →  {verdict}")
+        print("=" * w + "\n")
+
+    # ── Monte Carlo simulation ─────────────────────────────────────────────────
+
+    def run_monte_carlo(self, n_simulations: int = 200) -> None:
+        """
+        Monte Carlo validation: run N simulations with randomised start dates
+        (uniform within the first 50% of available data), same best-genome params.
+
+        Saves results to data/optimizer/monte_carlo_results.json.
+        """
+        import yaml as _yaml
+
+        best_path = self._results_dir / "best_genome.yaml"
+        if not best_path.exists():
+            raise FileNotFoundError(
+                "No best_genome.yaml found — run 'evolve' mode first."
+            )
+
+        with open(best_path) as f:
+            best_genome_dict = _yaml.safe_load(f)
+        best_params = ParamSet(**{k: v for k, v in best_genome_dict.items()
+                                  if k in ParamSet.__dataclass_fields__})
+
+        logger.info("Monte Carlo: loading market data...")
+        ohlcv_df, iv_history = self._load_data()
+
+        from backtester import Backtester
+        bt = Backtester()
+        full_df = bt._build_ranked_df(
+            ohlcv_df, iv_history, int(best_params.iv_rank_window_days)
+        )
+        self._apply_params_to_cfg(best_params)
+
+        n_rows = len(full_df)
+        max_start_idx = int(n_rows * 0.50)
+
+        logger.info(
+            f"Monte Carlo: {n_simulations} simulations, "
+            f"random starts within rows 0–{max_start_idx} of {n_rows}"
+        )
+
+        sim_results = []
+        print(f"\n  Running {n_simulations} Monte Carlo simulations...")
+        for i in range(n_simulations):
+            if i % 50 == 0:
+                print(f"    ... {i}/{n_simulations}")
+            start_idx = random.randint(0, max(max_start_idx - 1, 0))
+            slice_df = full_df.iloc[start_idx:].reset_index(drop=True)
+            if len(slice_df) < 30:
+                continue
+            try:
+                r = bt._simulate(slice_df)
+                if r.num_cycles == 0:
+                    continue
+                sim_results.append({
+                    "simulation": i,
+                    "start_date": str(slice_df["date"].iloc[0].date()),
+                    "fitness": fitness_score(r),
+                    "total_return_pct": r.total_return_pct,
+                    "sharpe_ratio": r.sharpe_ratio,
+                    "max_drawdown_pct": r.max_drawdown_pct,
+                    "win_rate_pct": r.win_rate_pct,
+                    "num_cycles": r.num_cycles,
+                })
+            except Exception as exc:
+                logger.debug(f"MC sim {i} failed: {exc}")
+
+        if not sim_results:
+            logger.error("No Monte Carlo simulations succeeded.")
+            return
+
+        # Percentile stats for key metrics
+        def _pct(vals: list[float], p: int) -> float:
+            return round(float(np.percentile(vals, p)), 4)
+
+        metrics_to_track = [
+            "fitness", "total_return_pct", "sharpe_ratio", "max_drawdown_pct"
+        ]
+        percentiles: dict[str, dict] = {}
+        for m in metrics_to_track:
+            vals = [r[m] for r in sim_results]
+            percentiles[m] = {
+                "p5":  _pct(vals, 5),
+                "p25": _pct(vals, 25),
+                "p50": _pct(vals, 50),
+                "p75": _pct(vals, 75),
+                "p95": _pct(vals, 95),
+            }
+
+        profitable = sum(1 for r in sim_results if r["total_return_pct"] > 0)
+        pct_profitable = round(profitable / len(sim_results) * 100, 1)
+        p5_sharpe = percentiles["sharpe_ratio"]["p5"]
+
+        output = {
+            "n_simulations_requested": n_simulations,
+            "n_simulations_completed": len(sim_results),
+            "percentiles": percentiles,
+            "simulations": sim_results,
+            "summary": {
+                "pct_profitable": pct_profitable,
+                "median_return": percentiles["total_return_pct"]["p50"],
+                "p5_return": percentiles["total_return_pct"]["p5"],
+                "median_sharpe": percentiles["sharpe_ratio"]["p50"],
+                "p5_sharpe": p5_sharpe,
+            },
+        }
+
+        out_path = self._results_dir / "monte_carlo_results.json"
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2, default=str)
+        logger.info(f"Monte Carlo results saved: {out_path}")
+
+        # Verdict
+        if p5_sharpe > 0.5:
+            verdict = "Strategy is robust"
+        elif p5_sharpe >= 0.0:
+            verdict = "Strategy is marginal"
+        else:
+            verdict = "Strategy fails under stress"
+
+        w = 55
+        print("\n" + "=" * w)
+        print(f"  MONTE CARLO RESULTS  ({len(sim_results)} simulations)")
+        print("=" * w)
+        print(f"  Median return:        {percentiles['total_return_pct']['p50']:+.1f}%")
+        print(f"  5th-pctile return:    {percentiles['total_return_pct']['p5']:+.1f}%")
+        print(f"  Profitable runs:      {pct_profitable:.1f}%")
+        print(f"  Median Sharpe:        {percentiles['sharpe_ratio']['p50']:.2f}")
+        print(f"  5th-pctile Sharpe:    {p5_sharpe:.2f}")
+        print("-" * w)
+        print(f"  Verdict: {verdict}")
+        print("=" * w + "\n")
+
     # ── Output ────────────────────────────────────────────────────────────────
 
     def _save_sweep_results(self, results: dict[str, list[dict]]) -> None:
@@ -828,12 +1109,18 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python optimizer.py --mode sweep                 # sweep all params
+  python optimizer.py --mode sweep                        # sweep all params
   python optimizer.py --mode sweep --param iv_rank_threshold
   python optimizer.py --mode evolve --pop 20 --gen 8
+  python optimizer.py --mode walk_forward                 # requires best_genome.yaml
+  python optimizer.py --mode monte_carlo --simulations 200
         """,
     )
-    parser.add_argument("--mode", choices=["sweep", "evolve"], default="sweep")
+    parser.add_argument(
+        "--mode",
+        choices=["sweep", "evolve", "walk_forward", "monte_carlo"],
+        default="sweep",
+    )
     parser.add_argument("--param", type=str, default=None,
                         help="For sweep mode: which parameter to sweep (default: all)")
     parser.add_argument("--population", "--pop", dest="population", type=int, default=20,
@@ -849,6 +1136,8 @@ Examples:
     parser.add_argument("--no-experience", action="store_true", default=False,
                         help="Ignore experience.jsonl calibration (use pure backtest fitness)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel worker processes")
+    parser.add_argument("--simulations", type=int, default=200,
+                        help="Number of Monte Carlo simulations (default: 200)")
     args = parser.parse_args()
 
     # Setup minimal logging
@@ -883,6 +1172,12 @@ Examples:
         with open(out_path, "w") as f:
             yaml.dump(asdict(best), f, default_flow_style=False)
         print(f"\n  Best genome saved to {out_path} — copy values into config.yaml")
+
+    elif args.mode == "walk_forward":
+        opt.run_walk_forward()
+
+    elif args.mode == "monte_carlo":
+        opt.run_monte_carlo(n_simulations=args.simulations)
 
 
 if __name__ == "__main__":
