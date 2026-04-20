@@ -1179,11 +1179,6 @@ def _render_optimizer_results(is_sweep: bool) -> None:
                         x=_xs, y=_ys, mode="lines+markers",
                         marker=dict(size=7, color="#58a6ff"),
                         line=dict(color="#58a6ff", width=2),
-                        hovertemplate=(
-                            f"<b>{_pname}</b>: %{{x}}<br>"
-                            "Fitness: %{y:.4f}<br>"
-                            "Win Rate: " + str([f"{r['win_rate_pct']:.1f}%" for r in _valid]).replace("'", "") + "<extra></extra>"
-                        ),
                         customdata=[[r["win_rate_pct"], r["total_return_pct"],
                                      r["sharpe_ratio"], r["num_cycles"]]
                                     for r in _valid],
