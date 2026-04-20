@@ -55,6 +55,39 @@ export interface OptimizerSummary {
   monte_carlo: Record<string, unknown> | null
   walk_forward: Record<string, unknown> | null
   reconciliation: Record<string, unknown> | null
+  last_sweep_timestamp: string | null
+  sweep_params_count: number
+}
+
+export interface SweepEntry {
+  value: number
+  fitness: number
+  sharpe: number
+  return_pct: number
+  win_rate: number
+  drawdown: number
+}
+
+export interface SweepResults {
+  params: string[]
+  results: Record<string, SweepEntry[]>
+  best_per_param: Record<string, { value: number; fitness: number }>
+  timestamp: string | null
+}
+
+export interface EvolveGenome {
+  fitness: number
+  sharpe: number
+  return_pct: number
+  win_rate: number
+  drawdown: number
+  num_cycles: number
+}
+
+export interface EvolveResults {
+  top_genomes: EvolveGenome[]
+  total_evaluated: number
+  timestamp: string | null
 }
 
 export interface BotConfig {
@@ -98,6 +131,8 @@ export const getEquity = () => request<EquityData>('/equity')
 export const getTrades = () => request<Trade[]>('/trades')
 export const getOptimizerSummary = () => request<OptimizerSummary>('/optimizer/summary')
 export const getOptimizerRunning = () => request<{ running: boolean }>('/optimizer/running')
+export const getSweepResults  = () => request<SweepResults>('/optimizer/sweep_results')
+export const getEvolveResults = () => request<EvolveResults>('/optimizer/evolve_results')
 export const getConfig = () => request<BotConfig>('/config')
 
 export const startBot = () => request<{ ok: boolean; message: string }>('/controls/start', { method: 'POST' })
