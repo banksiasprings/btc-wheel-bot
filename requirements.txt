@@ -16,6 +16,10 @@ plotly>=5.18.0
 # Dashboard
 streamlit>=1.32.0
 
+# Mobile API
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
 # Config / secrets
 pyyaml>=6.0.1
 python-dotenv>=1.0.0
