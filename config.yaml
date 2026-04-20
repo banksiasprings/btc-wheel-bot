@@ -1,130 +1,57 @@
-# BTC Wheel Bot — Configuration
-# All strategy parameters and thresholds live here.
-# Override with environment variables (see .env.example) or CLI flags.
-
-# ── Deribit Connection ─────────────────────────────────────────────────────────
 deribit:
-  testnet: true                    # true = testnet, false = mainnet
-  ws_url_testnet: "wss://test.deribit.com/ws/api/v2"
-  ws_url_mainnet: "wss://www.deribit.com/ws/api/v2"
-  rest_url_testnet: "https://test.deribit.com/api/v2"
-  rest_url_mainnet: "https://www.deribit.com/api/v2"
-  request_timeout: 10              # seconds
-  currency: "BTC"
-
-# ── Strategy ───────────────────────────────────────────────────────────────────
+  testnet: true
+  ws_url_testnet: wss://test.deribit.com/ws/api/v2
+  ws_url_mainnet: wss://www.deribit.com/ws/api/v2
+  rest_url_testnet: https://test.deribit.com/api/v2
+  rest_url_mainnet: https://www.deribit.com/api/v2
+  request_timeout: 10
+  currency: BTC
 strategy:
-  # IV rank threshold: only sell when current IV rank > this value (0–1)
-  iv_rank_threshold: 0.50
-
-  # Delta range for strike selection
-  target_delta_min: 0.15
-  target_delta_max: 0.30
-
-  # Preferred expiry types (ranked by preference)
-  expiry_preference: ["weekly", "monthly"]
-
-  # Minimum days-to-expiry when opening a position
-  min_dte: 5
-  max_dte: 35
-
-  # Alternating cycle: start with puts
-  initial_cycle: "put"             # "put" | "call"
-
-  # Post-expiry execution time (UTC hour)
+  iv_rank_threshold: 0.306
+  target_delta_min: 0.1453
+  target_delta_max: 0.2222
+  expiry_preference:
+  - weekly
+  - monthly
+  min_dte: 11
+  max_dte: 18
+  initial_cycle: put
   expiry_execution_hour: 8
-
-  # Number of top liquid strikes to consider
   liquidity_top_n: 100
-
-# ── Position Sizing ────────────────────────────────────────────────────────────
 sizing:
-  # Maximum fraction of account equity to risk per leg
-  max_equity_per_leg: 0.05         # 5%
-
-  # Maximum simultaneous open legs
+  max_equity_per_leg: 0.1182
   max_open_legs: 1
-
-  # Collateral buffer (1.5 = 150%)
-  collateral_buffer: 1.00
-
-  # Minimum fraction of equity that must remain FREE (unreserved) after opening any new leg.
-  # e.g. 0.25 = always keep 25% of account unencumbered as a liquidity buffer.
-  # Set to 0.0 to disable this check.
+  collateral_buffer: 1.0
   min_free_equity_fraction: 0.25
-
-  # Contract size in BTC (Deribit minimum lot = 0.1 BTC)
   contract_size_btc: 0.1
-
-# ── Risk Management ────────────────────────────────────────────────────────────
+  use_regime_filter: false
+  regime_ma_days: 50
 risk:
-  # Roll/close if position delta exceeds this (absolute value)
-  max_adverse_delta: 0.40
-
-  # Roll/close if unrealized loss exceeds this fraction of account
-  max_loss_per_leg: 0.02           # 2%
-
-  # Pause all trading if daily drawdown exceeds this
-  max_daily_drawdown: 0.10         # 10%
-
-  # Emergency kill switch — bot checks for this file every loop
-  kill_switch_file: "KILL_SWITCH"
-
-# ── Execution Loop ─────────────────────────────────────────────────────────────
+  max_adverse_delta: 0.4
+  max_loss_per_leg: 0.02
+  max_daily_drawdown: 0.1
+  kill_switch_file: KILL_SWITCH
 execution:
-  # Main loop poll interval (seconds)
   poll_interval: 60
-
-  # Order confirmation timeout (seconds)
   order_confirm_timeout: 30
-
-  # Slippage tolerance (fraction of mid price)
   slippage_tolerance: 0.005
-
-# ── Backtester ─────────────────────────────────────────────────────────────────
 backtest:
-  # Starting notional account value (USD)
   starting_equity: 10000.0
-
-  # How far back to simulate (months)
   lookback_months: 12
-
-  # Simulated transaction cost per contract (USD)
-  transaction_cost: 0.50
-
-  # Approximate delta for simulated strike (fraction of ATM)
-  # 0.25 delta OTM put ≈ strike at ATM × (1 - approx_otm_offset)
-  approx_otm_offset: 0.08          # ~8% OTM for ~0.25 delta
-
-  # Option premium as fraction of underlying (rough simulation)
-  # Real model uses IV, DTE, strike; this is the fallback
-  premium_fraction_of_spot: 0.015  # ~1.5% of spot price per week
-
-  # Annualised risk-free rate for Sharpe calculation
+  transaction_cost: 0.5
+  approx_otm_offset: 0.1168
+  premium_fraction_of_spot: 0.0193
   risk_free_rate: 0.04
-
-  # Output paths
-  results_image: "backtest_results.png"
-  results_csv: "data/backtest_trades.csv"
-
-# ── AI Overseer ───────────────────────────────────────────────────────────────
+  results_image: backtest_results.png
+  results_csv: data/backtest_trades.csv
 overseer:
-  enabled: true                    # set false to disable LLM oversight entirely
-  check_interval_minutes: 60       # how often to run the LLM check (minutes)
-  # LLM backend selected automatically from env vars:
-  #   GEMINI_API_KEY    → Google Gemini Flash (recommended, free tier)
-  #   ANTHROPIC_API_KEY → Claude Haiku
-  #   OPENAI_API_KEY    → GPT-4o-mini
-  # If no key is set, the overseer is disabled regardless of `enabled` above.
-  #
-  # Thresholds that trigger a HALT recommendation to the LLM:
-  drawdown_warning_threshold: 0.05  # warn LLM when drawdown > 50% of max_daily_drawdown
-  iv_spike_warning_threshold: 0.85  # warn LLM when IV rank > this value
-
-# ── Logging ────────────────────────────────────────────────────────────────────
+  enabled: true
+  check_interval_minutes: 60
+  drawdown_warning_threshold: 0.05
+  iv_spike_warning_threshold: 0.85
 logging:
-  level: "INFO"                    # DEBUG | INFO | WARNING | ERROR
-  rotation: "1 day"
-  retention: "30 days"
-  log_dir: "logs"
-  trade_log_csv: "data/trades.csv"
+  level: INFO
+  rotation: 1 day
+  retention: 30 days
+  log_dir: logs
+  trade_log_csv: data/trades.csv
