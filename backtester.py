@@ -393,11 +393,66 @@ class Backtester:
 
         return self._simulate(df)
 
+    def _build_ranked_df(
+        self,
+        ohlcv_df: pd.DataFrame,
+        iv_history: list,
+        iv_window: int = 365,
+    ) -> pd.DataFrame:
+        """
+        Build the merged + IV-ranked DataFrame from pre-fetched data WITHOUT
+        trimming to lookback_months. Used by walk-forward and Monte Carlo
+        validation so callers can slice the data themselves.
+        """
+        iv_df = None
+        if iv_history and len(iv_history) >= 60:
+            _raw = pd.DataFrame(iv_history, columns=["ts_ms", "iv"])
+            _raw["date"] = pd.to_datetime(_raw["ts_ms"], unit="ms", utc=True).dt.normalize()
+            _daily = (
+                _raw.sort_values("date")
+                .drop_duplicates("date")
+                .reset_index(drop=True)[["date", "iv"]]
+                .copy()
+            )
+            if len(_daily) >= 60:
+                iv_df = _daily
+        if iv_df is None:
+            iv_df = self._synthesise_iv(ohlcv_df)
+
+        df = (
+            pd.merge(ohlcv_df, iv_df, on="date", how="inner")
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
+
+        window  = min(iv_window, max(len(df) - 1, 1))
+        min_per = min(30, window)
+
+        def _iv_rank_fn(x: pd.Series) -> float:
+            lo, hi = x.min(), x.max()
+            return (x.iloc[-1] - lo) / (hi - lo) * 100.0 if hi > lo else 50.0
+
+        df["iv_rank"] = df["iv"].rolling(window, min_periods=min_per).apply(
+            _iv_rank_fn, raw=False
+        )
+        return df.dropna(subset=["iv_rank"]).reset_index(drop=True)
+
     def _simulate(self, df: pd.DataFrame) -> BacktestResults:
         """
         Core simulation loop — shared by run() and run_with_data().
 
         Expects a DataFrame with columns: date, close, iv, iv_rank.
+
+        DRAWDOWN FIX (2026-04): Previously, `equity` was only updated when a
+        position closed (expiry or roll breach), so equity_curve stayed flat
+        while a short put was open — even if BTC dropped 30% intra-cycle.
+        This caused max_drawdown to be severely understated (e.g. -2% instead
+        of the true -20%+ when a deep-ITM put was held to expiry).
+
+        Fix: track `_mtm_unreal` = unrealized P&L from the open leg each day.
+        Append `equity + _mtm_unreal` (mark-to-market equity) to equity_curve
+        and use it for the drawdown guard, so peak-to-trough is computed on the
+        true running portfolio value, not just closed-trade P&L.
         """
         equity      = self._cfg.backtest.starting_equity
         peak_equity = equity
@@ -405,6 +460,13 @@ class Backtester:
 
         # iv_rank in data is 0-100; config threshold stored as 0-1
         iv_thresh = self._cfg.strategy.iv_rank_threshold * 100.0
+
+        # Regime filter: pre-compute MA of close prices if enabled
+        use_regime     = int(getattr(self._cfg.strategy, "use_regime_filter", 0))
+        regime_ma_days = int(getattr(self._cfg.strategy, "regime_ma_days", 50))
+        _price_ma: np.ndarray | None = None
+        if use_regime:
+            _price_ma = df["close"].rolling(regime_ma_days, min_periods=1).mean().values
 
         leg: dict | None = None
         equity_curve: list[float]    = [equity]
@@ -418,9 +480,11 @@ class Backtester:
         mid_d = (self._cfg.strategy.target_delta_min + self._cfg.strategy.target_delta_max) / 2.0
         logger.info(f"  Delta tgt : +/-{mid_d:.2f}")
         logger.info(f"  First leg : {cycle}")
+        if use_regime:
+            logger.info(f"  Regime MA : {regime_ma_days}d (filter ON)")
         logger.info("=" * 60)
 
-        for _, row in df.iterrows():
+        for idx, (_, row) in enumerate(df.iterrows()):
             date: datetime = row["date"].to_pydatetime()
             spot: float    = float(row["close"])
             iv:   float    = float(row["iv"])      # annualised % from Deribit
@@ -431,6 +495,10 @@ class Backtester:
             if spot <= 0 or iv <= 0:
                 equity_curve.append(equity)
                 continue
+
+            # Unrealized P&L from open position — non-zero only when leg is held
+            # without action this day (set in the roll-check else branch below).
+            _mtm_unreal: float = 0.0
 
             # ── Expiry settlement ──────────────────────────────────────────
             if leg is not None and date >= leg["expiry"]:
@@ -517,19 +585,31 @@ class Backtester:
                     )
                     cycle = "call" if leg["cycle"] == "put" else "put"
                     leg   = None
+                else:
+                    # Leg held — capture unrealized P&L so the equity curve
+                    # reflects the true mark-to-market portfolio value each day.
+                    _mtm_unreal = unreal_pnl
 
-            # ── Drawdown guard ─────────────────────────────────────────────
-            peak_equity = max(peak_equity, equity)
-            drawdown    = (peak_equity - equity) / peak_equity
+            # ── Mark-to-market equity (closed equity + open unrealized) ────
+            mtm_equity = equity + _mtm_unreal
+
+            # ── Drawdown guard (uses MTM equity, not just closed P&L) ──────
+            peak_equity = max(peak_equity, mtm_equity)
+            drawdown    = (peak_equity - mtm_equity) / peak_equity
             if drawdown > self._cfg.risk.max_daily_drawdown:
                 logger.warning(
                     f"[PAUSE {date.date()}] drawdown {drawdown:.1%} -- no new legs"
                 )
-                equity_curve.append(equity)
+                equity_curve.append(mtm_equity)
                 continue
 
             # ── Open new leg ───────────────────────────────────────────────
             if leg is None and ivr >= iv_thresh:
+                # Regime filter: skip opening when spot is below MA (bearish regime)
+                if use_regime and _price_ma is not None and spot < _price_ma[idx]:
+                    equity_curve.append(mtm_equity)
+                    continue
+
                 dte = self._dte()
                 T   = dte / 365.0
                 try:
@@ -537,11 +617,11 @@ class Backtester:
                     premium = self._price(cycle, spot, strike, T, iv)
                 except Exception as exc:
                     logger.debug(f"BS failed {date.date()}: {exc}")
-                    equity_curve.append(equity)
+                    equity_curve.append(mtm_equity)
                     continue
 
                 if premium <= 0 or strike <= 0:
-                    equity_curve.append(equity)
+                    equity_curve.append(mtm_equity)
                     continue
 
                 # Enforce minimum free equity buffer before opening.
@@ -552,7 +632,7 @@ class Backtester:
                 if min_free > 0 and equity > 0:
                     free_fraction_after = (equity - actual_collateral) / equity
                     if free_fraction_after < min_free:
-                        equity_curve.append(equity)
+                        equity_curve.append(mtm_equity)
                         continue
 
                 contracts  = tentative_contracts
@@ -571,7 +651,7 @@ class Backtester:
                     f"prem=${premium:,.2f}/ct yield={prem_yield:.2f}% x{contracts}"
                 )
 
-            equity_curve.append(equity)
+            equity_curve.append(mtm_equity)
 
         return self._metrics(equity, equity_curve, dates, trades)
 

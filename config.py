@@ -58,6 +58,8 @@ class StrategyConfig:
     initial_cycle: Literal["put", "call"]
     expiry_execution_hour: int
     liquidity_top_n: int
+    use_regime_filter: int = 0    # 0=off, 1=on (skip puts when spot < MA)
+    regime_ma_days: int = 50      # lookback for regime moving average
 
 
 @dataclass
@@ -175,6 +177,8 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         initial_cycle=s["initial_cycle"],
         expiry_execution_hour=int(s["expiry_execution_hour"]),
         liquidity_top_n=int(s["liquidity_top_n"]),
+        use_regime_filter=int(s.get("use_regime_filter", 0)),
+        regime_ma_days=int(s.get("regime_ma_days", 50)),
     )
 
     sz = raw["sizing"]

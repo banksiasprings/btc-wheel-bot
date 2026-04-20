@@ -37,6 +37,11 @@ strategy:
   # Number of top liquid strikes to consider
   liquidity_top_n: 100
 
+  # Regime filter: skip opening new legs when spot price is below its MA
+  # 0 = disabled, 1 = enabled
+  use_regime_filter: 0
+  regime_ma_days: 50               # lookback period for regime MA
+
 # ── Position Sizing ────────────────────────────────────────────────────────────
 sizing:
   # Maximum fraction of account equity to risk per leg
