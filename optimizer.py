@@ -76,7 +76,7 @@ PARAM_RANGES: dict[str, tuple[float, float, float]] = {
     "premium_fraction_of_spot": (0.008, 0.030, 0.002),
     "iv_rank_window_days":      (90,   365,  30),
     "min_free_equity_fraction": (0.00, 0.40, 0.05),   # 0% to 40% buffer
-    "starting_equity":          (5000, 50000, 5000),   # $5k to $50k account size
+    "starting_equity":          (1000, 100000, 5000),   # $1k to $100k account size
 }
 
 # Fitness function weights (tune to your risk preference)
