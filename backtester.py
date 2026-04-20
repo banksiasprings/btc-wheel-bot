@@ -544,14 +544,18 @@ class Backtester:
                     equity_curve.append(equity)
                     continue
 
-                # Enforce minimum free equity buffer before opening
+                # Enforce minimum free equity buffer before opening.
+                # Use the actual sized position to compute real collateral consumed.
+                tentative_contracts = self._size(equity, strike)
+                actual_collateral = tentative_contracts * strike * self._cfg.sizing.contract_size_btc
                 min_free = getattr(self._cfg.sizing, "min_free_equity_fraction", 0.0)
-                min_contract_collateral = strike * self._cfg.sizing.contract_size_btc
-                if min_free > 0 and (equity - min_contract_collateral) / equity < (1.0 - min_free):
-                    equity_curve.append(equity)
-                    continue
+                if min_free > 0 and equity > 0:
+                    free_fraction_after = (equity - actual_collateral) / equity
+                    if free_fraction_after < min_free:
+                        equity_curve.append(equity)
+                        continue
 
-                contracts  = self._size(equity, strike)
+                contracts  = tentative_contracts
                 expiry_dt  = date + timedelta(days=dte)
                 prem_yield = (premium / strike) * 100
 
