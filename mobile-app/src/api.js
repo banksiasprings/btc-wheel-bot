@@ -46,6 +46,8 @@ export const api = {
   trades:           ()      => get('/trades'),
   optimizerSummary: ()      => get('/optimizer/summary'),
   optimizerRunning: ()      => get('/optimizer/running'),
+  sweepResults:     ()      => get('/optimizer/sweep_results'),
+  evolveResults:    ()      => get('/optimizer/evolve_results'),
   config:           ()      => get('/config'),
 
   start:            ()      => post('/controls/start'),

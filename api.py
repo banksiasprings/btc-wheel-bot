@@ -209,12 +209,142 @@ def get_optimizer_summary() -> dict:
             "premium_bias": m.get("premium_bias_usd"),
         }
 
+    # Sweep metadata
+    sweep_raw = _read_json(OPT_DIR / "sweep_results.json")
+    last_sweep_ts = None
+    sweep_params_count = 0
+    if sweep_raw:
+        sweep_params_count = len(sweep_raw)
+        try:
+            last_sweep_ts = datetime.fromtimestamp(
+                (OPT_DIR / "sweep_results.json").stat().st_mtime
+            ).isoformat()
+        except Exception:
+            pass
+
     return {
-        "best_fitness":   best_fitness,
-        "best_genome":    best_genome,
-        "monte_carlo":    mc_summary,
-        "walk_forward":   wf_summary,
-        "reconciliation": recon_summary,
+        "best_fitness":        best_fitness,
+        "best_genome":         best_genome,
+        "monte_carlo":         mc_summary,
+        "walk_forward":        wf_summary,
+        "reconciliation":      recon_summary,
+        "last_sweep_timestamp": last_sweep_ts,
+        "sweep_params_count":  sweep_params_count,
+    }
+
+
+@app.get("/optimizer/sweep_results", dependencies=[Depends(_require_api_key)])
+def get_sweep_results() -> dict:
+    """Return sweep results in a clean, mobile-friendly format."""
+    raw = _read_json(OPT_DIR / "sweep_results.json")
+    if not raw:
+        return {"params": [], "results": {}, "best_per_param": {}, "timestamp": None}
+
+    results: dict[str, list[dict]] = {}
+    best_per_param: dict[str, dict] = {}
+
+    for param, rows in raw.items():
+        clean: list[dict] = []
+        best_row: dict | None = None
+        for r in rows:
+            if r.get("error"):
+                continue
+            val = r.get("params", {}).get(param)
+            if val is None:
+                continue
+            entry = {
+                "value":      round(float(val), 5),
+                "fitness":    round(float(r.get("fitness", 0)), 4),
+                "sharpe":     round(float(r.get("sharpe_ratio", 0)), 3),
+                "return_pct": round(float(r.get("total_return_pct", 0)), 2),
+                "win_rate":   round(float(r.get("win_rate_pct", 0)), 1),
+                "drawdown":   round(float(r.get("max_drawdown_pct", 0)), 2),
+            }
+            clean.append(entry)
+            if best_row is None or entry["fitness"] > best_row["fitness"]:
+                best_row = entry
+        results[param] = clean
+        if best_row:
+            best_per_param[param] = {"value": best_row["value"], "fitness": best_row["fitness"]}
+
+    timestamp = None
+    try:
+        timestamp = datetime.fromtimestamp(
+            (OPT_DIR / "sweep_results.json").stat().st_mtime
+        ).isoformat()
+    except Exception:
+        pass
+
+    return {
+        "params":        list(results.keys()),
+        "results":       results,
+        "best_per_param": best_per_param,
+        "timestamp":     timestamp,
+    }
+
+
+@app.get("/optimizer/evolve_results", dependencies=[Depends(_require_api_key)])
+def get_evolve_results() -> dict:
+    """Return top 10 genomes from evolution leaderboard."""
+    import csv as _csv
+
+    # Prefer the leaderboard CSV (pre-sorted by fitness)
+    csv_path = OPT_DIR / "evolution_leaderboard.csv"
+    rows: list[dict] = []
+
+    if csv_path.exists():
+        try:
+            with open(csv_path, newline="") as f:
+                reader = _csv.DictReader(f)
+                for row in reader:
+                    try:
+                        rows.append({
+                            "fitness":    round(float(row.get("fitness", 0)), 4),
+                            "sharpe":     round(float(row.get("sharpe_ratio", 0)), 3),
+                            "return_pct": round(float(row.get("total_return_pct", 0)), 2),
+                            "win_rate":   round(float(row.get("win_rate_pct", 0)), 1),
+                            "drawdown":   round(float(row.get("max_drawdown_pct", 0)), 2),
+                            "num_cycles": int(float(row.get("num_cycles", 0))),
+                        })
+                    except (ValueError, TypeError):
+                        continue
+        except Exception:
+            pass
+
+    # Fallback: derive leaderboard from evolution_results.json
+    if not rows:
+        evo_raw = _read_json(OPT_DIR / "evolution_results.json")
+        if evo_raw:
+            all_bots: list[dict] = [b for gen in evo_raw for b in gen]
+            all_bots.sort(key=lambda r: r.get("fitness", 0), reverse=True)
+            for b in all_bots:
+                try:
+                    rows.append({
+                        "fitness":    round(float(b.get("fitness", 0)), 4),
+                        "sharpe":     round(float(b.get("sharpe_ratio", 0)), 3),
+                        "return_pct": round(float(b.get("total_return_pct", 0)), 2),
+                        "win_rate":   round(float(b.get("win_rate_pct", 0)), 1),
+                        "drawdown":   round(float(b.get("max_drawdown_pct", 0)), 2),
+                        "num_cycles": int(float(b.get("num_cycles", 0))),
+                    })
+                except (ValueError, TypeError):
+                    continue
+
+    # Already sorted; take top 10
+    top10 = rows[:10]
+
+    timestamp = None
+    try:
+        path = csv_path if csv_path.exists() else OPT_DIR / "evolution_results.json"
+        if path.exists():
+            timestamp = datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except Exception:
+        pass
+
+    return {
+        "top_genomes": top10,
+        "total_evaluated": len(rows),
+        "timestamp": timestamp,
     }
 
 
