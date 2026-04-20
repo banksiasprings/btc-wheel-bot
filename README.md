@@ -1,5 +1,50 @@
 # btc-wheel-bot
 
+## Mobile App
+
+Monitor and control the bot from your phone via a PWA that talks to the local FastAPI server through a Cloudflare Tunnel.
+
+### Architecture
+
+```
+Phone → Cloudflare Tunnel → FastAPI (api.py :8765) → bot state files / config.yaml
+```
+
+### Setup (one-time)
+
+**1. Start the API server** (on your Mac):
+```bash
+/usr/local/bin/python3.11 -m uvicorn api:app --host 0.0.0.0 --port 8765
+```
+On first run it auto-generates `WHEEL_API_KEY` in `.env` — note the value.
+
+Or start both bot + API together:
+```bash
+./scripts/start_bot_with_api.sh --mode paper
+```
+
+**2. Start the Cloudflare Tunnel** (in a separate terminal):
+```bash
+./scripts/start_tunnel.sh
+```
+Copy the `https://xxx.trycloudflare.com` URL it prints.
+
+**3. Open the PWA** on your phone:
+```
+https://banksiasprings.github.io/btc-wheel-bot
+```
+Enter the tunnel URL and API key on the setup screen. Tap "Add to Home Screen" to install as a PWA.
+
+### API key
+
+The key lives in `.env` as `WHEEL_API_KEY`. To show it:
+```bash
+grep WHEEL_API_KEY .env
+```
+
+---
+
+
 A modular Python bot for a Bitcoin options **wheel-strategy** (premium-collection) on Deribit.
 
 Sells ~0.20–0.30 delta OTM puts (or calls) to harvest theta/vega decay.  
