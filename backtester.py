@@ -336,18 +336,30 @@ class Backtester:
                      config default so the optimizer can tune this independently.
         """
         # ── Build IV DataFrame ────────────────────────────────────────────
+        # Note: Deribit get_historical_volatility returns intra-day (hourly)
+        # data, so len(iv_history) may be large but daily unique rows may be
+        # very few. After deduplication check we have ≥ 60 daily rows;
+        # otherwise fall back to synthesised IV from realised volatility.
+        iv_df = None
         if iv_history and len(iv_history) >= 60:
-            iv_df = pd.DataFrame(iv_history, columns=["ts_ms", "iv"])
-            iv_df["date"] = (
-                pd.to_datetime(iv_df["ts_ms"], unit="ms", utc=True).dt.normalize()
+            _raw = pd.DataFrame(iv_history, columns=["ts_ms", "iv"])
+            _raw["date"] = (
+                pd.to_datetime(_raw["ts_ms"], unit="ms", utc=True).dt.normalize()
             )
-            iv_df = (
-                iv_df.sort_values("date")
+            _daily = (
+                _raw.sort_values("date")
                 .drop_duplicates("date")
                 .reset_index(drop=True)[["date", "iv"]]
                 .copy()
             )
-        else:
+            if len(_daily) >= 60:
+                iv_df = _daily
+            else:
+                logger.debug(
+                    f"Deribit IV history has only {len(_daily)} daily rows after "
+                    f"dedup — falling back to synthesised IV"
+                )
+        if iv_df is None:
             iv_df = self._synthesise_iv(ohlcv_df)
 
         # ── Merge price + IV ──────────────────────────────────────────────
