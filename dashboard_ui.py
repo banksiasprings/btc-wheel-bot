@@ -1344,10 +1344,20 @@ def tab_recommendations() -> None:
     _cal_level  = _exp_summary.get("calibration_level", "none")
     _cal_badge  = {"none": "🔴 None", "low": "🟡 Low (5-14)", "medium": "🟢 Medium (15-29)", "high": "💎 High (30+)"}.get(_cal_level, "🔴 None")
     _exp_c1, _exp_c2, _exp_c3, _exp_c4 = st.columns(4)
-    metric_card("Trades Learned", str(_n_trades),                                                      _exp_c1)
-    metric_card("Actual Win Rate",  f"{_exp_summary.get('win_rate', 0)*100:.1f}%" if _n_trades > 0 else "—", _exp_c2)
-    metric_card("Avg P&L / Trade",  f"${_exp_summary.get('avg_pnl_usd', 0):+,.0f}" if _n_trades > 0 else "—", _exp_c3)
-    metric_card("Calibration",      _cal_badge,                                                         _exp_c4)
+    with _exp_c1:
+        metric_card("Trades Learned", str(_n_trades))
+    with _exp_c2:
+        _wr_val = _exp_summary.get("win_rate", 0)
+        _wr_str = f"{_wr_val * 100:.1f}%" if _n_trades > 0 else "—"
+        _wr_col = "green" if _n_trades > 0 and _wr_val >= 0.6 else ("amber" if _n_trades > 0 else "")
+        metric_card("Actual Win Rate", _wr_str, _wr_col)
+    with _exp_c3:
+        _pnl_val = _exp_summary.get("avg_pnl_usd", 0)
+        _pnl_str = f"${_pnl_val:+,.0f}" if _n_trades > 0 else "—"
+        _pnl_col = "green" if _n_trades > 0 and _pnl_val >= 0 else ("red" if _n_trades > 0 else "")
+        metric_card("Avg P&L / Trade", _pnl_str, _pnl_col)
+    with _exp_c4:
+        metric_card("Calibration", _cal_badge)
 
     if _n_trades == 0:
         st.info("No live/paper trades recorded yet. Once the bot closes its first trade, experience data will accumulate here and the optimizer will automatically blend it into future runs.")
