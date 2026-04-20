@@ -56,6 +56,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Serve PWA static files ────────────────────────────────────────────────────
+# The built React app lives in mobile-app/dist — serve it at root so the
+# phone app loads directly from the tunnel URL.
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+_STATIC_DIR = _REPO_ROOT / "mobile-app" / "dist"
+
+if _STATIC_DIR.exists():
+    # Serve the SPA — catch-all so React Router works on refresh
+    @app.get("/app/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file = _STATIC_DIR / full_path
+        if file.exists() and file.is_file():
+            return FileResponse(file)
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_root():
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+    print(f"[api.py] Serving PWA from {_STATIC_DIR}")
+
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)

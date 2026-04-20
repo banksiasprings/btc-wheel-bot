@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  base: '/btc-wheel-bot/',
+  base: '/',
   plugins: [
     react(),
     VitePWA({
@@ -16,8 +16,8 @@ export default defineConfig({
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
-        start_url: '/btc-wheel-bot/',
-        scope: '/btc-wheel-bot/',
+        start_url: '/',
+        scope: '/',
         icons: [
           {
             src: 'wheel-192.svg',
@@ -38,7 +38,7 @@ export default defineConfig({
     }),
   ],
   build: {
-    outDir: 'build',
+    outDir: 'dist',
     sourcemap: false,
   },
 })
