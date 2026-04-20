@@ -258,7 +258,44 @@ The dashboard shows the mode from the heartbeat. "testnet mode" in the dashboard
 ├── bot_heartbeat.json   (written every tick by bot.py)
 ├── data/
 │   ├── trades.csv       (appended on every closed trade)
-│   └── tick_log.csv     (appended every tick)
+│   ├── tick_log.csv     (appended every tick)
+│   └── experience.jsonl (appended on every closed trade for adaptive learning)
 └── logs/
     └── *.log            (loguru rotating logs)
 ```
+
+---
+
+## Adaptive Learning Architecture
+
+The system accumulates real trading experience and feeds it back into the optimizer over time.
+
+### Data flow
+```
+bot.py → _close_position() → data/experience.jsonl (one JSON line per trade)
+                                    ↓
+optimizer.py → load_experience_calibration() → blends with backtest fitness
+                                    ↓
+dashboard_ui.py → tab_recommendations() → shows backtest vs reality comparison
+```
+
+### experience.jsonl schema
+Each line is a JSON object:
+- `timestamp`: Unix epoch when trade closed
+- `mode`: "paper" | "testnet" | "live"
+- `params`: full ParamSet values active when trade was opened
+- `conditions_at_open`: iv_rank, btc_price, option_type, strike, dte_at_entry
+- `outcome`: pnl_usd, pnl_pct, hold_days, reason, win (bool)
+
+### Calibration blending
+At < 5 trades: no calibration (pure backtest)
+At 5-9 trades: 80% backtest / 20% experience
+At 10-19 trades: 60% / 40%
+At 20-29 trades: 50/50
+At 30+ trades: 30% backtest / 70% experience (experience dominates)
+
+### Cross-file dependency
+- `bot.py` writes experience.jsonl — wrapped in try/except, NEVER interrupts trade close
+- `optimizer.py` reads it via `load_experience_calibration()` in `_run_parallel()`
+- `dashboard_ui.py` reads it directly in `tab_recommendations()` and imports `summarise_experience` from optimizer.py
+- Use `--no-experience` flag on optimizer CLI to bypass calibration for pure backtest mode
