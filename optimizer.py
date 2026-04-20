@@ -118,17 +118,181 @@ def fitness_score(results: "BacktestResults") -> float:  # noqa: F821
     return round(score, 4)
 
 
+# ── Experience calibration ────────────────────────────────────────────────────
+
+
+def load_experience_calibration(experience_path: Path) -> dict:
+    """
+    Read experience.jsonl and compute actual performance per (param_name, value) bucket.
+    Returns {} if file missing or < 5 records.
+
+    Return format: {("iv_rank_threshold", 0.60): {"win_rate": 0.72, "avg_pnl_pct": 0.043, "n": 8}, ...}
+    """
+    if not experience_path.exists():
+        return {}
+
+    records = []
+    try:
+        with open(experience_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+    except Exception:
+        return {}
+
+    if len(records) < 5:
+        return {}
+
+    # Group by (param_name, rounded_value) for each param in PARAM_RANGES
+    from collections import defaultdict
+    buckets: dict[tuple, list] = defaultdict(list)
+
+    for rec in records:
+        params = rec.get("params", {})
+        outcome = rec.get("outcome", {})
+        win = outcome.get("win", False)
+        pnl_pct = outcome.get("pnl_pct", 0.0)
+
+        for param_name in PARAM_RANGES:
+            if param_name in params:
+                val = params[param_name]
+                # Round to step size to bucket similar values together
+                step = PARAM_RANGES[param_name][2]
+                rounded = round(round(val / step) * step, 6)
+                buckets[(param_name, rounded)].append({"win": win, "pnl_pct": pnl_pct})
+
+    calibration = {}
+    for (param_name, val), trades in buckets.items():
+        if len(trades) >= 2:
+            calibration[(param_name, val)] = {
+                "win_rate": sum(1 for t in trades if t["win"]) / len(trades),
+                "avg_pnl_pct": sum(t["pnl_pct"] for t in trades) / len(trades),
+                "n": len(trades),
+            }
+
+    return calibration
+
+
+def apply_experience_blend(
+    historical_fitness: float,
+    genome_params: dict,
+    calibration: dict,
+    total_records: int,
+) -> float:
+    """
+    Blend historical backtest fitness with actual experience performance.
+
+    Blend ratio shifts as experience grows:
+      < 10 trades:  80% historical, 20% experience
+      10-19 trades: 60% historical, 40% experience
+      20-29 trades: 50/50
+      30+ trades:   30% historical, 70% experience (experience dominates)
+    """
+    # Find matching experience buckets for this genome's params
+    experience_scores = []
+
+    for param_name, (p_min, p_max, step) in PARAM_RANGES.items():
+        val = genome_params.get(param_name)
+        if val is None:
+            continue
+        rounded = round(round(val / step) * step, 6)
+        key = (param_name, rounded)
+        if key in calibration and calibration[key]["n"] >= 2:
+            entry = calibration[key]
+            # Normalise: win_rate already 0-1, pnl_pct normalise to ~[0,1]
+            win_norm = entry["win_rate"]
+            pnl_norm = float(np.clip(entry["avg_pnl_pct"] / 0.05, 0, 1))
+            exp_score = (0.6 * win_norm + 0.4 * pnl_norm) * 10.0
+            experience_scores.append(exp_score)
+
+    if not experience_scores:
+        return historical_fitness
+
+    avg_exp_score = sum(experience_scores) / len(experience_scores)
+
+    # Determine blend ratio
+    if total_records < 10:
+        hist_w, exp_w = 0.80, 0.20
+    elif total_records < 20:
+        hist_w, exp_w = 0.60, 0.40
+    elif total_records < 30:
+        hist_w, exp_w = 0.50, 0.50
+    else:
+        hist_w, exp_w = 0.30, 0.70
+
+    return round(hist_w * historical_fitness + exp_w * avg_exp_score, 4)
+
+
+def summarise_experience(experience_path: Path) -> dict:
+    """Compute summary stats from experience.jsonl for dashboard display."""
+    if not experience_path.exists():
+        return {"total_trades": 0, "calibration_level": "none"}
+
+    records = []
+    try:
+        with open(experience_path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+    except Exception:
+        return {"total_trades": 0, "calibration_level": "none"}
+
+    n = len(records)
+    if n == 0:
+        return {"total_trades": 0, "calibration_level": "none"}
+
+    wins = [r for r in records if r.get("outcome", {}).get("win", False)]
+    pnls = [r.get("outcome", {}).get("pnl_usd", 0) for r in records]
+    pnl_pcts = [r.get("outcome", {}).get("pnl_pct", 0) for r in records]
+
+    last_ts = max(r.get("timestamp", 0) for r in records)
+
+    # Best iv_rank_threshold by win rate (min 3 trades)
+    from collections import defaultdict
+    iv_buckets: dict = defaultdict(list)
+    for r in records:
+        iv_val = r.get("params", {}).get("iv_rank_threshold")
+        if iv_val is not None:
+            iv_buckets[round(iv_val, 2)].append(r.get("outcome", {}).get("win", False))
+    best_iv = None
+    best_iv_wr = 0.0
+    for iv_val, wins_list in iv_buckets.items():
+        if len(wins_list) >= 3:
+            wr = sum(wins_list) / len(wins_list)
+            if wr > best_iv_wr:
+                best_iv_wr = wr
+                best_iv = iv_val
+
+    level = "none" if n < 5 else "low" if n < 15 else "medium" if n < 30 else "high"
+
+    return {
+        "total_trades": n,
+        "win_rate": round(len(wins) / n, 3) if n > 0 else 0,
+        "avg_pnl_usd": round(sum(pnls) / n, 2) if n > 0 else 0,
+        "avg_pnl_pct": round(sum(pnl_pcts) / n, 4) if n > 0 else 0,
+        "best_iv_threshold": best_iv,
+        "best_iv_win_rate": round(best_iv_wr, 3),
+        "calibration_level": level,
+        "last_updated": last_ts,
+    }
+
+
 # ── Worker function (runs in a subprocess) ────────────────────────────────────
 
 
-def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list]) -> dict:
+def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, int]) -> dict:
     """
     Worker function executed in a separate process.
     Each worker runs one full backtest with the given ParamSet.
 
+    args: (bot_id, params, ohlcv_df, iv_history, calibration, total_exp_records)
+    calibration and total_exp_records are optional (default to empty/0).
+
     Returns a dict with the param set, results metrics, and fitness score.
     """
-    bot_id, params, ohlcv_df, iv_history = args
+    bot_id, params, ohlcv_df, iv_history = args[0], args[1], args[2], args[3]
 
     # Patch config values for this run (each subprocess gets its own copy)
     # We do this by temporarily monkey-patching the cfg singleton
@@ -154,6 +318,12 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list]) -> dict
 
         results = bt.run_with_data(ohlcv_df, iv_history, iv_window=int(params.iv_rank_window_days))
         score = fitness_score(results)
+
+        # Blend with real experience data if calibration is available
+        calibration = args[4] if len(args) > 4 else {}
+        total_exp = args[5] if len(args) > 5 else 0
+        if calibration:
+            score = apply_experience_blend(score, asdict(params), calibration, total_exp)
 
         return {
             "bot_id": bot_id,
@@ -265,10 +435,22 @@ class Optimizer:
         logger.info("Market data loaded and cached.")
         return self._ohlcv_df, self._iv_history
 
-    def _run_parallel(self, genomes: list[ParamSet]) -> list[dict]:
+    def _run_parallel(self, genomes: list[ParamSet], calibration: dict | None = None) -> list[dict]:
         """Run a list of genomes in parallel using multiprocessing."""
         ohlcv_df, iv_history = self._load_data()
-        args = [(i, g, ohlcv_df, iv_history) for i, g in enumerate(genomes)]
+
+        # Load experience calibration (unless caller explicitly passed empty dict to skip)
+        if calibration is None:
+            exp_path = self._results_dir.parent / "experience.jsonl"
+            calibration = load_experience_calibration(exp_path)
+            total_exp = 0
+            if exp_path.exists():
+                with open(exp_path) as f:
+                    total_exp = sum(1 for line in f if line.strip())
+        else:
+            total_exp = 0
+
+        args = [(i, g, ohlcv_df, iv_history, calibration, total_exp) for i, g in enumerate(genomes)]
 
         logger.info(f"Running {len(genomes)} backtests on {self._workers} workers...")
         start = time.time()
@@ -283,12 +465,13 @@ class Optimizer:
 
     # ── Sweep mode ────────────────────────────────────────────────────────────
 
-    def run_sweep(self, target_param: str | None = None) -> None:
+    def run_sweep(self, target_param: str | None = None, use_experience: bool = True) -> None:
         """
         Vary each parameter individually across its full range.
         All other parameters remain at baseline (config.yaml defaults).
 
         If target_param is specified, only sweep that one parameter.
+        Set use_experience=False to ignore experience.jsonl calibration.
         """
         from config import cfg
 
@@ -325,7 +508,7 @@ class Optimizer:
                     g.max_dte = int(g.min_dte) + 7
                 genomes.append(g)
 
-            results = self._run_parallel(genomes)
+            results = self._run_parallel(genomes, calibration={} if not use_experience else None)
             all_sweep_results[param_name] = results
 
             # Print per-param summary
@@ -363,6 +546,7 @@ class Optimizer:
         elite_keep: int = 4,
         mutation_rate: float = 0.3,
         seed_from_sweep: bool = False,
+        use_experience: bool = True,
     ) -> ParamSet:
         """
         Genetic algorithm over all parameters simultaneously.
@@ -432,7 +616,7 @@ class Optimizer:
 
         for gen in range(1, generations + 1):
             logger.info(f"Generation {gen}/{generations}")
-            results = self._run_parallel(population)
+            results = self._run_parallel(population, calibration={} if not use_experience else None)
 
             # Attach genome to each result for tracking
             for res, genome in zip(results, population):
