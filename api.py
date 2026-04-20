@@ -170,13 +170,15 @@ def get_optimizer_summary() -> dict:
     best_fitness: float | None = None
     if wf and "in_sample" in wf:
         best_fitness = wf["in_sample"].get("fitness")
-    if best_fitness is None and sweep_raw := _read_json(OPT_DIR / "sweep_results.json"):
-        for param_rows in sweep_raw.values():
-            if isinstance(param_rows, list):
-                for row in param_rows:
-                    f = row.get("fitness")
-                    if f is not None and (best_fitness is None or f > best_fitness):
-                        best_fitness = f
+    if best_fitness is None:
+        _sweep = _read_json(OPT_DIR / "sweep_results.json")
+        if _sweep:
+            for param_rows in _sweep.values():
+                if isinstance(param_rows, list):
+                    for row in param_rows:
+                        f = row.get("fitness")
+                        if f is not None and (best_fitness is None or f > best_fitness):
+                            best_fitness = f
 
     # Monte Carlo summary
     mc_summary = None
