@@ -226,8 +226,8 @@ def _color_pnl(val: float) -> str:
 
 
 def _load_best_genome() -> dict | None:
-    """Load best_genome.yaml if it exists."""
-    path = BOT_DIR / "best_genome.yaml"
+    """Load best_genome.yaml if it exists (saved by optimizer to data/optimizer/)."""
+    path = BOT_DIR / "data" / "optimizer" / "best_genome.yaml"
     if not path.exists():
         return None
     with open(path) as f:
@@ -1140,66 +1140,189 @@ OPT_DIR = BOT_DIR / "data" / "optimizer"
 def _render_optimizer_results(is_sweep: bool) -> None:
     """Display optimizer outputs when available."""
     if is_sweep:
-        img_path = OPT_DIR / "sweep_sensitivity.png"
-        if img_path.exists():
-            st.markdown("#### Sweep Sensitivity Chart")
-            st.image(str(img_path), use_container_width=True)
-        else:
-            st.info("Sweep chart will appear here once the run completes.")
-
         sweep_results_path = OPT_DIR / "sweep_results.json"
-        if sweep_results_path.exists():
-            try:
-                with open(sweep_results_path) as _f:
-                    _sweep_data = json.load(_f)
-                _table_rows = []
-                for _param_name, _param_results in _sweep_data.items():
-                    _valid = [r for r in _param_results if not r.get("error")]
-                    if _valid:
-                        _best = max(_valid, key=lambda r: r["fitness"])
-                        _table_rows.append({
-                            "Parameter": _param_name,
-                            "Best Value": _best["params"][_param_name],
-                            "Fitness Score": round(_best["fitness"], 3),
-                        })
-                if _table_rows:
-                    st.markdown("#### Best Value per Parameter")
-                    st.caption("Each row shows the single value that maximised fitness when that parameter was swept individually.")
-                    st.dataframe(
-                        pd.DataFrame(_table_rows),
-                        use_container_width=True,
-                        height=min(60 + 35 * len(_table_rows), 400),
-                        key="sweep_best_table",
+        if not sweep_results_path.exists():
+            st.info("🔄 Sweep Sensitivity Chart will appear here once the run completes.")
+            return
+
+        try:
+            with open(sweep_results_path) as _f:
+                _sweep_data = json.load(_f)
+        except Exception as _e:
+            st.warning(f"Could not read sweep_results.json: {_e}")
+            return
+
+        if not _sweep_data:
+            st.info("No sweep results yet.")
+            return
+
+        # ── Interactive per-parameter charts (one tab per param) ──────────
+        st.markdown("#### 📈 Sweep Sensitivity Chart")
+        st.caption("Hover over points to see exact values. The green dashed line marks the best value.")
+        _params_done = list(_sweep_data.keys())
+        if _params_done:
+            _tabs = st.tabs(_params_done)
+            for _tab, _pname in zip(_tabs, _params_done):
+                with _tab:
+                    _valid = [r for r in _sweep_data[_pname] if not r.get("error")]
+                    if not _valid:
+                        st.warning("No valid results for this parameter.")
+                        continue
+                    _xs = [r["params"][_pname] for r in _valid]
+                    _ys = [r["fitness"] for r in _valid]
+                    _best_idx = int(max(range(len(_ys)), key=lambda i: _ys[i]))
+                    _best_x   = _xs[_best_idx]
+                    _best_y   = _ys[_best_idx]
+
+                    _fig = go.Figure()
+                    _fig.add_trace(go.Scatter(
+                        x=_xs, y=_ys, mode="lines+markers",
+                        marker=dict(size=7, color="#58a6ff"),
+                        line=dict(color="#58a6ff", width=2),
+                        hovertemplate=(
+                            f"<b>{_pname}</b>: %{{x}}<br>"
+                            "Fitness: %{y:.4f}<br>"
+                            "Win Rate: " + str([f"{r['win_rate_pct']:.1f}%" for r in _valid]).replace("'", "") + "<extra></extra>"
+                        ),
+                        customdata=[[r["win_rate_pct"], r["total_return_pct"],
+                                     r["sharpe_ratio"], r["num_cycles"]]
+                                    for r in _valid],
+                        hovertemplate=(
+                            f"<b>{_pname}</b>: %{{x}}<br>"
+                            "Fitness: %{y:.4f}<br>"
+                            "Win rate: %{customdata[0]:.1f}%<br>"
+                            "Return: %{customdata[1]:+.1f}%<br>"
+                            "Sharpe: %{customdata[2]:.2f}<br>"
+                            "Trades: %{customdata[3]}<extra></extra>"
+                        ),
+                        name="Fitness",
+                    ))
+                    _fig.add_vline(x=_best_x, line_dash="dash",
+                                   line_color="#3fb950", annotation_text=f"best={_best_x}",
+                                   annotation_font_color="#3fb950")
+                    _fig.update_layout(
+                        **_dark_layout(f"{_pname} — best={_best_x}  fitness={_best_y:.4f}", height=280),
+                        xaxis_title=_pname, yaxis_title="Fitness Score",
                     )
-            except Exception as _e:
-                st.warning(f"Could not parse sweep_results.json: {_e}")
+                    st.plotly_chart(_fig, use_container_width=True,
+                                    key=f"sweep_chart_{_pname}")
+
+                    # Metrics row for this param
+                    _mc1, _mc2, _mc3, _mc4 = st.columns(4)
+                    _best_r = _valid[_best_idx]
+                    _mc1.metric("Best Value",   f"{_best_x}")
+                    _mc2.metric("Fitness",      f"{_best_y:.4f}")
+                    _mc3.metric("Win Rate",     f"{_best_r['win_rate_pct']:.1f}%")
+                    _mc4.metric("Return",       f"{_best_r['total_return_pct']:+.1f}%")
+
+        # ── Summary table ──────────────────────────────────────────────────
+        _table_rows = []
+        for _pname, _presults in _sweep_data.items():
+            _valid = [r for r in _presults if not r.get("error")]
+            if _valid:
+                _best = max(_valid, key=lambda r: r["fitness"])
+                _table_rows.append({
+                    "Parameter":       _pname,
+                    "Best Value":      _best["params"][_pname],
+                    "Fitness":         round(_best["fitness"], 4),
+                    "Win Rate %":      round(_best["win_rate_pct"], 1),
+                    "Return %":        round(_best["total_return_pct"], 1),
+                    "Sharpe":          round(_best["sharpe_ratio"], 2),
+                    "Max Drawdown %":  round(_best["max_drawdown_pct"], 1),
+                    "Trades":          int(_best["num_cycles"]),
+                })
+        if _table_rows:
+            st.markdown("#### 🗂️ Best Value per Parameter")
+            st.caption("Each row shows the single value that maximised fitness for that parameter. Use these as a starting point for the Evolve run.")
+            _summary_df = pd.DataFrame(_table_rows)
+            st.dataframe(_summary_df, use_container_width=True,
+                         height=min(60 + 35 * len(_table_rows), 420),
+                         key="sweep_best_table")
+
+            # Download button for sweep data
+            _csv_buf = _summary_df.to_csv(index=False).encode()
+            st.download_button(
+                "⬇️ Download sweep summary (CSV)",
+                data=_csv_buf,
+                file_name="sweep_summary.csv",
+                mime="text/csv",
+                key="sweep_dl_btn",
+            )
+
     else:
         leaderboard_path = OPT_DIR / "evolution_leaderboard.csv"
-        evo_img          = OPT_DIR / "evolution_progress.png"
         best_path        = OPT_DIR / "best_genome.yaml"
 
-        if evo_img.exists():
-            st.markdown("#### Evolution Progress")
-            st.image(str(evo_img), use_container_width=True)
+        if not best_path.exists() and not leaderboard_path.exists():
+            st.info("🔄 Evolution results will appear here once the run completes.")
+            return
 
+        # ── Best genome ────────────────────────────────────────────────────
         if best_path.exists():
             with open(best_path) as f:
                 best = yaml.safe_load(f)
             st.markdown("#### 🏆 Best Genome Found")
-            best_df = pd.DataFrame(list(best.items()), columns=["Parameter", "Value"])
-            st.dataframe(best_df, use_container_width=True, height=200)
-            if st.button("Apply Best Genome to Config", use_container_width=True,
-                         key="optimizer_apply_genome_btn"):
-                _apply_genome_to_config(best)
-                st.success("Best genome applied to config.yaml! Re-run a backtest to verify.")
+            _bg_col1, _bg_col2 = st.columns([2, 1])
+            with _bg_col1:
+                best_df = pd.DataFrame(list(best.items()), columns=["Parameter", "Optimal Value"])
+                st.dataframe(best_df, use_container_width=True,
+                             height=min(60 + 35 * len(best), 340),
+                             key="evo_best_genome_table")
+            with _bg_col2:
+                st.markdown("**Apply to Bot Config**")
+                st.caption("This replaces the strategy parameters in config.yaml with the optimised values.")
+                if st.button("⚙️ Apply to Config", use_container_width=True,
+                             type="primary", key="optimizer_apply_genome_btn"):
+                    _apply_genome_to_config(best)
+                    st.success("✅ Applied! Restart the bot to use new parameters.")
+                # Download YAML
+                _yaml_str = "\n".join(f"{k}: {v}" for k, v in best.items())
+                st.download_button(
+                    "⬇️ Download best_genome.yaml",
+                    data=_yaml_str,
+                    file_name="best_genome.yaml",
+                    mime="text/plain",
+                    key="evo_dl_genome_btn",
+                )
 
+        # ── Leaderboard ────────────────────────────────────────────────────
         if leaderboard_path.exists():
-            st.markdown("#### Leaderboard (Top Genomes)")
             lb = pd.read_csv(leaderboard_path)
-            st.dataframe(lb.head(10), use_container_width=True, height=240)
+            # Show fitness + key metrics, drop raw param columns for readability
+            _metric_cols = ["fitness", "win_rate_pct", "total_return_pct",
+                            "sharpe_ratio", "max_drawdown_pct", "num_cycles"]
+            _disp_cols = [c for c in _metric_cols if c in lb.columns]
+            _param_cols = [c for c in lb.columns if c not in _disp_cols + ["bot_id", "error"]]
 
-        if not evo_img.exists() and not leaderboard_path.exists():
-            st.info("Evolution results will appear here once the run completes.")
+            st.markdown("#### 📊 Evolution Leaderboard")
+            st.caption(f"{len(lb)} genome evaluations across all generations — sorted by fitness.")
+            _lb_sorted = lb.sort_values("fitness", ascending=False).reset_index(drop=True)
+
+            # Metrics display
+            if len(_lb_sorted) > 0:
+                _top = _lb_sorted.iloc[0]
+                _m1, _m2, _m3, _m4 = st.columns(4)
+                _m1.metric("Best Fitness",  f"{_top.get('fitness', 0):.4f}")
+                _m2.metric("Win Rate",      f"{_top.get('win_rate_pct', 0):.1f}%")
+                _m3.metric("Return",        f"{_top.get('total_return_pct', 0):+.1f}%")
+                _m4.metric("Sharpe",        f"{_top.get('sharpe_ratio', 0):.2f}")
+
+            # Full table with all data
+            st.dataframe(_lb_sorted.head(20), use_container_width=True,
+                         height=320, key="evo_leaderboard_table")
+            st.download_button(
+                "⬇️ Download full leaderboard (CSV)",
+                data=lb.to_csv(index=False).encode(),
+                file_name="evolution_leaderboard.csv",
+                mime="text/csv",
+                key="evo_dl_leaderboard_btn",
+            )
+
+        # ── Evolution progress chart ───────────────────────────────────────
+        evo_img = OPT_DIR / "evolution_progress.png"
+        if evo_img.exists():
+            st.markdown("#### 📈 Evolution Progress")
+            st.image(str(evo_img), use_container_width=True)
 
 
 def _apply_genome_to_config(genome: dict) -> None:
