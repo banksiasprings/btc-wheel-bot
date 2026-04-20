@@ -820,6 +820,8 @@ Examples:
                         help="Mutation rate 0.0–1.0 (evolve mode)")
     parser.add_argument("--seed-from-sweep", action="store_true", default=False,
                         help="Seed 30%% of gen-0 population from sweep best-per-param values")
+    parser.add_argument("--no-experience", action="store_true", default=False,
+                        help="Ignore experience.jsonl calibration (use pure backtest fitness)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel worker processes")
     args = parser.parse_args()
 
@@ -832,11 +834,13 @@ Examples:
 
     opt = Optimizer(workers=args.workers)
 
+    use_exp = not args.no_experience
+
     if args.mode == "sweep":
         if args.param and args.param not in PARAM_RANGES:
             print(f"Unknown parameter '{args.param}'. Valid options: {list(PARAM_RANGES.keys())}")
             return
-        opt.run_sweep(target_param=args.param)
+        opt.run_sweep(target_param=args.param, use_experience=use_exp)
 
     elif args.mode == "evolve":
         best = opt.run_evolution(
@@ -845,6 +849,7 @@ Examples:
             elite_keep=args.elite,
             mutation_rate=args.mutation,
             seed_from_sweep=args.seed_from_sweep,
+            use_experience=use_exp,
         )
         # Save best genome to YAML for easy copy-paste into config.yaml
         import yaml
