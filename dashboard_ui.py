@@ -1306,14 +1306,22 @@ def _render_optimizer_results(is_sweep: bool) -> None:
                 _m3.metric("Return",        f"{_top.get('total_return_pct', 0):+.1f}%")
                 _m4.metric("Sharpe",        f"{_top.get('sharpe_ratio', 0):.2f}")
 
-            # Full table — format floats as strings to avoid heatmap colouring
-            _lb_display = _lb_sorted.head(20).copy()
-            for _c in _lb_display.select_dtypes(include="number").columns:
-                _lb_display[_c] = _lb_display[_c].apply(
-                    lambda v: f"{v:+.2f}" if _c in ("total_return_pct", "max_drawdown_pct")
-                    else f"{v:.4f}" if _c == "fitness"
-                    else f"{v:.2f}"
-                )
+            # Full table — show metrics + params only, format floats as strings
+            # to avoid Streamlit's heatmap colouring on numeric columns
+            _show_cols = _disp_cols + _param_cols  # metrics first, then params
+            _lb_display = _lb_sorted[_show_cols].head(20).copy()
+            _fmt = {
+                "fitness": "{:.4f}", "win_rate_pct": "{:.1f}%",
+                "total_return_pct": "{:+.1f}%", "sharpe_ratio": "{:.2f}",
+                "max_drawdown_pct": "{:+.1f}%", "num_cycles": "{:.0f}",
+            }
+            for _c, _f in _fmt.items():
+                if _c in _lb_display.columns:
+                    _lb_display[_c] = _lb_display[_c].apply(lambda v: _f.format(v))
+            # Round param floats to 4dp
+            for _c in _param_cols:
+                if _lb_display[_c].dtype == float:
+                    _lb_display[_c] = _lb_display[_c].apply(lambda v: f"{v:.4f}")
             st.dataframe(_lb_display, use_container_width=True,
                          height=320, key="evo_leaderboard_table")
             st.download_button(
