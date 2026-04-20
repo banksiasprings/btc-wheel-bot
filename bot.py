@@ -84,6 +84,10 @@ class WheelBot:
         # Stage 3: OrderTracker (initialised in live mode after WS connect)
         self._tracker: OrderTracker | None = None
 
+        # Mobile API state tracking
+        self._started_at: datetime = datetime.now(timezone.utc)
+        self._force_close_position: bool = False
+
         # AI Overseer
         if self._cfg.overseer.enabled:
             self._overseer = AIOverSeer()
@@ -342,6 +346,9 @@ class WheelBot:
         """Single poll iteration."""
         now = datetime.now(timezone.utc)
 
+        # Process any pending mobile API commands
+        await self._process_commands()
+
         if not self._risk.check_kill_switch():
             return
 
@@ -448,6 +455,15 @@ class WheelBot:
             self._run_overseer_check(now, underlying_price, iv_rank)
             if not self._risk.check_kill_switch():
                 return
+
+        # Mobile API: force-close command received
+        if self._force_close_position and self._positions:
+            self._force_close_position = False
+            pos = self._positions[0]
+            logger.info(f"Force-closing {pos.instrument_name} (mobile command)")
+            closed = await self._close_position(pos, "mobile_force_close", underlying_price)
+            if closed:
+                self._positions.remove(pos)
 
         # In-trade checks (roll if needed)
         for pos in list(self._positions):
@@ -668,6 +684,9 @@ class WheelBot:
             f"equity ${equity_before:,.0f} → ${equity_after:,.0f}"
         )
 
+        # ── Update equity_curve.json for mobile API ───────────────────────────
+        self._update_equity_curve(datetime.now(timezone.utc), equity_after)
+
         # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
         try:
             import json as _json
@@ -779,6 +798,98 @@ class WheelBot:
         except Exception:
             return None
 
+    # ── Mobile API helpers ─────────────────────────────────────────────────────
+
+    def _write_current_position(self, spot: float) -> None:
+        """Write data/current_position.json for the mobile API."""
+        try:
+            data_dir = Path(__file__).parent / "data"
+            data_dir.mkdir(exist_ok=True)
+            if not self._positions:
+                payload: dict = {"open": False}
+            else:
+                p = self._positions[0]
+                dte = 0
+                if p.expiry_ts:
+                    dte = max(0, int((p.expiry_ts / 1000 - time.time()) / 86_400))
+                expiry_str = ""
+                try:
+                    parts = p.instrument_name.split("-")
+                    from datetime import datetime as _dt
+                    expiry_str = _dt.strptime(parts[1], "%d%b%y").strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+                unrealized = (p.entry_price - p.current_price) * p.contracts * spot
+                pct = unrealized / (p.strike * p.contracts) * 100 if p.strike > 0 else 0.0
+                payload = {
+                    "open": True,
+                    "type": f"short_{p.option_type}",
+                    "strike": p.strike,
+                    "contracts": p.contracts,
+                    "expiry": expiry_str,
+                    "entry_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "premium_collected": round(p.entry_price * p.contracts * spot, 2),
+                    "current_spot": round(spot, 2),
+                    "unrealized_pnl_usd": round(unrealized, 2),
+                    "unrealized_pnl_pct": round(pct, 2),
+                    "days_to_expiry": dte,
+                }
+            (data_dir / "current_position.json").write_text(json.dumps(payload))
+        except Exception:
+            pass
+
+    def _update_equity_curve(self, now: datetime, equity: float) -> None:
+        """Append a data point to data/equity_curve.json on each position close."""
+        try:
+            curve_path = Path(__file__).parent / "data" / "equity_curve.json"
+            if curve_path.exists():
+                existing = json.loads(curve_path.read_text())
+            else:
+                existing = {
+                    "dates": [],
+                    "equity": [],
+                    "starting_equity": self._cfg.backtest.starting_equity,
+                }
+            existing["dates"].append(now.strftime("%Y-%m-%d"))
+            existing["equity"].append(round(equity, 2))
+            curve_path.write_text(json.dumps(existing))
+        except Exception:
+            pass
+
+    async def _process_commands(self) -> None:
+        """Poll data/bot_commands.json for pending commands and execute them."""
+        cmd_path = Path(__file__).parent / "data" / "bot_commands.json"
+        if not cmd_path.exists():
+            return
+        try:
+            data = json.loads(cmd_path.read_text())
+            cmd_path.unlink()
+        except Exception:
+            return
+
+        command = data.get("command", "")
+        if command == "stop":
+            kill_path = Path(__file__).parent / "KILL_SWITCH"
+            kill_path.write_text("STOP")
+            logger.info("Mobile command: stop — KILL_SWITCH created")
+        elif command == "start":
+            kill_path = Path(__file__).parent / "KILL_SWITCH"
+            if kill_path.exists():
+                kill_path.unlink()
+            logger.info("Mobile command: start — KILL_SWITCH cleared")
+        elif command == "close_position":
+            if self._positions:
+                self._force_close_position = True
+                logger.info(
+                    f"Mobile command: close_position — will close "
+                    f"{self._positions[0].instrument_name} this tick"
+                )
+        elif command == "set_mode":
+            logger.info(
+                f"Mobile command: set_mode → {data.get('mode')} "
+                f"(takes effect on restart)"
+            )
+
     def _print_status(self, now: datetime, spot: float) -> None:
         """Log a brief status line each tick, write tick_log.csv and heartbeat."""
         import csv as _csv
@@ -859,3 +970,20 @@ class WheelBot:
             hb_path.write_text(json.dumps(heartbeat))
         except Exception:
             pass  # never let heartbeat write block the tick
+
+        # ── Write bot_state.json for mobile API ───────────────────────────────
+        try:
+            state = {
+                "running": True,
+                "mode": mode_str,
+                "started_at": self._started_at.isoformat(),
+                "last_heartbeat": now.isoformat(),
+            }
+            state_path = Path(__file__).parent / "data" / "bot_state.json"
+            state_path.parent.mkdir(exist_ok=True)
+            state_path.write_text(json.dumps(state))
+        except Exception:
+            pass  # non-critical
+
+        # ── Write current_position.json for mobile API ────────────────────────
+        self._write_current_position(spot)
