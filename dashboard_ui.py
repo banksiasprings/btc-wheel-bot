@@ -1328,7 +1328,102 @@ def tab_config() -> None:
 def tab_recommendations() -> None:
     st.markdown("### 📋 Recommendations")
 
-    # ── Live Optimizer Results (shown when best_genome.yaml exists) ────────────
+    EXPERIENCE_PATH = BOT_DIR / "data" / "experience.jsonl"
+
+    # ── Section 1: Experience Intelligence ────────────────────────────────────
+    st.markdown("#### 🧠 Experience Intelligence")
+    st.caption("Real trade results accumulated by the bot. The more trades recorded, the more the optimizer calibrates to actual market conditions rather than pure backtests.")
+
+    try:
+        from optimizer import summarise_experience as _summarise_exp
+        _exp_summary = _summarise_exp(EXPERIENCE_PATH)
+    except Exception:
+        _exp_summary = {"total_trades": 0, "calibration_level": "none"}
+
+    _n_trades   = _exp_summary.get("total_trades", 0)
+    _cal_level  = _exp_summary.get("calibration_level", "none")
+    _cal_badge  = {"none": "🔴 None", "low": "🟡 Low (5-14)", "medium": "🟢 Medium (15-29)", "high": "💎 High (30+)"}.get(_cal_level, "🔴 None")
+    _exp_c1, _exp_c2, _exp_c3, _exp_c4 = st.columns(4)
+    metric_card("Trades Learned", str(_n_trades),                                                      _exp_c1)
+    metric_card("Actual Win Rate",  f"{_exp_summary.get('win_rate', 0)*100:.1f}%" if _n_trades > 0 else "—", _exp_c2)
+    metric_card("Avg P&L / Trade",  f"${_exp_summary.get('avg_pnl_usd', 0):+,.0f}" if _n_trades > 0 else "—", _exp_c3)
+    metric_card("Calibration",      _cal_badge,                                                         _exp_c4)
+
+    if _n_trades == 0:
+        st.info("No live/paper trades recorded yet. Once the bot closes its first trade, experience data will accumulate here and the optimizer will automatically blend it into future runs.")
+    elif _n_trades < 5:
+        st.warning(f"Only {_n_trades} trade(s) so far — calibration activates at 5. Keep the bot running.")
+    else:
+        st.success(f"✅ Calibration active — optimizer is blending {_n_trades} real trades with backtest data. Experience weight: {'20%' if _n_trades < 10 else '40%' if _n_trades < 20 else '50%' if _n_trades < 30 else '70%'}.")
+
+    # Recalibration banner
+    if _n_trades >= 5:
+        _genome_path = OPT_DIR / "best_genome.yaml"
+        _exp_mtime   = EXPERIENCE_PATH.stat().st_mtime if EXPERIENCE_PATH.exists() else 0
+        _genome_mtime = _genome_path.stat().st_mtime if _genome_path.exists() else 0
+        if _exp_mtime > _genome_mtime:
+            st.warning("⚡ New experience data recorded since your last optimizer run. Re-run **Evolve** (Optimizer tab, with 'Seed from Sweep' on) to incorporate real trade results into parameter selection.")
+
+    st.divider()
+
+    # ── Section 2: Backtest vs Reality (shown once 3+ trades exist) ───────────
+    if _n_trades >= 3:
+        st.markdown("#### 📊 Backtest Prediction vs 📈 Actual Results")
+        st.caption("Where the backtest model is accurate — and where real trading diverges. Gaps narrow as experience grows.")
+
+        _exp_records: list[dict] = []
+        try:
+            with open(EXPERIENCE_PATH) as _ef:
+                for _line in _ef:
+                    _line = _line.strip()
+                    if _line:
+                        _exp_records.append(json.loads(_line))
+        except Exception:
+            pass
+
+        from collections import defaultdict as _dd
+        _iv_actual: dict = _dd(list)
+        for _r in _exp_records:
+            _iv = _r.get("params", {}).get("iv_rank_threshold")
+            _win = _r.get("outcome", {}).get("win", False)
+            _pnl = _r.get("outcome", {}).get("pnl_pct", 0)
+            if _iv is not None:
+                _lbl = f">= {int(round(_iv * 100))}%"
+                _iv_actual[_lbl].append({"win": _win, "pnl_pct": _pnl})
+
+        _bt_iv_rows = [
+            {"label": "IV rank >= 20%",  "sharpe":  0.19, "total_return":  8.52, "win_rate": 60.0},
+            {"label": "IV rank >= 30%",  "sharpe":  0.19, "total_return":  8.52, "win_rate": 60.0},
+            {"label": "IV rank >= 40%",  "sharpe": -0.70, "total_return": -3.67, "win_rate": 33.3},
+            {"label": "IV rank >= 50%",  "sharpe": -0.70, "total_return": -3.67, "win_rate": 33.3},
+            {"label": "IV rank >= 60%",  "sharpe":  1.40, "total_return": 53.24, "win_rate": 80.0},
+            {"label": "IV rank >= 70%",  "sharpe":  1.29, "total_return": 51.08, "win_rate": 58.3},
+        ]
+        _compare_rows = []
+        for _bt in _bt_iv_rows:
+            _lbl = _bt["label"].replace("IV rank ", "")
+            _actual = _iv_actual.get(_bt["label"].replace("IV rank ", "").strip())
+            if _actual and len(_actual) >= 2:
+                _awr  = f"{sum(1 for t in _actual if t['win']) / len(_actual) * 100:.0f}%"
+                _aret = f"{sum(t['pnl_pct'] for t in _actual) / len(_actual) * 100:+.2f}%"
+                _an   = str(len(_actual))
+            else:
+                _awr, _aret, _an = "—", "—", "0"
+            _compare_rows.append({
+                "IV Threshold": _lbl,
+                "BT Win Rate":  f"{_bt['win_rate']:.0f}%",
+                "BT Return":    f"{_bt['total_return']:+.1f}%",
+                "BT Sharpe":    f"{_bt['sharpe']:.2f}",
+                "Live Win Rate": _awr,
+                "Live Return":   _aret,
+                "Live Trades":   _an,
+            })
+        if _compare_rows:
+            st.dataframe(pd.DataFrame(_compare_rows), use_container_width=True,
+                         hide_index=True, key="reco_bt_vs_live_table")
+        st.divider()
+
+    # ── Section 3: Optimizer Best Genome ─────────────────────────────────────
     _best_genome_path = OPT_DIR / "best_genome.yaml"
     if _best_genome_path.exists():
         try:
@@ -1379,9 +1474,9 @@ def tab_recommendations() -> None:
         except Exception as _e:
             st.warning(f"Could not load best_genome.yaml: {_e}")
 
-    # ── Baseline Analysis (Static) ─────────────────────────────────────────────
-    st.markdown("#### 📊 Baseline Analysis (Static)")
-    st.caption("Results from 36 backtests across 7 parameter groups from an earlier manual sweep. Winners selected by Sharpe ratio (primary) then total return (secondary).")
+    # ── Section 4: Historical Baseline (Static) ───────────────────────────────
+    st.markdown("#### 📋 Historical Baseline Analysis (Static)")
+    st.caption("Results from 36 backtests across 7 parameter groups from an earlier manual sweep. Used as a starting reference — live experience data above supersedes this over time.")
 
     BACKTEST_RESULTS = [
         {"label": "IV rank >= 20%",   "group": "iv_rank_threshold", "sharpe":  0.19, "total_return":  8.52, "max_dd": -11.75, "win_rate": 60.0, "trades": 5,  "avg_yield": 0.86},
