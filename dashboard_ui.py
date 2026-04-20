@@ -1349,8 +1349,10 @@ def _apply_genome_to_config(genome: dict) -> None:
         "max_dte":                  ("strategy", "max_dte"),
         "min_dte":                  ("strategy", "min_dte"),
         "max_equity_per_leg":       ("sizing",   "max_equity_per_leg"),
+        "min_free_equity_fraction": ("sizing",   "min_free_equity_fraction"),
         "approx_otm_offset":        ("backtest", "approx_otm_offset"),
         "premium_fraction_of_spot": ("backtest", "premium_fraction_of_spot"),
+        "starting_equity":          ("backtest", "starting_equity"),
     }
     for key, (section, field) in mapping.items():
         if key in genome and section in raw:

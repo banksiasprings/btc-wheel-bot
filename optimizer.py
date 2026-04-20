@@ -59,6 +59,8 @@ class ParamSet:
     max_equity_per_leg: float = 0.05
     premium_fraction_of_spot: float = 0.015
     iv_rank_window_days: int = 365    # lookback for IV rank calculation
+    min_free_equity_fraction: float = 0.25  # minimum buffer kept free at all times
+    starting_equity: float = 10000.0        # backtest starting account size (USD)
 
 
 # Define the valid range for each parameter during evolution / sweep
@@ -73,6 +75,8 @@ PARAM_RANGES: dict[str, tuple[float, float, float]] = {
     "max_equity_per_leg":       (0.02, 0.12, 0.01),
     "premium_fraction_of_spot": (0.008, 0.030, 0.002),
     "iv_rank_window_days":      (90,   365,  30),
+    "min_free_equity_fraction": (0.00, 0.40, 0.05),   # 0% to 40% buffer
+    "starting_equity":          (5000, 50000, 5000),   # $5k to $50k account size
 }
 
 # Fitness function weights (tune to your risk preference)
@@ -308,8 +312,10 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
         cfg.strategy.min_dte = int(params.min_dte)
         cfg.strategy.max_dte = int(params.max_dte)
         cfg.sizing.max_equity_per_leg = params.max_equity_per_leg
+        cfg.sizing.min_free_equity_fraction = params.min_free_equity_fraction
         cfg.backtest.approx_otm_offset = params.approx_otm_offset
         cfg.backtest.premium_fraction_of_spot = params.premium_fraction_of_spot
+        cfg.backtest.starting_equity = params.starting_equity
 
         # Run simulation (no network calls — data pre-fetched)
         bt = Backtester()
@@ -499,6 +505,8 @@ class Optimizer:
             min_dte=cfg.strategy.min_dte,
             max_equity_per_leg=cfg.sizing.max_equity_per_leg,
             premium_fraction_of_spot=cfg.backtest.premium_fraction_of_spot,
+            min_free_equity_fraction=cfg.sizing.min_free_equity_fraction,
+            starting_equity=cfg.backtest.starting_equity,
         )
 
         params_to_sweep = [target_param] if target_param else list(PARAM_RANGES.keys())
@@ -507,7 +515,7 @@ class Optimizer:
         for param_name in params_to_sweep:
             lo, hi, step = PARAM_RANGES[param_name]
             values = list(np.arange(lo, hi + step * 0.5, step))
-            if param_name in ("max_dte", "min_dte", "iv_rank_window_days"):
+            if param_name in ("max_dte", "min_dte", "iv_rank_window_days", "starting_equity"):
                 values = [int(v) for v in values]
 
             logger.info(f"Sweeping '{param_name}' across {len(values)} values: {values[0]}→{values[-1]}")
