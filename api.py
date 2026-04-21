@@ -389,14 +389,55 @@ def get_monte_carlo_results() -> dict:
 
 # ── Controls ──────────────────────────────────────────────────────────────────
 
+BOT_PID_FILE = DATA_DIR / "bot_pid.txt"
+
+
+def _bot_is_running() -> bool:
+    """Return True if the bot process is alive and not a zombie."""
+    if not BOT_PID_FILE.exists():
+        return False
+    try:
+        pid = int(BOT_PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+        stat = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                              capture_output=True, text=True)
+        if "Z" in stat.stdout:
+            BOT_PID_FILE.unlink(missing_ok=True)
+            return False
+        return True
+    except (ValueError, OSError):
+        BOT_PID_FILE.unlink(missing_ok=True)
+        return False
+
+
 @app.post("/controls/start", dependencies=[Depends(_require_api_key)])
 def control_start() -> dict:
-    _write_command("start")
-    return {"ok": True}
+    # Clear kill-switch so a running bot resumes
+    kill_path = BASE_DIR / "KILL_SWITCH"
+    kill_path.unlink(missing_ok=True)
+
+    if _bot_is_running():
+        # Bot is already running — clearing the kill-switch is enough
+        _write_command("start")
+        return {"ok": True, "action": "resumed"}
+
+    # Bot is not running — spawn it in paper mode
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        [sys.executable, str(BASE_DIR / "main.py"), "--mode=paper"],
+        cwd=str(BASE_DIR),
+        stdout=open(BASE_DIR / "logs" / "btc-wheel-bot.log", "a"),
+        stderr=subprocess.STDOUT,
+    )
+    BOT_PID_FILE.write_text(str(proc.pid))
+    return {"ok": True, "action": "started", "pid": proc.pid}
 
 
 @app.post("/controls/stop", dependencies=[Depends(_require_api_key)])
 def control_stop() -> dict:
+    # Write kill-switch file (bot reads it on next tick and pauses)
+    kill_path = BASE_DIR / "KILL_SWITCH"
+    kill_path.write_text("STOP")
     _write_command("stop")
     return {"ok": True}
 
