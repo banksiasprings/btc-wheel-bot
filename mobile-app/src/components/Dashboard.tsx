@@ -29,7 +29,8 @@ function fmtPct(n: number | undefined) {
   return `${sign}${n.toFixed(2)}%`
 }
 
-function fmtUptime(s: number) {
+function fmtUptime(s: number | null | undefined) {
+  if (s == null || isNaN(s)) return null
   if (s < 60) return `${s}s`
   if (s < 3600) return `${Math.floor(s / 60)}m`
   const h = Math.floor(s / 3600)
@@ -154,7 +155,11 @@ export default function Dashboard() {
               </p>
               {status?.bot_running && (
                 <p className="text-xs text-slate-400">
-                  Up {fmtUptime(status.uptime_seconds)}
+                  {fmtUptime(status.uptime_seconds)
+                    ? `Up ${fmtUptime(status.uptime_seconds)}`
+                    : status.last_heartbeat
+                      ? `Heartbeat ${new Date(status.last_heartbeat).toLocaleTimeString()}`
+                      : 'Running'}
                 </p>
               )}
             </div>
