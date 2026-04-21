@@ -119,8 +119,21 @@ def get_status() -> dict:
             uptime = (datetime.now(timezone.utc) - started).total_seconds()
         except Exception:
             pass
+
+    # Dead-bot detection: if the heartbeat is older than 3 minutes and state
+    # still says running, the bot has silently died — report it as not running.
+    bot_running = state.get("running", False)
+    if bot_running and state.get("last_heartbeat"):
+        try:
+            last_hb = datetime.fromisoformat(state["last_heartbeat"])
+            age_seconds = (datetime.now(timezone.utc) - last_hb).total_seconds()
+            if age_seconds > 180:
+                bot_running = False
+        except Exception:
+            pass
+
     return {
-        "bot_running":    state.get("running", False),
+        "bot_running":    bot_running,
         "paused":         state.get("paused", False),
         "mode":           state.get("mode", "unknown"),
         "uptime_seconds": uptime,
@@ -483,8 +496,17 @@ def control_start() -> dict:
     return {"ok": True, "action": "started", "pid": proc.pid, "message": "Bot started"}
 
 
+class StopRequest(BaseModel):
+    confirm: str = ""
+
+
 @app.post("/controls/stop", dependencies=[Depends(_require_api_key)])
-def control_stop() -> dict:
+def control_stop(body: StopRequest = StopRequest()) -> dict:
+    if body.confirm != "STOP_BOT":
+        raise HTTPException(
+            status_code=400,
+            detail="Stopping the bot requires confirm='STOP_BOT' in the request body.",
+        )
     # Write kill-switch file so a resumed bot halts on next tick
     kill_path = BASE_DIR / "KILL_SWITCH"
     kill_path.write_text("STOP")
@@ -514,8 +536,17 @@ def control_stop() -> dict:
     return {"ok": True, "message": msg}
 
 
+class ClosePositionRequest(BaseModel):
+    confirm: str = ""
+
+
 @app.post("/controls/close_position", dependencies=[Depends(_require_api_key)])
-def control_close_position() -> dict:
+def control_close_position(body: ClosePositionRequest = ClosePositionRequest()) -> dict:
+    if body.confirm != "CLOSE_POSITION":
+        raise HTTPException(
+            status_code=400,
+            detail="Closing the position requires confirm='CLOSE_POSITION' in the request body.",
+        )
     _write_command("close_position")
     return {"ok": True}
 

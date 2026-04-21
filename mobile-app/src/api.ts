@@ -195,9 +195,16 @@ export const getEvolveResults = () => request<EvolveResults>('/optimizer/evolve_
 export const getConfig = () => request<BotConfig>('/config')
 
 export const startBot = () => request<{ ok: boolean; message: string }>('/controls/start', { method: 'POST' })
-export const stopBot = () => request<{ ok: boolean; message: string }>('/controls/stop', { method: 'POST' })
+export const stopBot = () =>
+  request<{ ok: boolean; message: string }>('/controls/stop', {
+    method: 'POST',
+    body: JSON.stringify({ confirm: 'STOP_BOT' }),
+  })
 export const closePosition = () =>
-  request<{ ok: boolean; message: string }>('/controls/close_position', { method: 'POST' })
+  request<{ ok: boolean; message: string }>('/controls/close_position', {
+    method: 'POST',
+    body: JSON.stringify({ confirm: 'CLOSE_POSITION' }),
+  })
 export const setMode = (mode: string, confirm?: string) =>
   request<{ ok: boolean; message: string }>('/controls/set_mode', {
     method: 'POST',

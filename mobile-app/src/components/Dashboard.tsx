@@ -85,7 +85,7 @@ export default function Dashboard({ onNavigateTo }: Props) {
 
   useEffect(() => {
     fetchAll()
-    const id = setInterval(fetchAll, 30_000)
+    const id = setInterval(fetchAll, 5_000)
     return () => clearInterval(id)
   }, [fetchAll])
 
@@ -225,6 +225,13 @@ export default function Dashboard({ onNavigateTo }: Props) {
               Last heartbeat: {new Date(status.last_heartbeat).toLocaleTimeString()}
             </p>
             <button onClick={() => setInfo(GLOSSARY.heartbeat)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+            <button
+              onClick={fetchAll}
+              title="Refresh status"
+              className="text-slate-600 hover:text-slate-400 text-xs leading-none ml-1"
+            >
+              ↻
+            </button>
           </div>
         )}
       </div>

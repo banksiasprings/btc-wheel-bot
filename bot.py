@@ -88,6 +88,7 @@ class WheelBot:
         # Mobile API state tracking
         self._started_at: datetime = datetime.now(timezone.utc)
         self._force_close_position: bool = False
+        self._state_path = Path(__file__).parent / "data" / "bot_state.json"
 
         # AI Overseer
         if self._cfg.overseer.enabled:
@@ -136,6 +137,7 @@ class WheelBot:
         except asyncio.CancelledError:
             logger.info("Bot loop cancelled")
         finally:
+            self._write_stopped_state()
             await self._client.disconnect()
             logger.info("WheelBot shut down")
 
@@ -344,6 +346,30 @@ class WheelBot:
         if not safe:
             logger.critical("AI Overseer issued HALT — kill switch activated.")
 
+    # ── State helpers ──────────────────────────────────────────────────────────
+
+    def _write_stopped_state(self) -> None:
+        """Write running=False to bot_state.json so the API and mobile app
+        immediately reflect that the bot has halted, without waiting for the
+        next heartbeat timeout to expire."""
+        try:
+            import json as _json
+            self._state_path.parent.mkdir(exist_ok=True)
+            existing: dict = {}
+            if self._state_path.exists():
+                try:
+                    existing = _json.loads(self._state_path.read_text())
+                except Exception:
+                    pass
+            existing.update({
+                "running": False,
+                "paused": True,
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            })
+            self._state_path.write_text(_json.dumps(existing))
+        except Exception:
+            pass  # never let a state write crash the bot
+
     # ── Main tick ──────────────────────────────────────────────────────────────
 
     async def _tick(self) -> None:
@@ -354,6 +380,7 @@ class WheelBot:
         await self._process_commands()
 
         if not self._risk.check_kill_switch():
+            self._write_stopped_state()
             return
 
         # Fetch market state
@@ -458,6 +485,7 @@ class WheelBot:
         if self._should_run_overseer(now):
             self._run_overseer_check(now, underlying_price, iv_rank)
             if not self._risk.check_kill_switch():
+                self._write_stopped_state()
                 return
 
         # Mobile API: force-close command received
