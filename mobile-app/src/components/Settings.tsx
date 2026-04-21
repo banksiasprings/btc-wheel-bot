@@ -11,10 +11,10 @@ const EVOLVE_PRESET_CONFIGS: {
   unavailableMsg: string
   glossaryKey: string
 }[] = [
-  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',  glossaryKey: 'fitness_balanced'  },
-  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first', glossaryKey: 'fitness_max_yield' },
-  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',    glossaryKey: 'fitness_safest'    },
-  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',    glossaryKey: 'fitness_sharpe'    },
+  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',  glossaryKey: 'strategy_balanced'  },
+  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first', glossaryKey: 'strategy_max_yield' },
+  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',    glossaryKey: 'strategy_safest'    },
+  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',    glossaryKey: 'strategy_sharpe'    },
 ]
 
 interface Props {
@@ -157,6 +157,7 @@ export default function Settings({ onLogout }: Props) {
               isActive={presets.active === 'sweep'}
               onLoad={() => handleLoadPreset('sweep')}
               unavailableMsg="Run Parameter Sweep first"
+              onInfo={() => setInfo(GLOSSARY.strategy_sweep)}
             />
             {EVOLVE_PRESET_CONFIGS.map(cfg => {
               const presetInfo = presets[cfg.key]
