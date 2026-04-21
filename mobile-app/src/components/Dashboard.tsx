@@ -377,11 +377,22 @@ export default function Dashboard({ onNavigateTo }: Props) {
             <h3 className="font-bold text-white text-lg mb-2">
               {confirm === 'stop' ? 'Stop Bot?' : 'Close Position?'}
             </h3>
-            <p className="text-slate-400 text-sm mb-6">
-              {confirm === 'stop'
-                ? 'This will create the KILL_SWITCH file and halt trading immediately.'
-                : 'This will force-close your current open position at market.'}
-            </p>
+            <div className="bg-amber-950 border border-amber-700 rounded-xl px-3 py-3 mb-5 flex gap-2.5">
+              <span className="text-amber-400 text-base leading-snug flex-shrink-0">⚠️</span>
+              {confirm === 'stop' ? (
+                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
+                  <li>The bot will stop scanning for opportunities and halt all automated trading.</li>
+                  <li className="font-semibold">Any open position will NOT be closed — it stays open and exposed until you manually close it or restart the bot.</li>
+                  <li>You can restart at any time from this screen.</li>
+                </ul>
+              ) : (
+                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
+                  <li>Your open position will be force-closed immediately at the current market price.</li>
+                  <li className="font-semibold">You'll receive whatever premium the market offers now, which may be less than what you originally collected.</li>
+                  <li>Use this to exit early or cut a loss — this cannot be undone.</li>
+                </ul>
+              )}
+            </div>
             <div className="flex gap-3">
               <button
                 onClick={() => setConfirm(null)}
