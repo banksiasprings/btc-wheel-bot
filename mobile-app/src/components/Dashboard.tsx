@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
+import InfoModal from './InfoModal'
+import { GLOSSARY } from '../lib/glossary'
 import {
   AreaChart,
   Area,
@@ -55,6 +57,7 @@ export default function Dashboard({ onNavigateTo }: Props) {
   const [error, setError] = useState('')
   const [confirm, setConfirm] = useState<ConfirmAction>(null)
   const [actionMsg, setActionMsg] = useState('')
+  const [info, setInfo] = useState<{ title: string; body: string } | null>(null)
 
   const fetchAll = useCallback(async () => {
     try {
@@ -287,8 +290,8 @@ export default function Dashboard({ onNavigateTo }: Props) {
                 const free = equity?.current_equity != null ? equity.current_equity - committed : null
                 return (
                   <>
-                    <Stat label="Capital Committed" value={fmt$(committed || null)} accent />
-                    <Stat label="Free Reserve" value={fmt$(free)} accent />
+                    <Stat label="Capital Committed" value={fmt$(committed || null)} accent onInfo={() => setInfo(GLOSSARY.capital_committed)} />
+                    <Stat label="Free Reserve" value={fmt$(free)} accent onInfo={() => setInfo(GLOSSARY.free_reserve)} />
                   </>
                 )
               })()}
@@ -301,7 +304,10 @@ export default function Dashboard({ onNavigateTo }: Props) {
                   const yield_pa = (premium_collected / (strike * contracts)) * (365 / days_to_expiry) * 100
                   return (
                     <div className="col-span-2 rounded-xl px-3 py-2 bg-green-950/40 border border-green-900/50">
-                      <p className="text-xs text-green-500/80">Est. Annual Yield</p>
+                      <div className="flex items-center gap-1">
+                        <p className="text-xs text-green-500/80">Est. Annual Yield</p>
+                        <button onClick={() => setInfo(GLOSSARY.est_annual_yield)} className="text-green-700 hover:text-green-500 text-xs leading-none">ⓘ</button>
+                      </div>
                       <p className="text-sm font-medium text-white">{yield_pa.toFixed(1)}% p.a.</p>
                       <p className="text-xs text-green-600/70 mt-0.5">If premium fully collected at expiry</p>
                     </div>
@@ -397,6 +403,8 @@ export default function Dashboard({ onNavigateTo }: Props) {
         </div>
       </div>
 
+      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
+
       {/* Confirm dialog */}
       {confirm && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6 z-50">
@@ -460,10 +468,15 @@ function PresetBadge({ active }: { active: string }) {
   )
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Stat({ label, value, accent, onInfo }: { label: string; value: string; accent?: boolean; onInfo?: () => void }) {
   return (
     <div className={`rounded-xl px-3 py-2 ${accent ? 'bg-amber-950/40 border border-amber-900/50' : 'bg-navy'}`}>
-      <p className={`text-xs ${accent ? 'text-amber-500/80' : 'text-slate-500'}`}>{label}</p>
+      <div className="flex items-center gap-1">
+        <p className={`text-xs ${accent ? 'text-amber-500/80' : 'text-slate-500'}`}>{label}</p>
+        {onInfo && (
+          <button onClick={onInfo} className="text-slate-600 hover:text-slate-400 text-xs leading-none flex-shrink-0">ⓘ</button>
+        )}
+      </div>
       <p className="text-sm font-medium text-white truncate">{value}</p>
     </div>
   )

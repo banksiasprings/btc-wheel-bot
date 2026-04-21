@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset, BotConfig, PresetsData, ActivePreset } from '../api'
+import InfoModal from './InfoModal'
+import { GLOSSARY } from '../lib/glossary'
 
 const EVOLVE_PRESET_CONFIGS: {
   key: Exclude<ActivePreset, 'sweep' | 'custom'>
@@ -7,11 +9,12 @@ const EVOLVE_PRESET_CONFIGS: {
   icon: string
   accent: 'green' | 'orange' | 'sky' | 'purple'
   unavailableMsg: string
+  glossaryKey: string
 }[] = [
-  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first' },
-  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first' },
-  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first' },
-  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first' },
+  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',  glossaryKey: 'fitness_balanced'  },
+  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first', glossaryKey: 'fitness_max_yield' },
+  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',    glossaryKey: 'fitness_safest'    },
+  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',    glossaryKey: 'fitness_sharpe'    },
 ]
 
 interface Props {
@@ -25,6 +28,7 @@ export default function Settings({ onLogout }: Props) {
   const [presets, setPresets] = useState<PresetsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('')
+  const [info, setInfo] = useState<{ title: string; body: string } | null>(null)
   const [modeConfirm, setModeConfirm] = useState(false)
   const [pendingMode, setPendingMode] = useState<'paper' | 'live' | null>(null)
   const [modeConfirmText, setModeConfirmText] = useState('')
@@ -155,19 +159,20 @@ export default function Settings({ onLogout }: Props) {
               unavailableMsg="Run Parameter Sweep first"
             />
             {EVOLVE_PRESET_CONFIGS.map(cfg => {
-              const info = presets[cfg.key]
+              const presetInfo = presets[cfg.key]
               return (
                 <PresetCard
                   key={cfg.key}
                   title={`${cfg.icon} ${cfg.label}`}
                   icon=""
                   accent={cfg.accent}
-                  available={info.available}
-                  fitness={info.fitness}
-                  params={info.params}
+                  available={presetInfo.available}
+                  fitness={presetInfo.fitness}
+                  params={presetInfo.params}
                   isActive={presets.active === cfg.key}
                   onLoad={() => handleLoadPreset(cfg.key)}
                   unavailableMsg={cfg.unavailableMsg}
+                  onInfo={() => setInfo(GLOSSARY[cfg.glossaryKey])}
                 />
               )
             })}
@@ -213,49 +218,42 @@ export default function Settings({ onLogout }: Props) {
           <NumberField
             label="Delta Target Min"
             value={config.delta_target_min}
-            min={0.05}
-            max={0.5}
-            step={0.01}
+            min={0.05} max={0.5} step={0.01}
             onChange={(v) => updateField('delta_target_min', v)}
+            onInfo={() => setInfo(GLOSSARY.delta_range)}
           />
           <NumberField
             label="Delta Target Max"
             value={config.delta_target_max}
-            min={0.05}
-            max={0.5}
-            step={0.01}
+            min={0.05} max={0.5} step={0.01}
             onChange={(v) => updateField('delta_target_max', v)}
+            onInfo={() => setInfo(GLOSSARY.delta_range)}
           />
           <NumberField
             label="Min DTE (days)"
             value={config.min_dte}
-            min={1}
-            max={60}
-            step={1}
+            min={1} max={60} step={1}
             onChange={(v) => updateField('min_dte', v)}
+            onInfo={() => setInfo(GLOSSARY.dte_range)}
           />
           <NumberField
             label="Max DTE (days)"
             value={config.max_dte}
-            min={1}
-            max={90}
-            step={1}
+            min={1} max={90} step={1}
             onChange={(v) => updateField('max_dte', v)}
+            onInfo={() => setInfo(GLOSSARY.dte_range)}
           />
           <NumberField
             label="Premium Fraction of Spot"
             value={config.premium_fraction_of_spot}
-            min={0.001}
-            max={0.1}
-            step={0.001}
+            min={0.001} max={0.1} step={0.001}
             onChange={(v) => updateField('premium_fraction_of_spot', v)}
+            onInfo={() => setInfo(GLOSSARY.premium_fraction)}
           />
           <NumberField
             label="Starting Equity ($)"
             value={config.starting_equity}
-            min={1000}
-            max={1000000}
-            step={1000}
+            min={1000} max={1000000} step={1000}
             onChange={(v) => updateField('starting_equity', v)}
           />
 
@@ -301,6 +299,8 @@ export default function Settings({ onLogout }: Props) {
       >
         Reset & Re-configure
       </button>
+
+      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
 
       {/* Mode switch confirm dialog */}
       {modeConfirm && pendingMode === 'live' && (
@@ -376,9 +376,10 @@ interface PresetCardProps {
   isActive: boolean
   onLoad: () => void
   unavailableMsg: string
+  onInfo?: () => void
 }
 
-function PresetCard({ title, icon, accent, available, fitness, params, isActive, onLoad, unavailableMsg }: PresetCardProps) {
+function PresetCard({ title, icon, accent, available, fitness, params, isActive, onLoad, unavailableMsg, onInfo }: PresetCardProps) {
   const accentCls = {
     amber:  { border: 'border-amber-800',  btn: 'bg-amber-800  hover:bg-amber-700  text-amber-200',  activeBadge: 'bg-amber-900  text-amber-300  border border-amber-700'  },
     green:  { border: 'border-green-900',  btn: 'bg-green-800  hover:bg-green-700  text-green-200',  activeBadge: 'bg-green-900  text-green-300  border border-green-700'  },
@@ -403,6 +404,9 @@ function PresetCard({ title, icon, accent, available, fitness, params, isActive,
             <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${accentCls.activeBadge}`}>
               ACTIVE
             </span>
+          )}
+          {onInfo && (
+            <button onClick={onInfo} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
           )}
         </div>
         {fitness != null && (
@@ -448,6 +452,7 @@ function NumberField({
   max,
   step,
   onChange,
+  onInfo,
 }: {
   label: string
   value: number | null | undefined
@@ -455,11 +460,17 @@ function NumberField({
   max: number
   step: number
   onChange: (v: number) => void
+  onInfo?: () => void
 }) {
   return (
     <div>
       <div className="flex justify-between mb-1">
-        <label className="text-xs text-slate-400">{label}</label>
+        <div className="flex items-center gap-1">
+          <label className="text-xs text-slate-400">{label}</label>
+          {onInfo && (
+            <button onClick={onInfo} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+          )}
+        </div>
         <span className="text-xs text-white font-mono">{value ?? '—'}</span>
       </div>
       <input

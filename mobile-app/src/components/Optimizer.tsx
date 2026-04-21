@@ -4,6 +4,8 @@ import {
   getSweepResults, getEvolveResults,
   OptimizerSummary, SweepResults, EvolveResults, SweepEntry, EvolveGoal,
 } from '../api'
+import InfoModal from './InfoModal'
+import { GLOSSARY } from '../lib/glossary'
 
 type OptMode = 'sweep' | 'evolve' | 'walk_forward' | 'monte_carlo' | 'reconcile'
 
@@ -43,10 +45,15 @@ function VerdictBadge({ verdict }: { verdict?: string | null }) {
   )
 }
 
-function SummaryCard({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
+function SummaryCard({ label, value, sub, onInfo }: { label: string; value: React.ReactNode; sub?: string; onInfo?: () => void }) {
   return (
     <div className="bg-card rounded-2xl p-4 border border-border">
-      <p className="text-xs text-slate-400 mb-1">{label}</p>
+      <div className="flex items-center gap-1 mb-1">
+        <p className="text-xs text-slate-400">{label}</p>
+        {onInfo && (
+          <button onClick={onInfo} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+        )}
+      </div>
       <div className="font-bold text-white text-sm mb-0.5">{value}</div>
       {sub && <p className="text-xs text-slate-500">{sub}</p>}
     </div>
@@ -262,6 +269,7 @@ export default function Optimizer() {
   const [fitnessGoal, setFitnessGoal] = useState<EvolveGoal>('balanced')
   const [launching,   setLaunching]   = useState(false)
   const [launchMsg,   setLaunchMsg]   = useState('')
+  const [info,        setInfo]        = useState<{ title: string; body: string } | null>(null)
 
   const fastPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const slowPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -338,6 +346,8 @@ export default function Optimizer() {
     <div className="p-4 space-y-4 pb-4">
       <h1 className="text-lg font-bold text-white pt-2">Optimizer</h1>
 
+      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
+
       {error && (
         <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
           {error}
@@ -364,11 +374,13 @@ export default function Optimizer() {
           label="Monte Carlo"
           value={<VerdictBadge verdict={mc?.verdict as string} />}
           sub={mc ? `Median Sharpe: ${(mc.median_sharpe as number)?.toFixed(2) ?? '—'}` : 'No results yet'}
+          onInfo={() => setInfo(GLOSSARY.monte_carlo)}
         />
         <SummaryCard
           label="Walk-Forward"
           value={wf ? <VerdictBadge verdict={wf.verdict as string} /> : <span className="text-slate-500 text-xs">—</span>}
           sub={wf ? `Robustness: ${((wf.robustness_score as number) * 100).toFixed(0)}%` : 'No results yet'}
+          onInfo={() => setInfo(GLOSSARY.walk_forward)}
         />
         <SummaryCard
           label="Backtest Accuracy"
@@ -405,18 +417,24 @@ export default function Optimizer() {
             <p className="text-xs text-slate-400 font-medium">Fitness Goal</p>
             <div className="grid grid-cols-2 gap-2">
               {FITNESS_GOALS.map(g => (
-                <button
+                <div
                   key={g.id}
                   onClick={() => setFitnessGoal(g.id)}
-                  className={`rounded-xl p-3 text-left border transition-colors ${
+                  className={`rounded-xl p-3 text-left border transition-colors cursor-pointer ${
                     fitnessGoal === g.id
                       ? g.activeCls
                       : 'bg-navy border-border text-slate-400 hover:border-slate-500'
                   }`}
                 >
-                  <p className="text-xs font-semibold">{g.icon} {g.label}</p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">{g.icon} {g.label}</p>
+                    <button
+                      onClick={e => { e.stopPropagation(); setInfo(GLOSSARY[`fitness_${g.id}`]) }}
+                      className="text-slate-500 hover:text-slate-300 text-xs leading-none ml-1 shrink-0"
+                    >ⓘ</button>
+                  </div>
                   <p className="text-xs mt-0.5 opacity-70 leading-snug">{g.desc}</p>
-                </button>
+                </div>
               ))}
             </div>
           </div>
