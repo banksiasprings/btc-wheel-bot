@@ -109,12 +109,21 @@ def _write_command(command: str, extra: dict | None = None) -> None:
 
 @app.get("/status", dependencies=[Depends(_require_api_key)])
 def get_status() -> dict:
+    from datetime import datetime, timezone
     state = _read_json(DATA_DIR / "bot_state.json") or {}
+    # Compute uptime from started_at if uptime_seconds not directly stored
+    uptime = state.get("uptime_seconds")
+    if uptime is None and state.get("started_at") and state.get("running"):
+        try:
+            started = datetime.fromisoformat(state["started_at"])
+            uptime = (datetime.now(timezone.utc) - started).total_seconds()
+        except Exception:
+            pass
     return {
         "bot_running":    state.get("running", False),
         "paused":         state.get("paused", False),
         "mode":           state.get("mode", "unknown"),
-        "uptime_seconds": state.get("uptime_seconds"),
+        "uptime_seconds": uptime,
         "last_heartbeat": state.get("last_heartbeat"),
     }
 
