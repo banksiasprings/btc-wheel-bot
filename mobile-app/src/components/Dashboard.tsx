@@ -278,10 +278,20 @@ export default function Dashboard({ onNavigateTo }: Props) {
                 </p>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-2 pt-1">
+            <div className="grid grid-cols-2 gap-2 pt-1">
               <Stat label="Premium" value={fmt$(position.premium_collected)} />
               <Stat label="Spot" value={fmt$(position.current_spot)} />
               <Stat label="Contracts" value={String(position.contracts ?? '—')} />
+              {(() => {
+                const committed = (position.strike ?? 0) * (position.contracts ?? 0)
+                const free = equity?.current_equity != null ? equity.current_equity - committed : null
+                return (
+                  <>
+                    <Stat label="Capital Committed" value={fmt$(committed || null)} accent />
+                    <Stat label="Free Reserve" value={fmt$(free)} accent />
+                  </>
+                )
+              })()}
             </div>
           </div>
         ) : (
@@ -430,10 +440,10 @@ function PresetBadge({ active }: { active: 'sweep' | 'evolve' | 'custom' }) {
   )
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="bg-navy rounded-xl px-3 py-2">
-      <p className="text-xs text-slate-500">{label}</p>
+    <div className={`rounded-xl px-3 py-2 ${accent ? 'bg-amber-950/40 border border-amber-900/50' : 'bg-navy'}`}>
+      <p className={`text-xs ${accent ? 'text-amber-500/80' : 'text-slate-500'}`}>{label}</p>
       <p className="text-sm font-medium text-white truncate">{value}</p>
     </div>
   )
