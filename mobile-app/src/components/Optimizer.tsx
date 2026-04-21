@@ -29,6 +29,7 @@ const MODE_GLOSSARY_KEYS: Partial<Record<OptMode, string>> = {
   evolve:       'evolve_mode_desc',
   walk_forward: 'walk_forward',
   monte_carlo:  'monte_carlo',
+  reconcile:    'reconcile_mode',
 }
 
 type InfoEntry = { title: string; body: string }

@@ -59,6 +59,17 @@ const SECTIONS = [
     ],
   },
   {
+    icon: '🔍',
+    title: 'Reconcile — Checking the Model Against Reality',
+    paras: [
+      'The optimizer backtests on historical data — simulating what would have happened if the bot had been trading over the past year. But simulations make assumptions: that you got filled at the mid-price, that there was no slippage, that conditions matched history exactly. In reality, live trading never matches those assumptions perfectly.',
+      'After running in paper mode for a few weeks, you have two sets of data: what the backtest predicted the strategy would produce, and what actually happened in real market conditions. The Reconcile tool compares them side by side.',
+      'It takes your actual paper trade results, re-runs the backtest over the same time period with the same parameters, then compares win rate, premium collected, and P&L between predicted and actual. It produces a model accuracy score — how closely the bot\'s real behaviour matches the simulation.',
+      'If they\'re close: the model is trustworthy. You can have real confidence in what the optimizer tells you, and going live becomes a much smaller leap. If there\'s a significant gap: the assumptions were too optimistic, and you\'d want to understand why before committing real money.',
+      'Reconcile requires a few weeks of paper trade history to be meaningful. Think of it as your quality control checkpoint — the final validation step before live trading.',
+    ],
+  },
+  {
     icon: '🔄',
     title: 'The Feedback Loop — How It All Connects',
     paras: [
