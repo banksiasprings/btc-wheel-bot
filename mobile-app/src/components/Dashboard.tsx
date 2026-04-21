@@ -292,6 +292,23 @@ export default function Dashboard({ onNavigateTo }: Props) {
                   </>
                 )
               })()}
+              {(() => {
+                const { premium_collected, strike, contracts, days_to_expiry } = position
+                if (
+                  premium_collected != null && strike != null &&
+                  contracts != null && days_to_expiry != null && days_to_expiry > 0
+                ) {
+                  const yield_pa = (premium_collected / (strike * contracts)) * (365 / days_to_expiry) * 100
+                  return (
+                    <div className="col-span-2 rounded-xl px-3 py-2 bg-green-950/40 border border-green-900/50">
+                      <p className="text-xs text-green-500/80">Est. Annual Yield</p>
+                      <p className="text-sm font-medium text-white">{yield_pa.toFixed(1)}% p.a.</p>
+                      <p className="text-xs text-green-600/70 mt-0.5">If premium fully collected at expiry</p>
+                    </div>
+                  )
+                }
+                return null
+              })()}
             </div>
           </div>
         ) : (
