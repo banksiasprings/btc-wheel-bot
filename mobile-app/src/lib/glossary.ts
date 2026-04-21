@@ -94,7 +94,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   heartbeat: {
     title: "Last Heartbeat",
-    body: "The bot sends a 'heartbeat' signal every minute to confirm it's still alive and running.\n\nIf the last heartbeat was recent (within the last few minutes), the bot is healthy. If it was a long time ago, the bot may have crashed or been interrupted — check the logs or restart it.\n\nThis is your early warning system that something might have gone wrong.",
+    body: "The bot sends a heartbeat signal every 60 seconds to confirm it's still alive.\n\nIf the last heartbeat was more than 2–3 minutes ago, the bot may have crashed or the kill switch may be active — check the status dot colour.\n\nGreen = running normally. Yellow = running but paused (kill switch active — press Start Bot to resume). Red = fully stopped.\n\nThis is your early warning system that something might have gone wrong.",
   },
   // Trades
   trade_pnl: {

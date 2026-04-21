@@ -2,6 +2,7 @@
 
 export interface StatusData {
   bot_running: boolean
+  paused?: boolean
   mode: 'paper' | 'live' | 'stopped'
   uptime_seconds: number
   last_heartbeat: string | null

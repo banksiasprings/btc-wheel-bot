@@ -164,23 +164,33 @@ export default function Dashboard({ onNavigateTo }: Props) {
           <div className="flex items-center gap-3">
             <span
               className={`w-3 h-3 rounded-full flex-shrink-0 ${
-                status?.bot_running ? 'bg-green-400 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'
+                !status?.bot_running
+                  ? 'bg-red-500'
+                  : status.paused
+                  ? 'bg-yellow-400 shadow-[0_0_8px_#facc15]'
+                  : 'bg-green-400 shadow-[0_0_8px_#22c55e]'
               }`}
             />
             <div>
               <div className="flex items-center gap-1">
                 <p className="font-semibold text-white">
-                  {status?.bot_running ? 'Running' : 'Stopped'}
+                  {!status?.bot_running
+                    ? 'Stopped'
+                    : status.paused
+                    ? 'Paused'
+                    : 'Running'}
                 </p>
                 <button onClick={() => setInfo(GLOSSARY.bot_status)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
               </div>
               {status?.bot_running && (
                 <p className="text-xs text-slate-400">
-                  {fmtUptime(status.uptime_seconds)
+                  {status.paused
+                    ? 'Kill switch active — press Start Bot to resume'
+                    : fmtUptime(status.uptime_seconds)
                     ? `Up ${fmtUptime(status.uptime_seconds)}`
                     : status.last_heartbeat
-                      ? `Heartbeat ${new Date(status.last_heartbeat).toLocaleTimeString()}`
-                      : 'Running'}
+                    ? `Heartbeat ${new Date(status.last_heartbeat).toLocaleTimeString()}`
+                    : 'Running'}
                 </p>
               )}
             </div>
