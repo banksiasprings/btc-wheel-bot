@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset, BotConfig, PresetsData, ActivePreset } from '../api'
 import InfoModal from './InfoModal'
+import SystemGuide from './SystemGuide'
 import { GLOSSARY } from '../lib/glossary'
 
 const EVOLVE_PRESET_CONFIGS: {
@@ -29,6 +30,7 @@ export default function Settings({ onLogout }: Props) {
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('')
   const [info, setInfo] = useState<{ title: string; body: string } | null>(null)
+  const [showGuide, setShowGuide] = useState(false)
   const [modeConfirm, setModeConfirm] = useState(false)
   const [pendingMode, setPendingMode] = useState<'paper' | 'live' | null>(null)
   const [modeConfirmText, setModeConfirmText] = useState('')
@@ -120,6 +122,20 @@ export default function Settings({ onLogout }: Props) {
   return (
     <div className="p-4 space-y-4 pb-4">
       <h1 className="text-lg font-bold text-white pt-2">Settings</h1>
+
+      {showGuide && <SystemGuide onClose={() => setShowGuide(false)} />}
+
+      <button
+        onClick={() => setShowGuide(true)}
+        className="w-full flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3 text-left hover:border-slate-600 transition-colors"
+      >
+        <span className="text-xl">📖</span>
+        <div>
+          <p className="text-white text-sm font-medium">How This System Works</p>
+          <p className="text-slate-400 text-xs">Plain-English guide to the full strategy</p>
+        </div>
+        <span className="ml-auto text-slate-500 text-sm">→</span>
+      </button>
 
       {saveStatus && (
         <div
