@@ -411,17 +411,28 @@ def _bot_is_running() -> bool:
         return False
 
 
+def _write_bot_state(running: bool) -> None:
+    """Immediately update bot_state.json so /status reflects the new state."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    state_path = DATA_DIR / "bot_state.json"
+    state = _read_json(state_path) or {}
+    state["running"] = running
+    if not running:
+        state["uptime_seconds"] = None
+    state_path.write_text(json.dumps(state))
+
+
 @app.post("/controls/start", dependencies=[Depends(_require_api_key)])
 def control_start() -> dict:
-    # Clear kill-switch so a running bot resumes
     kill_path = BASE_DIR / "KILL_SWITCH"
     kill_path.unlink(missing_ok=True)
 
     if _bot_is_running():
         _write_command("start")
+        _write_bot_state(running=True)
         return {"ok": True, "action": "resumed", "message": "Bot resumed"}
 
-    # Bot is not running — spawn it in paper mode
+    # Not running — spawn fresh process in paper mode
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         [sys.executable, str(BASE_DIR / "main.py"), "--mode=paper"],
@@ -430,6 +441,7 @@ def control_start() -> dict:
         stderr=subprocess.STDOUT,
     )
     BOT_PID_FILE.write_text(str(proc.pid))
+    _write_bot_state(running=True)
     return {"ok": True, "action": "started", "pid": proc.pid, "message": "Bot started"}
 
 
@@ -452,13 +464,7 @@ def control_stop() -> dict:
         except (ValueError, OSError):
             BOT_PID_FILE.unlink(missing_ok=True)
 
-    # Update bot_state.json immediately so /status reflects the stop
-    state_path = DATA_DIR / "bot_state.json"
-    state = _read_json(state_path) or {}
-    state["running"] = False
-    state["uptime_seconds"] = None
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state))
+    _write_bot_state(running=False)
 
     msg = "Bot stopped" if terminated else "Stop signal sent"
     return {"ok": True, "message": msg}
