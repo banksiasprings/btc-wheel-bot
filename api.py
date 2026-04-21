@@ -16,10 +16,12 @@ import secrets
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests as _requests
 import yaml
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Header
@@ -115,6 +117,31 @@ def get_status() -> dict:
         "uptime_seconds": state.get("uptime_seconds"),
         "last_heartbeat": state.get("last_heartbeat"),
     }
+
+
+# ── BTC price (cached 30s) ────────────────────────────────────────────────────
+
+_btc_price_cache: dict = {}
+
+@app.get("/market/btc_price", dependencies=[Depends(_require_api_key)])
+def get_btc_price() -> dict:
+    now = time.time()
+    if _btc_price_cache.get("expires", 0) > now:
+        return _btc_price_cache["data"]
+    try:
+        r = _requests.get(
+            "https://www.deribit.com/api/v2/public/get_index_price",
+            params={"index_name": "btc_usd"},
+            timeout=5,
+        )
+        r.raise_for_status()
+        price = r.json()["result"]["index_price"]
+        result = {"price": price, "timestamp": datetime.utcnow().isoformat()}
+        _btc_price_cache["data"] = result
+        _btc_price_cache["expires"] = now + 30
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Deribit unreachable: {e}")
 
 
 # ── Position ──────────────────────────────────────────────────────────────────
@@ -468,6 +495,12 @@ def control_stop() -> dict:
 
     _write_bot_state(running=False)
 
+    try:
+        import notifier as _notifier
+        _notifier.notify_bot_stopped()
+    except Exception:
+        pass
+
     msg = "Bot stopped" if terminated else "Stop signal sent"
     return {"ok": True, "message": msg}
 
@@ -666,6 +699,22 @@ def get_presets() -> dict:
 
 _VALID_PRESET_NAMES = {"sweep"} | {f"evolve_{g}" for g in _EVOLVE_GOALS}
 
+_CONFIG_HISTORY_PATH = DATA_DIR / "config_history.json"
+
+
+def _append_config_history(preset: str, params: dict) -> None:
+    try:
+        history = _read_json(_CONFIG_HISTORY_PATH) or []
+        history.insert(0, {
+            "timestamp": datetime.utcnow().isoformat(),
+            "preset": preset,
+            "params": {k: _round_param(v) for k, v in params.items()},
+        })
+        _CONFIG_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CONFIG_HISTORY_PATH.write_text(json.dumps(history[:50], indent=2))
+    except Exception:
+        pass
+
 
 class LoadPresetRequest(BaseModel):
     preset: str
@@ -695,6 +744,7 @@ def load_preset(body: LoadPresetRequest) -> dict:
         raw.setdefault(_PRESET_SECTIONS[key], {})[key] = val
     with open(BASE_DIR / "config.yaml", "w") as f:
         yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+    _append_config_history(body.preset, params)
     return {"ok": True, "preset": body.preset, "params_updated": list(params.keys())}
 
 
@@ -707,7 +757,13 @@ def update_config(body: ConfigUpdateRequest) -> dict:
                 raw.setdefault(section, {})[k] = body.params[k]
     with open(BASE_DIR / "config.yaml", "w") as f:
         yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+    _append_config_history("custom", body.params)
     return {"ok": True}
+
+
+@app.get("/config/history", dependencies=[Depends(_require_api_key)])
+def config_history() -> list:
+    return _read_json(_CONFIG_HISTORY_PATH) or []
 
 
 # ── Optimizer ─────────────────────────────────────────────────────────────────
@@ -770,6 +826,53 @@ def optimizer_running() -> dict:
     except (ValueError, OSError):
         pid_path.unlink(missing_ok=True)
         return {"running": False}
+
+
+@app.get("/optimizer/progress", dependencies=[Depends(_require_api_key)])
+def optimizer_progress() -> dict:
+    path = OPT_DIR / "evolution_progress.json"
+    data = _read_json(path) or {}
+    return data
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+_NOTIFIER_CONFIG_PATH = DATA_DIR / "notifier_config.json"
+
+
+class NotifySetupRequest(BaseModel):
+    bot_token: str
+    chat_id: str
+
+
+@app.post("/notifications/setup", dependencies=[Depends(_require_api_key)])
+def notifications_setup(body: NotifySetupRequest) -> dict:
+    _NOTIFIER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _NOTIFIER_CONFIG_PATH.write_text(
+        json.dumps({"bot_token": body.bot_token, "chat_id": body.chat_id})
+    )
+    return {"ok": True}
+
+
+@app.get("/notifications/config", dependencies=[Depends(_require_api_key)])
+def notifications_config() -> dict:
+    data = _read_json(_NOTIFIER_CONFIG_PATH) or {}
+    token = data.get("bot_token", "")
+    return {
+        "configured": bool(token and data.get("chat_id")),
+        "chat_id": data.get("chat_id", ""),
+        "bot_token_hint": f"...{token[-6:]}" if len(token) > 6 else "",
+    }
+
+
+@app.post("/notifications/test", dependencies=[Depends(_require_api_key)])
+def notifications_test() -> dict:
+    try:
+        import notifier as _notifier
+        _notifier._send("🔔 Test message from BTC Wheel Bot — notifications are working!")
+        return {"ok": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── PWA static file serving ────────────────────────────────────────────────────

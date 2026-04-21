@@ -33,6 +33,7 @@ from loguru import logger
 from ai_overseer import AIOverSeer
 from config import Config, cfg
 from deribit_client import DeribitClient, DeribitPublicREST
+import notifier
 from order_tracker import OrderTracker, OrderStatus
 from risk_manager import Position, RiskManager
 from strategy import WheelStrategy
@@ -106,9 +107,12 @@ class WheelBot:
 
     async def run(self) -> None:
         """Main async loop."""
-        logger.info(
-            f"WheelBot starting ({'PAPER' if self._paper else 'LIVE'} mode)"
-        )
+        mode_str = "paper" if self._paper else ("testnet" if self._cfg.deribit.testnet else "live")
+        logger.info(f"WheelBot starting ({'PAPER' if self._paper else 'LIVE'} mode)")
+        try:
+            notifier.notify_bot_started(mode_str)
+        except Exception:
+            pass
 
         if not self._paper:
             # LIVE_ONLY: connect WebSocket (auth + subscribe)
@@ -561,6 +565,12 @@ class WheelBot:
             dte_at_entry=signal.dte,              # for trades.csv enrichment
         )
         self._positions.append(pos)
+        try:
+            notifier.notify_trade_opened(
+                pos.instrument_name, pos.strike, pos.entry_price, pos.dte_at_entry
+            )
+        except Exception:
+            pass
 
     async def _close_position(
         self, pos: Position, reason: str, underlying_price: float = 0.0
@@ -686,6 +696,11 @@ class WheelBot:
 
         # ── Update equity_curve.json for mobile API ───────────────────────────
         self._update_equity_curve(datetime.now(timezone.utc), equity_after)
+
+        try:
+            notifier.notify_trade_closed(pos.instrument_name, pnl_usd, reason)
+        except Exception:
+            pass
 
         # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
         try:

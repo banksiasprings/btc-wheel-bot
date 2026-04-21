@@ -2,6 +2,7 @@
 
 export interface StatusData {
   bot_running: boolean
+  paused?: boolean
   mode: 'paper' | 'live' | 'stopped'
   uptime_seconds: number
   last_heartbeat: string | null
@@ -101,6 +102,64 @@ export interface BotConfig {
   regime_ma_days: number | null
 }
 
+export interface ConfigHistoryEntry {
+  timestamp: string
+  preset: string
+  params: Record<string, number | null>
+}
+
+export interface EvolutionProgress {
+  running: boolean
+  completed?: boolean
+  generation?: number
+  total_generations?: number
+  elapsed_sec?: number
+  best_fitness?: number | null
+  best_return_pct?: number | null
+  best_sharpe?: number | null
+  gen_best_fitness?: number | null
+  fitness_goal?: string
+}
+
+export interface NotifierConfig {
+  configured: boolean
+  chat_id: string
+  bot_token_hint: string
+}
+
+export interface PresetParams {
+  iv_rank_threshold?: number | null
+  target_delta_min?: number | null
+  target_delta_max?: number | null
+  min_dte?: number | null
+  max_dte?: number | null
+  max_equity_per_leg?: number | null
+  min_free_equity_fraction?: number | null
+  approx_otm_offset?: number | null
+  premium_fraction_of_spot?: number | null
+  starting_equity?: number | null
+}
+
+export interface PresetInfo {
+  available: boolean
+  fitness: number | null
+  timestamp: string | null
+  params: PresetParams
+}
+
+export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe'
+export type ActivePreset = 'sweep' | `evolve_${EvolveGoal}` | 'custom'
+
+export interface PresetsData {
+  active: ActivePreset
+  sweep: PresetInfo
+  evolve_balanced: PresetInfo
+  evolve_max_yield: PresetInfo
+  evolve_safest: PresetInfo
+  evolve_sharpe: PresetInfo
+  current: { params: PresetParams }
+}
+
 function getBase(): string {
   return (localStorage.getItem('api_url') || '').replace(/\/$/, '')
 }
@@ -144,16 +203,33 @@ export const setMode = (mode: string, confirm?: string) =>
     method: 'POST',
     body: JSON.stringify({ mode, confirm }),
   })
+export const getPresets = () => request<PresetsData>('/config/presets')
+export const loadPreset = (preset: Exclude<ActivePreset, 'custom'>) =>
+  request<{ ok: boolean; preset: string; params_updated: string[] }>('/config/load_preset', {
+    method: 'POST',
+    body: JSON.stringify({ preset }),
+  })
 export const updateConfig = (config: Partial<BotConfig>) =>
   request<{ ok: boolean; updated: string[] }>('/config', {
     method: 'POST',
     body: JSON.stringify(config),
   })
-export const runOptimizer = (mode: string, param?: string) =>
+export const runOptimizer = (mode: string, param?: string, fitness_goal?: string) =>
   request<{ ok: boolean; pid: number; mode: string }>('/optimizer/run', {
     method: 'POST',
-    body: JSON.stringify({ mode, param }),
+    body: JSON.stringify({ mode, param, fitness_goal }),
   })
+
+export const getBtcPrice = () => request<{ price: number; cached: boolean; age_sec: number }>('/market/btc_price')
+export const getConfigHistory = () => request<ConfigHistoryEntry[]>('/config/history')
+export const getOptimizerProgress = () => request<EvolutionProgress>('/optimizer/progress')
+export const getNotifierConfig = () => request<NotifierConfig>('/notifications/config')
+export const setupNotifier = (bot_token: string, chat_id: string) =>
+  request<{ ok: boolean }>('/notifications/setup', {
+    method: 'POST',
+    body: JSON.stringify({ bot_token, chat_id }),
+  })
+export const testNotifier = () => request<{ ok: boolean }>('/notifications/test', { method: 'POST' })
 
 export async function testConnection(): Promise<boolean> {
   try {
