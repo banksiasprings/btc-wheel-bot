@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -417,9 +418,8 @@ def control_start() -> dict:
     kill_path.unlink(missing_ok=True)
 
     if _bot_is_running():
-        # Bot is already running — clearing the kill-switch is enough
         _write_command("start")
-        return {"ok": True, "action": "resumed"}
+        return {"ok": True, "action": "resumed", "message": "Bot resumed"}
 
     # Bot is not running — spawn it in paper mode
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -430,16 +430,38 @@ def control_start() -> dict:
         stderr=subprocess.STDOUT,
     )
     BOT_PID_FILE.write_text(str(proc.pid))
-    return {"ok": True, "action": "started", "pid": proc.pid}
+    return {"ok": True, "action": "started", "pid": proc.pid, "message": "Bot started"}
 
 
 @app.post("/controls/stop", dependencies=[Depends(_require_api_key)])
 def control_stop() -> dict:
-    # Write kill-switch file (bot reads it on next tick and pauses)
+    # Write kill-switch file so a resumed bot halts on next tick
     kill_path = BASE_DIR / "KILL_SWITCH"
     kill_path.write_text("STOP")
     _write_command("stop")
-    return {"ok": True}
+
+    # Send SIGTERM to kill the process immediately rather than waiting for
+    # it to poll the kill-switch file on its next tick
+    terminated = False
+    if BOT_PID_FILE.exists():
+        try:
+            pid = int(BOT_PID_FILE.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            BOT_PID_FILE.unlink(missing_ok=True)
+            terminated = True
+        except (ValueError, OSError):
+            BOT_PID_FILE.unlink(missing_ok=True)
+
+    # Update bot_state.json immediately so /status reflects the stop
+    state_path = DATA_DIR / "bot_state.json"
+    state = _read_json(state_path) or {}
+    state["running"] = False
+    state["uptime_seconds"] = None
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps(state))
+
+    msg = "Bot stopped" if terminated else "Stop signal sent"
+    return {"ok": True, "message": msg}
 
 
 @app.post("/controls/close_position", dependencies=[Depends(_require_api_key)])
