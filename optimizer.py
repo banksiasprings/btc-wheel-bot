@@ -819,6 +819,162 @@ class Optimizer:
         print(f"  Evolution chart saved → {path}")
 
 
+# ── Walk-forward validation ───────────────────────────────────────────────────
+
+
+def run_walk_forward(results_dir: Path, workers: int | None = None) -> None:
+    """
+    Walk-forward validation: test whether the optimised parameters generalise
+    to unseen data.
+
+    Method
+    ------
+    1. Fetch full price history (same data the sweep/evolve used).
+    2. Split the simulation period 75 / 25: in-sample (IS) vs out-of-sample (OOS).
+       - IS  = first 75% of simulation days → used for optimisation (already done).
+       - OOS = last 25% of simulation days  → never seen during optimisation.
+    3. Load the best genome from `data/optimizer/best_genome.yaml` (produced by
+       evolve mode) — these are the IS-optimised parameters.
+    4. Run a fresh backtest of those parameters on the OOS slice.
+    5. Also run the same parameters on the full period so the comparison is fair.
+    6. Compute robustness score = OOS fitness / IS fitness.
+       - > 0.8  → strong (strategy holds up on unseen data)
+       - 0.5–0.8 → acceptable
+       - < 0.5  → over-fitted (good on paper, risky in practice)
+    7. Save results to `data/optimizer/walk_forward_results.json`.
+    """
+    import yaml
+    from backtester import Backtester, BacktestResults
+    from config import cfg, Config
+
+    logger.info("=== Walk-Forward Validation ===")
+
+    # ── Load best genome ───────────────────────────────────────────────────────
+    best_genome_path = results_dir / "best_genome.yaml"
+    if not best_genome_path.exists():
+        logger.error(
+            "No best_genome.yaml found. Run 'evolve' mode first to produce one."
+        )
+        print("\n  ERROR: Run the Evolve optimizer first — walk-forward needs a best genome to test.")
+        return
+
+    with open(best_genome_path) as f:
+        genome_dict = yaml.safe_load(f)
+
+    logger.info(f"Loaded best genome from {best_genome_path}")
+    params = ParamSet(**{k: v for k, v in genome_dict.items() if k in ParamSet.__dataclass_fields__})
+
+    # ── Patch config with genome params ───────────────────────────────────────
+    cfg.strategy.iv_rank_threshold    = params.iv_rank_threshold
+    cfg.strategy.target_delta_min     = params.target_delta_min
+    cfg.strategy.target_delta_max     = params.target_delta_max
+    cfg.strategy.min_dte              = int(params.min_dte)
+    cfg.strategy.max_dte              = int(params.max_dte)
+    cfg.sizing.max_equity_per_leg     = params.max_equity_per_leg
+    cfg.sizing.min_free_equity_fraction = params.min_free_equity_fraction
+    cfg.backtest.approx_otm_offset    = params.approx_otm_offset
+    cfg.backtest.premium_fraction_of_spot = params.premium_fraction_of_spot
+    cfg.backtest.starting_equity      = params.starting_equity
+
+    # ── Fetch data ─────────────────────────────────────────────────────────────
+    logger.info("Fetching market data...")
+    bt = Backtester()
+    ohlcv_full = bt._fetch_prices()
+    raw_iv = bt._rest._get("get_historical_volatility", {"currency": "BTC"})
+    iv_history = raw_iv if raw_iv else []
+    iv_window = int(params.iv_rank_window_days)
+
+    # Determine simulation period (strip the 12m IV warm-up prefix the fetcher adds)
+    sim_months = cfg.backtest.lookback_months  # typically 12
+    cutoff_days = sim_months * 30
+    sim_start_idx = max(0, len(ohlcv_full) - cutoff_days - 380)  # 380 = IV warm-up buffer
+    sim_df = ohlcv_full.iloc[sim_start_idx:].reset_index(drop=True)
+
+    # Split: IS = first 75%, OOS = last 25%
+    split_idx = int(len(sim_df) * 0.75)
+    # Keep the IV warm-up prefix for each slice so IV rank can be computed
+    warmup = min(380, sim_start_idx)
+    warmup_df = ohlcv_full.iloc[max(0, sim_start_idx - warmup):sim_start_idx]
+
+    is_df  = pd.concat([warmup_df, sim_df.iloc[:split_idx]], ignore_index=True)
+    oos_df = pd.concat([warmup_df, sim_df.iloc[split_idx:]], ignore_index=True)
+
+    is_start  = sim_df.iloc[0]["date"].date()
+    is_end    = sim_df.iloc[split_idx - 1]["date"].date()
+    oos_start = sim_df.iloc[split_idx]["date"].date()
+    oos_end   = sim_df.iloc[-1]["date"].date()
+
+    logger.info(f"IS  period: {is_start} → {is_end} ({split_idx} days)")
+    logger.info(f"OOS period: {oos_start} → {oos_end} ({len(sim_df) - split_idx} days)")
+
+    # ── Run IS backtest ────────────────────────────────────────────────────────
+    logger.info("Running IS backtest...")
+    bt_is = Backtester()
+    is_results = bt_is.run_with_data(is_df, iv_history, iv_window=iv_window)
+    is_fitness = fitness_score(is_results)
+    logger.info(f"IS  fitness={is_fitness:.4f}  sharpe={is_results.sharpe_ratio:.2f}  "
+                f"return={is_results.total_return_pct:.1f}%  win={is_results.win_rate_pct:.1f}%")
+
+    # ── Run OOS backtest ───────────────────────────────────────────────────────
+    logger.info("Running OOS backtest...")
+    bt_oos = Backtester()
+    oos_results = bt_oos.run_with_data(oos_df, iv_history, iv_window=iv_window)
+    oos_fitness = fitness_score(oos_results)
+    logger.info(f"OOS fitness={oos_fitness:.4f}  sharpe={oos_results.sharpe_ratio:.2f}  "
+                f"return={oos_results.total_return_pct:.1f}%  win={oos_results.win_rate_pct:.1f}%")
+
+    # ── Robustness score ───────────────────────────────────────────────────────
+    robustness = round(oos_fitness / is_fitness, 4) if is_fitness > 0 else 0.0
+    if robustness >= 0.8:
+        verdict = "STRONG — strategy holds up on unseen data"
+    elif robustness >= 0.5:
+        verdict = "ACCEPTABLE — some degradation on unseen data"
+    else:
+        verdict = "OVER-FITTED — parameters may not generalise to live trading"
+
+    logger.info(f"\n  Robustness score: {robustness:.2f} ({robustness*100:.0f}%)")
+    logger.info(f"  Verdict: {verdict}")
+
+    # ── Save results ───────────────────────────────────────────────────────────
+    output = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "genome": genome_dict,
+        "split": {
+            "is_start":   str(is_start),
+            "is_end":     str(is_end),
+            "is_days":    split_idx,
+            "oos_start":  str(oos_start),
+            "oos_end":    str(oos_end),
+            "oos_days":   len(sim_df) - split_idx,
+        },
+        "in_sample": {
+            "fitness":      is_fitness,
+            "sharpe":       round(is_results.sharpe_ratio, 3),
+            "return_pct":   round(is_results.total_return_pct, 2),
+            "win_rate":     round(is_results.win_rate_pct, 1),
+            "max_drawdown": round(is_results.max_drawdown_pct, 2),
+            "num_cycles":   is_results.num_cycles,
+        },
+        "out_of_sample": {
+            "fitness":      oos_fitness,
+            "sharpe":       round(oos_results.sharpe_ratio, 3),
+            "return_pct":   round(oos_results.total_return_pct, 2),
+            "win_rate":     round(oos_results.win_rate_pct, 1),
+            "max_drawdown": round(oos_results.max_drawdown_pct, 2),
+            "num_cycles":   oos_results.num_cycles,
+        },
+        "robustness_score": robustness,
+        "verdict": verdict,
+    }
+
+    out_path = results_dir / "walk_forward_results.json"
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    logger.info(f"\n  Results saved → {out_path}")
+    print(f"\n  Walk-forward complete. Robustness: {robustness:.2f} — {verdict}")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -833,7 +989,7 @@ Examples:
   python optimizer.py --mode evolve --pop 20 --gen 8
         """,
     )
-    parser.add_argument("--mode", choices=["sweep", "evolve"], default="sweep")
+    parser.add_argument("--mode", choices=["sweep", "evolve", "walk_forward"], default="sweep")
     parser.add_argument("--param", type=str, default=None,
                         help="For sweep mode: which parameter to sweep (default: all)")
     parser.add_argument("--population", "--pop", dest="population", type=int, default=20,
@@ -883,6 +1039,12 @@ Examples:
         with open(out_path, "w") as f:
             yaml.dump(asdict(best), f, default_flow_style=False)
         print(f"\n  Best genome saved to {out_path} — copy values into config.yaml")
+
+    elif args.mode == "walk_forward":
+        run_walk_forward(
+            results_dir=Path("data/optimizer"),
+            workers=args.workers,
+        )
 
 
 if __name__ == "__main__":

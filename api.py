@@ -359,6 +359,20 @@ def get_evolve_results() -> dict:
     }
 
 
+@app.get("/optimizer/walk_forward_results", dependencies=[Depends(_require_api_key)])
+def get_walk_forward_results() -> dict:
+    """Return walk-forward validation results."""
+    path = OPT_DIR / "walk_forward_results.json"
+    if not path.exists():
+        return {"available": False}
+    try:
+        data = _read_json(path)
+        data["available"] = True
+        return data
+    except Exception:
+        return {"available": False}
+
+
 # ── Controls ──────────────────────────────────────────────────────────────────
 
 @app.post("/controls/start", dependencies=[Depends(_require_api_key)])
