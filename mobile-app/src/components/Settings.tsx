@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getConfig, updateConfig, setMode, testConnection, BotConfig } from '../api'
+import { getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset, BotConfig, PresetsData } from '../api'
 
 interface Props {
   onLogout: () => void
@@ -9,33 +9,41 @@ export default function Settings({ onLogout }: Props) {
   const [apiUrl, setApiUrl] = useState(localStorage.getItem('api_url') ?? '')
   const [apiKey, setApiKey] = useState(localStorage.getItem('api_key') ?? '')
   const [config, setConfig] = useState<BotConfig | null>(null)
+  const [presets, setPresets] = useState<PresetsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState('')
   const [modeConfirm, setModeConfirm] = useState(false)
   const [pendingMode, setPendingMode] = useState<'paper' | 'live' | null>(null)
   const [modeConfirmText, setModeConfirmText] = useState('')
 
+  function showStatus(msg: string, ms = 3000) {
+    setSaveStatus(msg)
+    setTimeout(() => setSaveStatus(''), ms)
+  }
+
   useEffect(() => {
-    getConfig()
-      .then(setConfig)
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    Promise.all([
+      getConfig().catch(() => null),
+      getPresets().catch(() => null),
+    ]).then(([cfg, pr]) => {
+      if (cfg) setConfig(cfg)
+      setPresets(pr)
+    }).finally(() => setLoading(false))
   }, [])
 
   async function saveApiSettings() {
     const clean = apiUrl.replace(/\/$/, '')
     localStorage.setItem('api_url', clean)
     localStorage.setItem('api_key', apiKey)
-    setSaveStatus('Testing connection…')
+    showStatus('Testing connection…', 10000)
     const ok = await testConnection()
-    setSaveStatus(ok ? 'Connected ✓' : 'Connection failed — check URL and key')
-    setTimeout(() => setSaveStatus(''), 3000)
+    showStatus(ok ? 'Connected ✓' : 'Connection failed — check URL and key')
   }
 
   async function saveConfig() {
     if (!config) return
     try {
-      setSaveStatus('Saving…')
+      showStatus('Saving…', 10000)
       await updateConfig({
         delta_target_min: config.delta_target_min ?? undefined,
         delta_target_max: config.delta_target_max ?? undefined,
@@ -44,11 +52,28 @@ export default function Settings({ onLogout }: Props) {
         premium_fraction_of_spot: config.premium_fraction_of_spot ?? undefined,
         starting_equity: config.starting_equity ?? undefined,
       })
-      setSaveStatus('Config saved ✓')
+      showStatus('Config saved ✓')
     } catch (e) {
-      setSaveStatus(String(e))
+      showStatus(String(e))
     }
-    setTimeout(() => setSaveStatus(''), 3000)
+  }
+
+  async function handleLoadPreset(preset: 'sweep' | 'evolve') {
+    try {
+      showStatus('Loading…', 10000)
+      await loadPreset(preset)
+      // Refresh presets and config
+      const [cfg, pr] = await Promise.all([
+        getConfig().catch(() => null),
+        getPresets().catch(() => null),
+      ])
+      if (cfg) setConfig(cfg)
+      setPresets(pr)
+      const label = preset === 'sweep' ? 'Sweep Best' : 'Evolved Best'
+      showStatus(`${label} loaded — restart bot to apply ✓`, 5000)
+    } catch (e) {
+      showStatus(String(e))
+    }
   }
 
   function requestModeSwitch(m: 'paper' | 'live') {
@@ -62,13 +87,12 @@ export default function Settings({ onLogout }: Props) {
     try {
       const confirmStr = pendingMode === 'live' ? 'SWITCH_TO_LIVE' : undefined
       await setMode(pendingMode, confirmStr)
-      setSaveStatus(`Mode switch to ${pendingMode} sent (takes effect on restart)`)
+      showStatus(`Mode switch to ${pendingMode} sent (takes effect on restart)`, 4000)
     } catch (e) {
-      setSaveStatus(String(e))
+      showStatus(String(e))
     }
     setModeConfirm(false)
     setPendingMode(null)
-    setTimeout(() => setSaveStatus(''), 4000)
   }
 
   function updateField<K extends keyof BotConfig>(k: K, v: BotConfig[K]) {
@@ -84,7 +108,7 @@ export default function Settings({ onLogout }: Props) {
           className={`rounded-xl px-4 py-3 text-sm border ${
             saveStatus.includes('✓') || saveStatus.includes('sent')
               ? 'bg-green-950 border-green-800 text-green-300'
-              : saveStatus.includes('fail') || saveStatus.includes('Error')
+              : saveStatus.includes('fail') || saveStatus.includes('Error') || saveStatus.includes('400') || saveStatus.includes('404')
               ? 'bg-red-950 border-red-800 text-red-300'
               : 'bg-slate-800 border-border text-slate-300'
           }`}
@@ -92,6 +116,46 @@ export default function Settings({ onLogout }: Props) {
           {saveStatus}
         </div>
       )}
+
+      {/* Parameter Presets */}
+      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
+        <p className="text-sm font-semibold text-white">Parameter Presets</p>
+        <p className="text-xs text-slate-400">
+          Loading a preset updates config.yaml — restart the bot to apply changes.
+        </p>
+
+        {!loading && !presets && (
+          <p className="text-xs text-slate-500">Could not load preset data.</p>
+        )}
+
+        {presets && (
+          <div className="space-y-3">
+            {/* Sweep Best */}
+            <PresetCard
+              title="Sweep Best"
+              accent="amber"
+              available={presets.sweep.available}
+              fitness={presets.sweep.fitness}
+              params={presets.sweep.params}
+              isActive={presets.active === 'sweep'}
+              onLoad={() => handleLoadPreset('sweep')}
+              unavailableMsg="Run Parameter Sweep first"
+            />
+
+            {/* Evolved Best */}
+            <PresetCard
+              title="Evolved Best"
+              accent="green"
+              available={presets.evolve.available}
+              fitness={presets.evolve.fitness}
+              params={presets.evolve.params}
+              isActive={presets.active === 'evolve'}
+              onLoad={() => handleLoadPreset('evolve')}
+              unavailableMsg="Run Evolve optimizer first"
+            />
+          </div>
+        )}
+      </div>
 
       {/* API connection */}
       <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
@@ -279,6 +343,87 @@ export default function Settings({ onLogout }: Props) {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+interface PresetCardProps {
+  title: string
+  accent: 'amber' | 'green'
+  available: boolean
+  fitness: number | null
+  params: import('../api').PresetParams
+  isActive: boolean
+  onLoad: () => void
+  unavailableMsg: string
+}
+
+function PresetCard({ title, accent, available, fitness, params, isActive, onLoad, unavailableMsg }: PresetCardProps) {
+  const accentCls = {
+    amber: {
+      border: 'border-amber-800',
+      badge: 'bg-amber-900 text-amber-300 border-amber-700',
+      btn: 'bg-amber-800 hover:bg-amber-700 text-amber-200',
+      activeBadge: 'bg-amber-900 text-amber-300 border border-amber-700',
+    },
+    green: {
+      border: 'border-green-900',
+      badge: 'bg-green-900 text-green-300 border-green-700',
+      btn: 'bg-green-800 hover:bg-green-700 text-green-200',
+      activeBadge: 'bg-green-900 text-green-300 border border-green-700',
+    },
+  }[accent]
+
+  const iv = params.iv_rank_threshold
+  const dMin = params.target_delta_min
+  const dMax = params.target_delta_max
+  const dteMin = params.min_dte
+  const dteMax = params.max_dte
+  const leg = params.max_equity_per_leg
+
+  return (
+    <div className={`rounded-xl p-3 bg-slate-900 border ${available ? accentCls.border : 'border-slate-700'}`}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-white">{title}</span>
+          {isActive && (
+            <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${accentCls.activeBadge}`}>
+              ACTIVE
+            </span>
+          )}
+        </div>
+        {fitness != null && (
+          <span className="text-xs text-slate-400 font-mono">fitness {fitness.toFixed(2)}</span>
+        )}
+      </div>
+
+      {!available ? (
+        <p className="text-xs text-slate-500">{unavailableMsg}</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mb-3 text-xs">
+            {iv != null && (
+              <span className="text-slate-400">IV: <span className="text-slate-200">{(iv * 100).toFixed(1)}%</span></span>
+            )}
+            {dMin != null && dMax != null && (
+              <span className="text-slate-400">Delta: <span className="text-slate-200">{dMin.toFixed(2)}–{dMax.toFixed(2)}</span></span>
+            )}
+            {dteMin != null && dteMax != null && (
+              <span className="text-slate-400">DTE: <span className="text-slate-200">{dteMin}–{dteMax}d</span></span>
+            )}
+            {leg != null && (
+              <span className="text-slate-400">Max Leg: <span className="text-slate-200">{(leg * 100).toFixed(1)}%</span></span>
+            )}
+          </div>
+          <button
+            onClick={onLoad}
+            disabled={isActive}
+            className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${accentCls.btn}`}
+          >
+            {isActive ? 'Currently Loaded' : 'Load'}
+          </button>
+        </>
       )}
     </div>
   )

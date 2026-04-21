@@ -10,20 +10,22 @@ import {
   getStatus,
   getPosition,
   getEquity,
+  getPresets,
   startBot,
   stopBot,
   closePosition,
   StatusData,
   PositionData,
   EquityData,
+  PresetsData,
 } from '../api'
 
-function fmt$(n: number | undefined) {
+function fmt$(n: number | undefined | null) {
   if (n == null) return '—'
   return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
 }
 
-function fmtPct(n: number | undefined) {
+function fmtPct(n: number | undefined | null) {
   if (n == null) return '—'
   const sign = n >= 0 ? '+' : ''
   return `${sign}${n.toFixed(2)}%`
@@ -40,10 +42,15 @@ function fmtUptime(s: number | null | undefined) {
 
 type ConfirmAction = 'stop' | 'close' | null
 
-export default function Dashboard() {
+interface Props {
+  onNavigateTo?: (tab: string) => void
+}
+
+export default function Dashboard({ onNavigateTo }: Props) {
   const [status, setStatus] = useState<StatusData | null>(null)
   const [position, setPosition] = useState<PositionData | null>(null)
   const [equity, setEquity] = useState<EquityData | null>(null)
+  const [presets, setPresets] = useState<PresetsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [confirm, setConfirm] = useState<ConfirmAction>(null)
@@ -51,10 +58,16 @@ export default function Dashboard() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, p, e] = await Promise.all([getStatus(), getPosition(), getEquity()])
+      const [s, p, e, pr] = await Promise.all([
+        getStatus(),
+        getPosition(),
+        getEquity(),
+        getPresets().catch(() => null),
+      ])
       setStatus(s)
       setPosition(p)
       setEquity(e)
+      setPresets(pr)
       setError('')
     } catch (err) {
       setError(String(err))
@@ -124,6 +137,8 @@ export default function Dashboard() {
     )
   }
 
+  const cp = presets?.current?.params
+
   return (
     <div className="p-4 space-y-4 pb-4">
       <h1 className="text-lg font-bold text-white pt-2">Dashboard</h1>
@@ -181,6 +196,54 @@ export default function Dashboard() {
           </p>
         )}
       </div>
+
+      {/* Active Config card */}
+      {cp && (
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">
+              Active Config
+            </p>
+            {onNavigateTo && (
+              <button
+                onClick={() => onNavigateTo('settings')}
+                className="text-xs text-green-400 hover:text-green-300 transition-colors"
+              >
+                Change →
+              </button>
+            )}
+          </div>
+          <div className="mb-3">
+            <PresetBadge active={presets!.active} />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Stat
+              label="IV Threshold"
+              value={cp.iv_rank_threshold != null
+                ? `${(cp.iv_rank_threshold * 100).toFixed(1)}%`
+                : '—'}
+            />
+            <Stat
+              label="Delta Range"
+              value={cp.target_delta_min != null && cp.target_delta_max != null
+                ? `${cp.target_delta_min.toFixed(2)}–${cp.target_delta_max.toFixed(2)}`
+                : '—'}
+            />
+            <Stat
+              label="DTE Range"
+              value={cp.min_dte != null && cp.max_dte != null
+                ? `${cp.min_dte}–${cp.max_dte}d`
+                : '—'}
+            />
+            <Stat
+              label="Max Leg Size"
+              value={cp.max_equity_per_leg != null
+                ? `${(cp.max_equity_per_leg * 100).toFixed(1)}%`
+                : '—'}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Position card */}
       <div className="bg-card rounded-2xl p-4 border border-border">
@@ -339,6 +402,20 @@ export default function Dashboard() {
         </div>
       )}
     </div>
+  )
+}
+
+function PresetBadge({ active }: { active: 'sweep' | 'evolve' | 'custom' }) {
+  const configs = {
+    sweep:  { label: 'SWEEP BEST', cls: 'bg-amber-900 text-amber-300 border-amber-700' },
+    evolve: { label: 'EVOLVED',    cls: 'bg-green-900 text-green-300 border-green-700' },
+    custom: { label: 'CUSTOM',     cls: 'bg-slate-800 text-slate-400 border-slate-600' },
+  }
+  const { label, cls } = configs[active]
+  return (
+    <span className={`px-3 py-1 rounded-full text-xs font-bold border ${cls}`}>
+      {label}
+    </span>
   )
 }
 

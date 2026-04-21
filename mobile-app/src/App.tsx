@@ -38,7 +38,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
-        {activeTab === 'dashboard' && <Dashboard />}
+        {activeTab === 'dashboard' && <Dashboard onNavigateTo={(t) => setActiveTab(t as Tab)} />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'optimizer' && <Optimizer />}
         {activeTab === 'settings' && <Settings onLogout={() => setIsSetup(false)} />}

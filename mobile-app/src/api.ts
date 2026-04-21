@@ -101,6 +101,33 @@ export interface BotConfig {
   regime_ma_days: number | null
 }
 
+export interface PresetParams {
+  iv_rank_threshold?: number | null
+  target_delta_min?: number | null
+  target_delta_max?: number | null
+  min_dte?: number | null
+  max_dte?: number | null
+  max_equity_per_leg?: number | null
+  min_free_equity_fraction?: number | null
+  approx_otm_offset?: number | null
+  premium_fraction_of_spot?: number | null
+  starting_equity?: number | null
+}
+
+export interface PresetInfo {
+  available: boolean
+  fitness: number | null
+  timestamp: string | null
+  params: PresetParams
+}
+
+export interface PresetsData {
+  active: 'sweep' | 'evolve' | 'custom'
+  sweep: PresetInfo
+  evolve: PresetInfo
+  current: { params: PresetParams }
+}
+
 function getBase(): string {
   return (localStorage.getItem('api_url') || '').replace(/\/$/, '')
 }
@@ -143,6 +170,12 @@ export const setMode = (mode: string, confirm?: string) =>
   request<{ ok: boolean; message: string }>('/controls/set_mode', {
     method: 'POST',
     body: JSON.stringify({ mode, confirm }),
+  })
+export const getPresets = () => request<PresetsData>('/config/presets')
+export const loadPreset = (preset: 'sweep' | 'evolve') =>
+  request<{ ok: boolean; preset: string; params_updated: string[] }>('/config/load_preset', {
+    method: 'POST',
+    body: JSON.stringify({ preset }),
   })
 export const updateConfig = (config: Partial<BotConfig>) =>
   request<{ ok: boolean; updated: string[] }>('/config', {

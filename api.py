@@ -492,6 +492,148 @@ class ConfigUpdateRequest(BaseModel):
     params: dict
 
 
+# ── Config presets ─────────────────────────────────────────────────────────────
+
+_PRESET_SECTIONS: dict[str, str] = {
+    "iv_rank_threshold":        "strategy",
+    "target_delta_min":         "strategy",
+    "target_delta_max":         "strategy",
+    "min_dte":                  "strategy",
+    "max_dte":                  "strategy",
+    "max_equity_per_leg":       "sizing",
+    "min_free_equity_fraction": "sizing",
+    "approx_otm_offset":        "backtest",
+    "premium_fraction_of_spot": "backtest",
+    "starting_equity":          "backtest",
+}
+
+
+def _round_param(v: Any) -> Any:
+    return round(v, 6) if isinstance(v, float) else v
+
+
+def _sweep_preset_params() -> dict | None:
+    raw = _read_json(OPT_DIR / "sweep_results.json")
+    if not raw:
+        return None
+    params: dict = {}
+    for key in _PRESET_SECTIONS:
+        rows = raw.get(key)
+        if not isinstance(rows, list):
+            continue
+        valid = [r for r in rows if not r.get("error") and isinstance(r.get("params"), dict)]
+        if not valid:
+            continue
+        best = max(valid, key=lambda r: r.get("fitness", 0.0))
+        val = best["params"].get(key)
+        if val is not None:
+            params[key] = _round_param(val)
+    return params or None
+
+
+def _sweep_best_fitness() -> float | None:
+    raw = _read_json(OPT_DIR / "sweep_results.json")
+    if not raw:
+        return None
+    best: float | None = None
+    for rows in raw.values():
+        if not isinstance(rows, list):
+            continue
+        for r in rows:
+            f = r.get("fitness")
+            if f is not None and (best is None or f > best):
+                best = f
+    return best
+
+
+def _evolve_preset() -> tuple[dict | None, float | None]:
+    genome = _read_yaml(OPT_DIR / "best_genome.yaml")
+    if not genome:
+        return None, None
+    fitness = genome.get("fitness")
+    params = {k: _round_param(genome[k]) for k in _PRESET_SECTIONS if k in genome}
+    return params or None, fitness
+
+
+def _current_preset_params() -> dict:
+    raw = _read_yaml(BASE_DIR / "config.yaml") or {}
+    return {k: raw.get(sec, {}).get(k) for k, sec in _PRESET_SECTIONS.items()}
+
+
+def _params_close(a: Any, b: Any) -> bool:
+    try:
+        return abs(float(a) - float(b)) < 0.001
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _detect_active(current: dict, sweep: dict | None, evolve: dict | None) -> str:
+    for name, preset in (("sweep", sweep), ("evolve", evolve)):
+        if not preset:
+            continue
+        if all(
+            current.get(k) is not None and _params_close(current[k], v)
+            for k, v in preset.items()
+        ):
+            return name
+    return "custom"
+
+
+def _file_ts(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except Exception:
+        return None
+
+
+@app.get("/config/presets", dependencies=[Depends(_require_api_key)])
+def get_presets() -> dict:
+    sweep_params = _sweep_preset_params()
+    evolve_params, evolve_fitness = _evolve_preset()
+    current = _current_preset_params()
+    active = _detect_active(current, sweep_params, evolve_params)
+    return {
+        "active": active,
+        "sweep": {
+            "available":  sweep_params is not None,
+            "fitness":    _sweep_best_fitness(),
+            "timestamp":  _file_ts(OPT_DIR / "sweep_results.json"),
+            "params":     sweep_params or {},
+        },
+        "evolve": {
+            "available":  evolve_params is not None,
+            "fitness":    evolve_fitness,
+            "timestamp":  _file_ts(OPT_DIR / "best_genome.yaml"),
+            "params":     evolve_params or {},
+        },
+        "current": {"params": current},
+    }
+
+
+class LoadPresetRequest(BaseModel):
+    preset: str
+
+
+@app.post("/config/load_preset", dependencies=[Depends(_require_api_key)])
+def load_preset(body: LoadPresetRequest) -> dict:
+    if body.preset not in ("sweep", "evolve"):
+        raise HTTPException(status_code=400, detail="preset must be 'sweep' or 'evolve'")
+    if body.preset == "sweep":
+        params = _sweep_preset_params()
+        if not params:
+            raise HTTPException(status_code=404, detail="No sweep results found — run Parameter Sweep first")
+    else:
+        params, _ = _evolve_preset()
+        if not params:
+            raise HTTPException(status_code=404, detail="No evolved genome found — run Evolve optimizer first")
+    raw = _read_yaml(BASE_DIR / "config.yaml") or {}
+    for key, val in params.items():
+        raw.setdefault(_PRESET_SECTIONS[key], {})[key] = val
+    with open(BASE_DIR / "config.yaml", "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+    return {"ok": True, "preset": body.preset, "params_updated": list(params.keys())}
+
+
 @app.post("/config", dependencies=[Depends(_require_api_key)])
 def update_config(body: ConfigUpdateRequest) -> dict:
     raw = _read_yaml(BASE_DIR / "config.yaml") or {}
