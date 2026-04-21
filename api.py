@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 from datetime import datetime
@@ -109,6 +110,7 @@ def get_status() -> dict:
     state = _read_json(DATA_DIR / "bot_state.json") or {}
     return {
         "bot_running":    state.get("running", False),
+        "paused":         state.get("paused", False),
         "mode":           state.get("mode", "unknown"),
         "uptime_seconds": state.get("uptime_seconds"),
         "last_heartbeat": state.get("last_heartbeat"),
@@ -410,18 +412,29 @@ def _bot_is_running() -> bool:
         return False
 
 
+def _write_bot_state(running: bool) -> None:
+    """Immediately update bot_state.json so /status reflects the new state."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    state_path = DATA_DIR / "bot_state.json"
+    state = _read_json(state_path) or {}
+    state["running"] = running
+    state["paused"] = False
+    if not running:
+        state["uptime_seconds"] = None
+    state_path.write_text(json.dumps(state))
+
+
 @app.post("/controls/start", dependencies=[Depends(_require_api_key)])
 def control_start() -> dict:
-    # Clear kill-switch so a running bot resumes
     kill_path = BASE_DIR / "KILL_SWITCH"
     kill_path.unlink(missing_ok=True)
 
     if _bot_is_running():
-        # Bot is already running — clearing the kill-switch is enough
         _write_command("start")
-        return {"ok": True, "action": "resumed"}
+        _write_bot_state(running=True)
+        return {"ok": True, "action": "resumed", "message": "Bot resumed"}
 
-    # Bot is not running — spawn it in paper mode
+    # Not running — spawn fresh process in paper mode
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
         [sys.executable, str(BASE_DIR / "main.py"), "--mode=paper"],
@@ -430,16 +443,33 @@ def control_start() -> dict:
         stderr=subprocess.STDOUT,
     )
     BOT_PID_FILE.write_text(str(proc.pid))
-    return {"ok": True, "action": "started", "pid": proc.pid}
+    _write_bot_state(running=True)
+    return {"ok": True, "action": "started", "pid": proc.pid, "message": "Bot started"}
 
 
 @app.post("/controls/stop", dependencies=[Depends(_require_api_key)])
 def control_stop() -> dict:
-    # Write kill-switch file (bot reads it on next tick and pauses)
+    # Write kill-switch file so a resumed bot halts on next tick
     kill_path = BASE_DIR / "KILL_SWITCH"
     kill_path.write_text("STOP")
     _write_command("stop")
-    return {"ok": True}
+
+    # Send SIGTERM to kill the process immediately rather than waiting for
+    # it to poll the kill-switch file on its next tick
+    terminated = False
+    if BOT_PID_FILE.exists():
+        try:
+            pid = int(BOT_PID_FILE.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            BOT_PID_FILE.unlink(missing_ok=True)
+            terminated = True
+        except (ValueError, OSError):
+            BOT_PID_FILE.unlink(missing_ok=True)
+
+    _write_bot_state(running=False)
+
+    msg = "Bot stopped" if terminated else "Stop signal sent"
+    return {"ok": True, "message": msg}
 
 
 @app.post("/controls/close_position", dependencies=[Depends(_require_api_key)])
@@ -492,6 +522,182 @@ class ConfigUpdateRequest(BaseModel):
     params: dict
 
 
+# ── Config presets ─────────────────────────────────────────────────────────────
+
+_PRESET_SECTIONS: dict[str, str] = {
+    "iv_rank_threshold":        "strategy",
+    "target_delta_min":         "strategy",
+    "target_delta_max":         "strategy",
+    "min_dte":                  "strategy",
+    "max_dte":                  "strategy",
+    "max_equity_per_leg":       "sizing",
+    "min_free_equity_fraction": "sizing",
+    "approx_otm_offset":        "backtest",
+    "premium_fraction_of_spot": "backtest",
+    "starting_equity":          "backtest",
+}
+
+
+def _round_param(v: Any) -> Any:
+    return round(v, 6) if isinstance(v, float) else v
+
+
+def _sweep_preset_params() -> dict | None:
+    raw = _read_json(OPT_DIR / "sweep_results.json")
+    if not raw:
+        return None
+    params: dict = {}
+    for key in _PRESET_SECTIONS:
+        rows = raw.get(key)
+        if not isinstance(rows, list):
+            continue
+        valid = [r for r in rows if not r.get("error") and isinstance(r.get("params"), dict)]
+        if not valid:
+            continue
+        best = max(valid, key=lambda r: r.get("fitness", 0.0))
+        val = best["params"].get(key)
+        if val is not None:
+            params[key] = _round_param(val)
+    return params or None
+
+
+def _sweep_best_fitness() -> float | None:
+    raw = _read_json(OPT_DIR / "sweep_results.json")
+    if not raw:
+        return None
+    best: float | None = None
+    for rows in raw.values():
+        if not isinstance(rows, list):
+            continue
+        for r in rows:
+            f = r.get("fitness")
+            if f is not None and (best is None or f > best):
+                best = f
+    return best
+
+
+_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe")
+
+
+def _evolve_preset_for_goal(goal: str) -> tuple[dict | None, float | None]:
+    """Return (params, fitness) for a specific evolution goal, or (None, None) if not found."""
+    path = OPT_DIR / f"best_genome_{goal}.yaml"
+    if not path.exists() and goal == "balanced":
+        path = OPT_DIR / "best_genome.yaml"  # backwards compat
+    genome = _read_yaml(path) if path.exists() else None
+    if not genome:
+        return None, None
+    fitness = genome.get("fitness")
+    params = {k: _round_param(genome[k]) for k in _PRESET_SECTIONS if k in genome}
+    return params or None, fitness
+
+
+def _current_preset_params() -> dict:
+    raw = _read_yaml(BASE_DIR / "config.yaml") or {}
+    return {k: raw.get(sec, {}).get(k) for k, sec in _PRESET_SECTIONS.items()}
+
+
+def _params_close(a: Any, b: Any) -> bool:
+    try:
+        return abs(float(a) - float(b)) < 0.001
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _detect_active(current: dict, sweep: dict | None, evolve_goals: dict[str, dict | None]) -> str:
+    if sweep and all(
+        current.get(k) is not None and _params_close(current[k], v)
+        for k, v in sweep.items()
+    ):
+        return "sweep"
+    for goal, params in evolve_goals.items():
+        if params and all(
+            current.get(k) is not None and _params_close(current[k], v)
+            for k, v in params.items()
+        ):
+            return f"evolve_{goal}"
+    return "custom"
+
+
+def _file_ts(path: Path) -> str | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).isoformat()
+    except Exception:
+        return None
+
+
+def _evolve_goal_ts(goal: str) -> str | None:
+    path = OPT_DIR / f"best_genome_{goal}.yaml"
+    if not path.exists() and goal == "balanced":
+        path = OPT_DIR / "best_genome.yaml"
+    return _file_ts(path)
+
+
+@app.get("/config/presets", dependencies=[Depends(_require_api_key)])
+def get_presets() -> dict:
+    sweep_params = _sweep_preset_params()
+    current = _current_preset_params()
+
+    evolve_params_by_goal: dict[str, dict | None] = {}
+    evolve_section: dict[str, dict] = {}
+    for goal in _EVOLVE_GOALS:
+        params, fitness = _evolve_preset_for_goal(goal)
+        evolve_params_by_goal[goal] = params
+        evolve_section[f"evolve_{goal}"] = {
+            "available": params is not None,
+            "fitness":   fitness,
+            "timestamp": _evolve_goal_ts(goal),
+            "params":    params or {},
+        }
+
+    active = _detect_active(current, sweep_params, evolve_params_by_goal)
+    return {
+        "active": active,
+        "sweep": {
+            "available": sweep_params is not None,
+            "fitness":   _sweep_best_fitness(),
+            "timestamp": _file_ts(OPT_DIR / "sweep_results.json"),
+            "params":    sweep_params or {},
+        },
+        **evolve_section,
+        "current": {"params": current},
+    }
+
+
+_VALID_PRESET_NAMES = {"sweep"} | {f"evolve_{g}" for g in _EVOLVE_GOALS}
+
+
+class LoadPresetRequest(BaseModel):
+    preset: str
+
+
+@app.post("/config/load_preset", dependencies=[Depends(_require_api_key)])
+def load_preset(body: LoadPresetRequest) -> dict:
+    if body.preset not in _VALID_PRESET_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"preset must be one of: {sorted(_VALID_PRESET_NAMES)}"
+        )
+    if body.preset == "sweep":
+        params = _sweep_preset_params()
+        if not params:
+            raise HTTPException(status_code=404, detail="No sweep results found — run Parameter Sweep first")
+    else:
+        goal = body.preset[len("evolve_"):]  # strip "evolve_" prefix
+        params, _ = _evolve_preset_for_goal(goal)
+        if not params:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No genome for goal '{goal}' — run Evolve with that fitness goal first"
+            )
+    raw = _read_yaml(BASE_DIR / "config.yaml") or {}
+    for key, val in params.items():
+        raw.setdefault(_PRESET_SECTIONS[key], {})[key] = val
+    with open(BASE_DIR / "config.yaml", "w") as f:
+        yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+    return {"ok": True, "preset": body.preset, "params_updated": list(params.keys())}
+
+
 @app.post("/config", dependencies=[Depends(_require_api_key)])
 def update_config(body: ConfigUpdateRequest) -> dict:
     raw = _read_yaml(BASE_DIR / "config.yaml") or {}
@@ -509,6 +715,7 @@ def update_config(body: ConfigUpdateRequest) -> dict:
 class OptimizerRunRequest(BaseModel):
     mode: str
     param: str | None = None
+    fitness_goal: str = "balanced"
 
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
@@ -529,6 +736,8 @@ def optimizer_run(body: OptimizerRunRequest) -> dict:
     cmd = [sys.executable, str(BASE_DIR / "optimizer.py"), "--mode", body.mode]
     if body.param:
         cmd += ["--param", body.param]
+    if body.mode == "evolve" and body.fitness_goal:
+        cmd += ["--fitness-goal", body.fitness_goal]
 
     proc = subprocess.Popen(
         cmd,
