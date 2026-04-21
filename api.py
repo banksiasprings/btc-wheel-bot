@@ -23,6 +23,8 @@ import yaml
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -474,3 +476,22 @@ def optimizer_running() -> dict:
         return {"running": True, "pid": pid}
     except (ValueError, OSError):
         return {"running": False}
+
+
+# ── PWA static file serving ────────────────────────────────────────────────────
+_STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
+
+if _STATIC_DIR.exists():
+    # Serve the SPA index for all unmatched paths so client-side routing works
+    @app.get("/", include_in_schema=False)
+    async def serve_root():
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        file = _STATIC_DIR / full_path
+        if file.exists() and file.is_file():
+            return FileResponse(file)
+        return FileResponse(_STATIC_DIR / "index.html")
+
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
