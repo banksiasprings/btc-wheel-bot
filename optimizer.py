@@ -819,6 +819,163 @@ class Optimizer:
         print(f"  Evolution chart saved → {path}")
 
 
+# ── Monte Carlo simulation ────────────────────────────────────────────────────
+
+
+def run_monte_carlo(results_dir: Path, n_runs: int = 100, sim_months: int = 6) -> None:
+    """
+    Monte Carlo simulation: stress-test the best genome across many random
+    market windows to understand the distribution of possible outcomes.
+
+    Method
+    ------
+    1. Load best genome (from evolve mode).
+    2. Fetch all available price history (~24 months including IV warmup).
+    3. Run N backtests, each starting at a different random date within the
+       available history.  Each window covers `sim_months` of trading.
+    4. Collect the distribution of fitness, return, Sharpe, drawdown, win rate.
+    5. Report p5/p25/p50/p75/p95 percentiles and save to
+       data/optimizer/monte_carlo_results.json.
+    """
+    import yaml
+
+    logger.info(f"=== Monte Carlo Simulation ({n_runs} runs × {sim_months}m windows) ===")
+
+    best_genome_path = results_dir / "best_genome.yaml"
+    if not best_genome_path.exists():
+        logger.error("No best_genome.yaml found. Run 'evolve' mode first.")
+        print("\n  ERROR: Run the Evolve optimizer first — Monte Carlo needs a best genome to test.")
+        return
+
+    with open(best_genome_path) as f:
+        genome_dict = yaml.safe_load(f)
+
+    params = ParamSet(**{k: v for k, v in genome_dict.items() if k in ParamSet.__dataclass_fields__})
+
+    from backtester import Backtester
+    from config import cfg
+
+    # Patch config
+    cfg.strategy.iv_rank_threshold       = params.iv_rank_threshold
+    cfg.strategy.target_delta_min        = params.target_delta_min
+    cfg.strategy.target_delta_max        = params.target_delta_max
+    cfg.strategy.min_dte                 = int(params.min_dte)
+    cfg.strategy.max_dte                 = int(params.max_dte)
+    cfg.sizing.max_equity_per_leg        = params.max_equity_per_leg
+    cfg.sizing.min_free_equity_fraction  = params.min_free_equity_fraction
+    cfg.backtest.approx_otm_offset       = params.approx_otm_offset
+    cfg.backtest.premium_fraction_of_spot = params.premium_fraction_of_spot
+    cfg.backtest.starting_equity         = params.starting_equity
+
+    # Fetch data once
+    logger.info("Fetching market data...")
+    bt0 = Backtester()
+    ohlcv_full = bt0._fetch_prices()
+    raw_iv = bt0._rest._get("get_historical_volatility", {"currency": "BTC"})
+    iv_history = raw_iv if raw_iv else []
+    iv_window = int(params.iv_rank_window_days)
+
+    # The full dataset has 12m simulation + 12m IV warmup prefix.
+    # Identify the usable simulation rows (last 12 months).
+    sim_days = sim_months * 30
+    warmup_rows = 380  # rows reserved for IV rank warmup
+
+    # We can start any window that has at least sim_days rows after it
+    max_start_idx = len(ohlcv_full) - sim_days - 1
+    min_start_idx = warmup_rows  # need warmup before any simulation
+
+    if max_start_idx <= min_start_idx:
+        logger.error("Not enough data for Monte Carlo windows.")
+        print("\n  ERROR: Not enough price history for Monte Carlo. Need at least 18 months of data.")
+        return
+
+    rng = random.Random(42)
+    start_indices = [rng.randint(min_start_idx, max_start_idx) for _ in range(n_runs)]
+
+    results_list = []
+    for i, start_idx in enumerate(start_indices):
+        end_idx = start_idx + sim_days
+        # Include warmup prefix for IV rank calculation
+        warmup_start = max(0, start_idx - warmup_rows)
+        window_df = ohlcv_full.iloc[warmup_start: end_idx].reset_index(drop=True)
+
+        try:
+            bt = Backtester()
+            r = bt.run_with_data(window_df, iv_history, iv_window=iv_window)
+            results_list.append({
+                "run":          i + 1,
+                "start_date":   str(ohlcv_full.iloc[start_idx]["date"].date()),
+                "end_date":     str(ohlcv_full.iloc[end_idx - 1]["date"].date()),
+                "fitness":      fitness_score(r),
+                "sharpe":       round(r.sharpe_ratio, 3),
+                "return_pct":   round(r.total_return_pct, 2),
+                "win_rate":     round(r.win_rate_pct, 1),
+                "max_drawdown": round(r.max_drawdown_pct, 2),
+                "num_cycles":   r.num_cycles,
+            })
+        except Exception as e:
+            logger.debug(f"Run {i+1} failed: {e}")
+            continue
+
+        if (i + 1) % 10 == 0:
+            logger.info(f"  {i+1}/{n_runs} runs complete...")
+
+    if not results_list:
+        logger.error("All Monte Carlo runs failed.")
+        return
+
+    def pct(arr, p):
+        return round(float(np.percentile(arr, p)), 3)
+
+    for metric in ["fitness", "sharpe", "return_pct", "win_rate", "max_drawdown"]:
+        vals = [r[metric] for r in results_list]
+        arr = np.array(vals)
+        logger.info(
+            f"  {metric:15s}: p5={pct(arr,5):6.2f}  p25={pct(arr,25):6.2f}  "
+            f"p50={pct(arr,50):6.2f}  p75={pct(arr,75):6.2f}  p95={pct(arr,95):6.2f}"
+        )
+
+    def dist(metric):
+        vals = np.array([r[metric] for r in results_list])
+        return {
+            "p5":  pct(vals, 5),  "p25": pct(vals, 25), "p50": pct(vals, 50),
+            "p75": pct(vals, 75), "p95": pct(vals, 95),
+            "mean": round(float(vals.mean()), 3),
+            "std":  round(float(vals.std()),  3),
+        }
+
+    positive_returns = sum(1 for r in results_list if r["return_pct"] > 0)
+    prob_profit = round(positive_returns / len(results_list) * 100, 1)
+
+    output = {
+        "timestamp":     datetime.utcnow().isoformat(),
+        "n_runs":        len(results_list),
+        "sim_months":    sim_months,
+        "genome":        genome_dict,
+        "prob_profit_pct": prob_profit,
+        "distributions": {
+            "fitness":      dist("fitness"),
+            "sharpe":       dist("sharpe"),
+            "return_pct":   dist("return_pct"),
+            "win_rate":     dist("win_rate"),
+            "max_drawdown": dist("max_drawdown"),
+            "num_cycles":   dist("num_cycles"),
+        },
+        "runs": results_list,
+    }
+
+    out_path = results_dir / "monte_carlo_results.json"
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2)
+
+    logger.info(f"\n  Monte Carlo complete: {len(results_list)} runs.")
+    logger.info(f"  Probability of profit: {prob_profit}%")
+    logger.info(f"  Median return: {dist('return_pct')['p50']}%")
+    logger.info(f"  Results saved → {out_path}")
+    print(f"\n  Monte Carlo complete. Probability of profit: {prob_profit}%. "
+          f"Median return: {dist('return_pct')['p50']}%")
+
+
 # ── Walk-forward validation ───────────────────────────────────────────────────
 
 
@@ -989,7 +1146,7 @@ Examples:
   python optimizer.py --mode evolve --pop 20 --gen 8
         """,
     )
-    parser.add_argument("--mode", choices=["sweep", "evolve", "walk_forward"], default="sweep")
+    parser.add_argument("--mode", choices=["sweep", "evolve", "walk_forward", "monte_carlo"], default="sweep")
     parser.add_argument("--param", type=str, default=None,
                         help="For sweep mode: which parameter to sweep (default: all)")
     parser.add_argument("--population", "--pop", dest="population", type=int, default=20,
@@ -1044,6 +1201,11 @@ Examples:
         run_walk_forward(
             results_dir=Path("data/optimizer"),
             workers=args.workers,
+        )
+
+    elif args.mode == "monte_carlo":
+        run_monte_carlo(
+            results_dir=Path("data/optimizer"),
         )
 
 

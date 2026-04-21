@@ -373,6 +373,20 @@ def get_walk_forward_results() -> dict:
         return {"available": False}
 
 
+@app.get("/optimizer/monte_carlo_results", dependencies=[Depends(_require_api_key)])
+def get_monte_carlo_results() -> dict:
+    """Return Monte Carlo simulation results."""
+    path = OPT_DIR / "monte_carlo_results.json"
+    if not path.exists():
+        return {"available": False}
+    try:
+        data = _read_json(path)
+        data["available"] = True
+        return data
+    except Exception:
+        return {"available": False}
+
+
 # ── Controls ──────────────────────────────────────────────────────────────────
 
 @app.post("/controls/start", dependencies=[Depends(_require_api_key)])
@@ -457,12 +471,19 @@ class OptimizerRunRequest(BaseModel):
 
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
+# Modes not yet implemented in optimizer.py — return a clear error rather than crashing
+_UNIMPLEMENTED_MODES = {"reconcile"}
 
 
 @app.post("/optimizer/run", dependencies=[Depends(_require_api_key)])
 def optimizer_run(body: OptimizerRunRequest) -> dict:
     if body.mode not in _VALID_OPT_MODES:
         raise HTTPException(status_code=400, detail=f"mode must be one of {_VALID_OPT_MODES}")
+    if body.mode in _UNIMPLEMENTED_MODES:
+        raise HTTPException(
+            status_code=501,
+            detail=f"'{body.mode}' requires paper trade history — run the bot in paper mode first to collect data."
+        )
 
     cmd = [sys.executable, str(BASE_DIR / "optimizer.py"), "--mode", body.mode]
     if body.param:
@@ -487,8 +508,17 @@ def optimizer_running() -> dict:
     try:
         pid = int(pid_path.read_text().strip())
         os.kill(pid, 0)   # raises OSError if process doesn't exist
+        # Check for zombie (process exited but not reaped)
+        stat = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "stat="],
+            capture_output=True, text=True
+        )
+        if "Z" in stat.stdout:
+            pid_path.unlink(missing_ok=True)
+            return {"running": False}
         return {"running": True, "pid": pid}
     except (ValueError, OSError):
+        pid_path.unlink(missing_ok=True)
         return {"running": False}
 
 
