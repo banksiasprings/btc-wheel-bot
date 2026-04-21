@@ -574,8 +574,15 @@ def _sweep_best_fitness() -> float | None:
     return best
 
 
-def _evolve_preset() -> tuple[dict | None, float | None]:
-    genome = _read_yaml(OPT_DIR / "best_genome.yaml")
+_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe")
+
+
+def _evolve_preset_for_goal(goal: str) -> tuple[dict | None, float | None]:
+    """Return (params, fitness) for a specific evolution goal, or (None, None) if not found."""
+    path = OPT_DIR / f"best_genome_{goal}.yaml"
+    if not path.exists() and goal == "balanced":
+        path = OPT_DIR / "best_genome.yaml"  # backwards compat
+    genome = _read_yaml(path) if path.exists() else None
     if not genome:
         return None, None
     fitness = genome.get("fitness")
@@ -595,15 +602,18 @@ def _params_close(a: Any, b: Any) -> bool:
         return a == b
 
 
-def _detect_active(current: dict, sweep: dict | None, evolve: dict | None) -> str:
-    for name, preset in (("sweep", sweep), ("evolve", evolve)):
-        if not preset:
-            continue
-        if all(
+def _detect_active(current: dict, sweep: dict | None, evolve_goals: dict[str, dict | None]) -> str:
+    if sweep and all(
+        current.get(k) is not None and _params_close(current[k], v)
+        for k, v in sweep.items()
+    ):
+        return "sweep"
+    for goal, params in evolve_goals.items():
+        if params and all(
             current.get(k) is not None and _params_close(current[k], v)
-            for k, v in preset.items()
+            for k, v in params.items()
         ):
-            return name
+            return f"evolve_{goal}"
     return "custom"
 
 
@@ -614,28 +624,45 @@ def _file_ts(path: Path) -> str | None:
         return None
 
 
+def _evolve_goal_ts(goal: str) -> str | None:
+    path = OPT_DIR / f"best_genome_{goal}.yaml"
+    if not path.exists() and goal == "balanced":
+        path = OPT_DIR / "best_genome.yaml"
+    return _file_ts(path)
+
+
 @app.get("/config/presets", dependencies=[Depends(_require_api_key)])
 def get_presets() -> dict:
     sweep_params = _sweep_preset_params()
-    evolve_params, evolve_fitness = _evolve_preset()
     current = _current_preset_params()
-    active = _detect_active(current, sweep_params, evolve_params)
+
+    evolve_params_by_goal: dict[str, dict | None] = {}
+    evolve_section: dict[str, dict] = {}
+    for goal in _EVOLVE_GOALS:
+        params, fitness = _evolve_preset_for_goal(goal)
+        evolve_params_by_goal[goal] = params
+        evolve_section[f"evolve_{goal}"] = {
+            "available": params is not None,
+            "fitness":   fitness,
+            "timestamp": _evolve_goal_ts(goal),
+            "params":    params or {},
+        }
+
+    active = _detect_active(current, sweep_params, evolve_params_by_goal)
     return {
         "active": active,
         "sweep": {
-            "available":  sweep_params is not None,
-            "fitness":    _sweep_best_fitness(),
-            "timestamp":  _file_ts(OPT_DIR / "sweep_results.json"),
-            "params":     sweep_params or {},
+            "available": sweep_params is not None,
+            "fitness":   _sweep_best_fitness(),
+            "timestamp": _file_ts(OPT_DIR / "sweep_results.json"),
+            "params":    sweep_params or {},
         },
-        "evolve": {
-            "available":  evolve_params is not None,
-            "fitness":    evolve_fitness,
-            "timestamp":  _file_ts(OPT_DIR / "best_genome.yaml"),
-            "params":     evolve_params or {},
-        },
+        **evolve_section,
         "current": {"params": current},
     }
+
+
+_VALID_PRESET_NAMES = {"sweep"} | {f"evolve_{g}" for g in _EVOLVE_GOALS}
 
 
 class LoadPresetRequest(BaseModel):
@@ -644,16 +671,23 @@ class LoadPresetRequest(BaseModel):
 
 @app.post("/config/load_preset", dependencies=[Depends(_require_api_key)])
 def load_preset(body: LoadPresetRequest) -> dict:
-    if body.preset not in ("sweep", "evolve"):
-        raise HTTPException(status_code=400, detail="preset must be 'sweep' or 'evolve'")
+    if body.preset not in _VALID_PRESET_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"preset must be one of: {sorted(_VALID_PRESET_NAMES)}"
+        )
     if body.preset == "sweep":
         params = _sweep_preset_params()
         if not params:
             raise HTTPException(status_code=404, detail="No sweep results found — run Parameter Sweep first")
     else:
-        params, _ = _evolve_preset()
+        goal = body.preset[len("evolve_"):]  # strip "evolve_" prefix
+        params, _ = _evolve_preset_for_goal(goal)
         if not params:
-            raise HTTPException(status_code=404, detail="No evolved genome found — run Evolve optimizer first")
+            raise HTTPException(
+                status_code=404,
+                detail=f"No genome for goal '{goal}' — run Evolve with that fitness goal first"
+            )
     raw = _read_yaml(BASE_DIR / "config.yaml") or {}
     for key, val in params.items():
         raw.setdefault(_PRESET_SECTIONS[key], {})[key] = val
@@ -679,6 +713,7 @@ def update_config(body: ConfigUpdateRequest) -> dict:
 class OptimizerRunRequest(BaseModel):
     mode: str
     param: str | None = None
+    fitness_goal: str = "balanced"
 
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
@@ -699,6 +734,8 @@ def optimizer_run(body: OptimizerRunRequest) -> dict:
     cmd = [sys.executable, str(BASE_DIR / "optimizer.py"), "--mode", body.mode]
     if body.param:
         cmd += ["--param", body.param]
+    if body.mode == "evolve" and body.fitness_goal:
+        cmd += ["--fitness-goal", body.fitness_goal]
 
     proc = subprocess.Popen(
         cmd,

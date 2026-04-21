@@ -121,10 +121,16 @@ export interface PresetInfo {
   params: PresetParams
 }
 
+export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe'
+export type ActivePreset = 'sweep' | `evolve_${EvolveGoal}` | 'custom'
+
 export interface PresetsData {
-  active: 'sweep' | 'evolve' | 'custom'
+  active: ActivePreset
   sweep: PresetInfo
-  evolve: PresetInfo
+  evolve_balanced: PresetInfo
+  evolve_max_yield: PresetInfo
+  evolve_safest: PresetInfo
+  evolve_sharpe: PresetInfo
   current: { params: PresetParams }
 }
 
@@ -172,7 +178,7 @@ export const setMode = (mode: string, confirm?: string) =>
     body: JSON.stringify({ mode, confirm }),
   })
 export const getPresets = () => request<PresetsData>('/config/presets')
-export const loadPreset = (preset: 'sweep' | 'evolve') =>
+export const loadPreset = (preset: Exclude<ActivePreset, 'custom'>) =>
   request<{ ok: boolean; preset: string; params_updated: string[] }>('/config/load_preset', {
     method: 'POST',
     body: JSON.stringify({ preset }),
@@ -182,10 +188,10 @@ export const updateConfig = (config: Partial<BotConfig>) =>
     method: 'POST',
     body: JSON.stringify(config),
   })
-export const runOptimizer = (mode: string, param?: string) =>
+export const runOptimizer = (mode: string, param?: string, fitness_goal?: string) =>
   request<{ ok: boolean; pid: number; mode: string }>('/optimizer/run', {
     method: 'POST',
-    body: JSON.stringify({ mode, param }),
+    body: JSON.stringify({ mode, param, fitness_goal }),
   })
 
 export async function testConnection(): Promise<boolean> {

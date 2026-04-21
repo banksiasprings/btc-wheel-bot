@@ -443,13 +443,16 @@ export default function Dashboard({ onNavigateTo }: Props) {
   )
 }
 
-function PresetBadge({ active }: { active: 'sweep' | 'evolve' | 'custom' }) {
-  const configs = {
-    sweep:  { label: 'SWEEP BEST', cls: 'bg-amber-900 text-amber-300 border-amber-700' },
-    evolve: { label: 'EVOLVED',    cls: 'bg-green-900 text-green-300 border-green-700' },
-    custom: { label: 'CUSTOM',     cls: 'bg-slate-800 text-slate-400 border-slate-600' },
+function PresetBadge({ active }: { active: string }) {
+  const configs: Record<string, { label: string; cls: string }> = {
+    sweep:            { label: 'SWEEP BEST',   cls: 'bg-amber-900  text-amber-300  border-amber-700'  },
+    evolve_balanced:  { label: '🎯 BALANCED',  cls: 'bg-green-900  text-green-300  border-green-700'  },
+    evolve_max_yield: { label: '🚀 MAX YIELD', cls: 'bg-orange-900 text-orange-300 border-orange-700' },
+    evolve_safest:    { label: '🛡 SAFEST',    cls: 'bg-sky-900    text-sky-300    border-sky-700'    },
+    evolve_sharpe:    { label: '⚖️ SHARPE',    cls: 'bg-purple-900 text-purple-300 border-purple-700' },
+    custom:           { label: 'CUSTOM',        cls: 'bg-slate-800  text-slate-400  border-slate-600'  },
   }
-  const { label, cls } = configs[active]
+  const { label, cls } = configs[active] ?? configs.custom
   return (
     <span className={`px-3 py-1 rounded-full text-xs font-bold border ${cls}`}>
       {label}

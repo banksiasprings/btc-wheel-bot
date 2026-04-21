@@ -1,5 +1,18 @@
 import { useState, useEffect } from 'react'
-import { getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset, BotConfig, PresetsData } from '../api'
+import { getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset, BotConfig, PresetsData, ActivePreset } from '../api'
+
+const EVOLVE_PRESET_CONFIGS: {
+  key: Exclude<ActivePreset, 'sweep' | 'custom'>
+  label: string
+  icon: string
+  accent: 'green' | 'orange' | 'sky' | 'purple'
+  unavailableMsg: string
+}[] = [
+  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first' },
+  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first' },
+  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first' },
+  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first' },
+]
 
 interface Props {
   onLogout: () => void
@@ -58,7 +71,7 @@ export default function Settings({ onLogout }: Props) {
     }
   }
 
-  async function handleLoadPreset(preset: 'sweep' | 'evolve') {
+  async function handleLoadPreset(preset: Exclude<ActivePreset, 'custom'>) {
     try {
       showStatus('Loading…', 10000)
       await loadPreset(preset)
@@ -130,9 +143,9 @@ export default function Settings({ onLogout }: Props) {
 
         {presets && (
           <div className="space-y-3">
-            {/* Sweep Best */}
             <PresetCard
-              title="Sweep Best"
+              title="📊 Sweep Best"
+              icon=""
               accent="amber"
               available={presets.sweep.available}
               fitness={presets.sweep.fitness}
@@ -141,18 +154,23 @@ export default function Settings({ onLogout }: Props) {
               onLoad={() => handleLoadPreset('sweep')}
               unavailableMsg="Run Parameter Sweep first"
             />
-
-            {/* Evolved Best */}
-            <PresetCard
-              title="Evolved Best"
-              accent="green"
-              available={presets.evolve.available}
-              fitness={presets.evolve.fitness}
-              params={presets.evolve.params}
-              isActive={presets.active === 'evolve'}
-              onLoad={() => handleLoadPreset('evolve')}
-              unavailableMsg="Run Evolve optimizer first"
-            />
+            {EVOLVE_PRESET_CONFIGS.map(cfg => {
+              const info = presets[cfg.key]
+              return (
+                <PresetCard
+                  key={cfg.key}
+                  title={`${cfg.icon} ${cfg.label}`}
+                  icon=""
+                  accent={cfg.accent}
+                  available={info.available}
+                  fitness={info.fitness}
+                  params={info.params}
+                  isActive={presets.active === cfg.key}
+                  onLoad={() => handleLoadPreset(cfg.key)}
+                  unavailableMsg={cfg.unavailableMsg}
+                />
+              )
+            })}
           </div>
         )}
       </div>
@@ -350,7 +368,8 @@ export default function Settings({ onLogout }: Props) {
 
 interface PresetCardProps {
   title: string
-  accent: 'amber' | 'green'
+  icon: string
+  accent: 'amber' | 'green' | 'orange' | 'sky' | 'purple'
   available: boolean
   fitness: number | null
   params: import('../api').PresetParams
@@ -359,20 +378,13 @@ interface PresetCardProps {
   unavailableMsg: string
 }
 
-function PresetCard({ title, accent, available, fitness, params, isActive, onLoad, unavailableMsg }: PresetCardProps) {
+function PresetCard({ title, icon, accent, available, fitness, params, isActive, onLoad, unavailableMsg }: PresetCardProps) {
   const accentCls = {
-    amber: {
-      border: 'border-amber-800',
-      badge: 'bg-amber-900 text-amber-300 border-amber-700',
-      btn: 'bg-amber-800 hover:bg-amber-700 text-amber-200',
-      activeBadge: 'bg-amber-900 text-amber-300 border border-amber-700',
-    },
-    green: {
-      border: 'border-green-900',
-      badge: 'bg-green-900 text-green-300 border-green-700',
-      btn: 'bg-green-800 hover:bg-green-700 text-green-200',
-      activeBadge: 'bg-green-900 text-green-300 border border-green-700',
-    },
+    amber:  { border: 'border-amber-800',  btn: 'bg-amber-800  hover:bg-amber-700  text-amber-200',  activeBadge: 'bg-amber-900  text-amber-300  border border-amber-700'  },
+    green:  { border: 'border-green-900',  btn: 'bg-green-800  hover:bg-green-700  text-green-200',  activeBadge: 'bg-green-900  text-green-300  border border-green-700'  },
+    orange: { border: 'border-orange-900', btn: 'bg-orange-800 hover:bg-orange-700 text-orange-200', activeBadge: 'bg-orange-900 text-orange-300 border border-orange-700' },
+    sky:    { border: 'border-sky-900',    btn: 'bg-sky-800    hover:bg-sky-700    text-sky-200',    activeBadge: 'bg-sky-900    text-sky-300    border border-sky-700'    },
+    purple: { border: 'border-purple-900', btn: 'bg-purple-800 hover:bg-purple-700 text-purple-200', activeBadge: 'bg-purple-900 text-purple-300 border border-purple-700' },
   }[accent]
 
   const iv = params.iv_rank_threshold

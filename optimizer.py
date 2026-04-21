@@ -92,6 +92,26 @@ FITNESS_WEIGHTS = {
 # ── Fitness scoring ────────────────────────────────────────────────────────────
 
 
+EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe")
+
+
+def _fitness_for_goal(result: dict, goal: str) -> float:
+    """Re-score a backtest result dict using a goal-specific fitness function."""
+    r   = result.get("total_return_pct", 0) / 100
+    sharpe = result.get("sharpe_ratio", 0)
+    win = result.get("win_rate_pct", 0) / 100
+    dd  = abs(result.get("max_drawdown_pct", 0)) / 100 + 0.001
+
+    if goal == "max_yield":
+        return r * 10 + win * 2
+    elif goal == "safest":
+        return (win * 5) - (dd * 10) + (r * 1)
+    elif goal == "sharpe":
+        return sharpe * 3 + win * 1
+    else:  # "balanced"
+        return (sharpe * 2) + (r * 3) + (win * 2) - (dd * 3)
+
+
 def fitness_score(results: "BacktestResults") -> float:  # noqa: F821
     """
     Calculate a single fitness score from backtest results.
@@ -571,6 +591,7 @@ class Optimizer:
         mutation_rate: float = 0.3,
         seed_from_sweep: bool = False,
         use_experience: bool = True,
+        fitness_goal: str = "balanced",
     ) -> ParamSet:
         """
         Genetic algorithm over all parameters simultaneously.
@@ -642,9 +663,11 @@ class Optimizer:
             logger.info(f"Generation {gen}/{generations}")
             results = self._run_parallel(population, calibration={} if not use_experience else None)
 
-            # Attach genome to each result for tracking
+            # Attach genome to each result for tracking; re-score with goal fitness
             for res, genome in zip(results, population):
                 res["generation"] = gen
+                if not res.get("error"):
+                    res["fitness"] = _fitness_for_goal(res, fitness_goal)
 
             # Sort by fitness
             valid = [r for r in results if not r["error"]]
@@ -1157,6 +1180,9 @@ Examples:
                         help="Number of elite survivors to keep (evolve mode)")
     parser.add_argument("--mutation", type=float, default=0.3,
                         help="Mutation rate 0.0–1.0 (evolve mode)")
+    parser.add_argument("--fitness-goal", dest="fitness_goal",
+                        choices=list(EVOLVE_GOALS), default="balanced",
+                        help="Fitness objective for evolution (default: balanced)")
     parser.add_argument("--seed-from-sweep", action="store_true", default=False,
                         help="Seed 30%% of gen-0 population from sweep best-per-param values")
     parser.add_argument("--no-experience", action="store_true", default=False,
@@ -1182,6 +1208,7 @@ Examples:
         opt.run_sweep(target_param=args.param, use_experience=use_exp)
 
     elif args.mode == "evolve":
+        goal = args.fitness_goal
         best = opt.run_evolution(
             population_size=args.population,
             generations=args.generations,
@@ -1189,13 +1216,20 @@ Examples:
             mutation_rate=args.mutation,
             seed_from_sweep=args.seed_from_sweep,
             use_experience=use_exp,
+            fitness_goal=goal,
         )
-        # Save best genome to YAML for easy copy-paste into config.yaml
         import yaml
-        out_path = Path("data/optimizer/best_genome.yaml")
-        with open(out_path, "w") as f:
-            yaml.dump(asdict(best), f, default_flow_style=False)
-        print(f"\n  Best genome saved to {out_path} — copy values into config.yaml")
+        genome_dict = asdict(best)
+        genome_dict["fitness_goal"] = goal
+        # Save to goal-specific file and keep best_genome.yaml for backwards compat
+        out_dir = Path("data/optimizer")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        goal_path = out_dir / f"best_genome_{goal}.yaml"
+        generic_path = out_dir / "best_genome.yaml"
+        for path in (goal_path, generic_path):
+            with open(path, "w") as f:
+                yaml.dump(genome_dict, f, default_flow_style=False)
+        print(f"\n  Best genome saved to {goal_path} (and {generic_path})")
 
     elif args.mode == "walk_forward":
         run_walk_forward(

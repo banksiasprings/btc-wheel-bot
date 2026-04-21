@@ -2,10 +2,17 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   getOptimizerSummary, getOptimizerRunning, runOptimizer,
   getSweepResults, getEvolveResults,
-  OptimizerSummary, SweepResults, EvolveResults, SweepEntry,
+  OptimizerSummary, SweepResults, EvolveResults, SweepEntry, EvolveGoal,
 } from '../api'
 
 type OptMode = 'sweep' | 'evolve' | 'walk_forward' | 'monte_carlo' | 'reconcile'
+
+const FITNESS_GOALS: { id: EvolveGoal; icon: string; label: string; desc: string; activeCls: string }[] = [
+  { id: 'balanced',  icon: '🎯', label: 'Balanced',  desc: 'All-round (default)',          activeCls: 'bg-green-900 border-green-600 text-white' },
+  { id: 'max_yield', icon: '🚀', label: 'Max Yield', desc: 'Highest return. Aggressive.',   activeCls: 'bg-orange-900 border-orange-600 text-white' },
+  { id: 'safest',    icon: '🛡', label: 'Safest',    desc: 'Lowest drawdown. Conservative.', activeCls: 'bg-sky-900 border-sky-600 text-white' },
+  { id: 'sharpe',    icon: '⚖️', label: 'Sharpe',    desc: 'Best risk-adjusted return.',    activeCls: 'bg-purple-900 border-purple-600 text-white' },
+]
 
 const MODE_LABELS: Record<OptMode, string> = {
   sweep:        'Parameter Sweep',
@@ -251,9 +258,10 @@ export default function Optimizer() {
   const [completed,  setCompleted]  = useState(false)
   const [loading,    setLoading]    = useState(true)
   const [error,      setError]      = useState('')
-  const [mode,       setMode]       = useState<OptMode>('sweep')
-  const [launching,  setLaunching]  = useState(false)
-  const [launchMsg,  setLaunchMsg]  = useState('')
+  const [mode,        setMode]        = useState<OptMode>('sweep')
+  const [fitnessGoal, setFitnessGoal] = useState<EvolveGoal>('balanced')
+  const [launching,   setLaunching]   = useState(false)
+  const [launchMsg,   setLaunchMsg]   = useState('')
 
   const fastPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const slowPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -308,7 +316,7 @@ export default function Optimizer() {
     setLaunchMsg('')
     setCompleted(false)
     try {
-      const r = await runOptimizer(mode)
+      const r = await runOptimizer(mode, undefined, mode === 'evolve' ? fitnessGoal : undefined)
       setLaunchMsg(`Started (PID ${r.pid})`)
       setRunning(true)
     } catch (e) {
@@ -390,6 +398,29 @@ export default function Optimizer() {
             <option key={k} value={k}>{v}</option>
           ))}
         </select>
+
+        {/* Fitness goal selector — only shown for Evolve mode */}
+        {mode === 'evolve' && (
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400 font-medium">Fitness Goal</p>
+            <div className="grid grid-cols-2 gap-2">
+              {FITNESS_GOALS.map(g => (
+                <button
+                  key={g.id}
+                  onClick={() => setFitnessGoal(g.id)}
+                  className={`rounded-xl p-3 text-left border transition-colors ${
+                    fitnessGoal === g.id
+                      ? g.activeCls
+                      : 'bg-navy border-border text-slate-400 hover:border-slate-500'
+                  }`}
+                >
+                  <p className="text-xs font-semibold">{g.icon} {g.label}</p>
+                  <p className="text-xs mt-0.5 opacity-70 leading-snug">{g.desc}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {launchMsg && (
           <p className="text-xs text-green-400 bg-green-950 border border-green-800 rounded-lg px-3 py-2">
