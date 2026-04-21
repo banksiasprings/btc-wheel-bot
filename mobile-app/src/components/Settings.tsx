@@ -68,6 +68,7 @@ export default function Settings({ onLogout }: Props) {
         max_dte: config.max_dte ?? undefined,
         premium_fraction_of_spot: config.premium_fraction_of_spot ?? undefined,
         starting_equity: config.starting_equity ?? undefined,
+        use_regime_filter: config.use_regime_filter,
       })
       showStatus('Config saved ✓')
     } catch (e) {
@@ -256,7 +257,31 @@ export default function Settings({ onLogout }: Props) {
             value={config.starting_equity}
             min={1000} max={1000000} step={1000}
             onChange={(v) => updateField('starting_equity', v)}
+            onInfo={() => setInfo(GLOSSARY.starting_equity)}
           />
+
+          {/* Regime filter toggle */}
+          <div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <label className="text-xs text-slate-400">Regime Filter</label>
+                <button onClick={() => setInfo(GLOSSARY.regime_filter)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+              </div>
+              <button
+                onClick={() => updateField('use_regime_filter', !config.use_regime_filter)}
+                className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 ${
+                  config.use_regime_filter ? 'bg-green-600' : 'bg-slate-700'
+                }`}
+              >
+                <span className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                  config.use_regime_filter ? 'translate-x-5' : 'translate-x-0'
+                }`} />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {config.use_regime_filter ? 'Skips trades when BTC is in a downtrend' : 'Trades regardless of BTC trend'}
+            </p>
+          </div>
 
           <button
             onClick={saveConfig}

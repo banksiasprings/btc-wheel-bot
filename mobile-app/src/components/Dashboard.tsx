@@ -163,14 +163,17 @@ export default function Dashboard({ onNavigateTo }: Props) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span
-              className={`w-3 h-3 rounded-full ${
+              className={`w-3 h-3 rounded-full flex-shrink-0 ${
                 status?.bot_running ? 'bg-green-400 shadow-[0_0_8px_#22c55e]' : 'bg-red-500'
               }`}
             />
             <div>
-              <p className="font-semibold text-white">
-                {status?.bot_running ? 'Running' : 'Stopped'}
-              </p>
+              <div className="flex items-center gap-1">
+                <p className="font-semibold text-white">
+                  {status?.bot_running ? 'Running' : 'Stopped'}
+                </p>
+                <button onClick={() => setInfo(GLOSSARY.bot_status)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+              </div>
               {status?.bot_running && (
                 <p className="text-xs text-slate-400">
                   {fmtUptime(status.uptime_seconds)
@@ -182,21 +185,26 @@ export default function Dashboard({ onNavigateTo }: Props) {
               )}
             </div>
           </div>
-          <span
-            className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
-              status?.mode === 'live'
-                ? 'bg-red-900 text-red-300 border border-red-700'
-                : 'bg-amber-900 text-amber-300 border border-amber-700'
-            }`}
-          >
-            {status?.mode ?? '—'}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => setInfo(GLOSSARY.paper_mode)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+            <span
+              className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
+                status?.mode === 'live'
+                  ? 'bg-red-900 text-red-300 border border-red-700'
+                  : 'bg-amber-900 text-amber-300 border border-amber-700'
+              }`}
+            >
+              {status?.mode ?? '—'}
+            </span>
+          </div>
         </div>
         {status?.last_heartbeat && (
-          <p className="text-xs text-slate-500 mt-2">
-            Last heartbeat:{' '}
-            {new Date(status.last_heartbeat).toLocaleTimeString()}
-          </p>
+          <div className="flex items-center gap-1 mt-2">
+            <p className="text-xs text-slate-500">
+              Last heartbeat: {new Date(status.last_heartbeat).toLocaleTimeString()}
+            </p>
+            <button onClick={() => setInfo(GLOSSARY.heartbeat)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+          </div>
         )}
       </div>
 
@@ -216,8 +224,15 @@ export default function Dashboard({ onNavigateTo }: Props) {
               </button>
             )}
           </div>
-          <div className="mb-3">
+          <div className="flex items-center gap-2 mb-3">
             <PresetBadge active={presets!.active} />
+            <button
+              onClick={() => setInfo({
+                title: "How Parameters Were Chosen",
+                body: "EVOLVED — parameters were found by a genetic algorithm that tested hundreds of combinations and selected the best-performing set for a specific goal (Balanced, Max Yield, Safest, or Sharpe).\n\nSWEEP — parameters were found by a parameter sweep that tested each setting individually and picked the single best value for each.\n\nCUSTOM — parameters were set manually in the Trading Parameters section of Settings. No automated optimisation was used.",
+              })}
+              className="text-slate-500 hover:text-slate-300 text-xs leading-none"
+            >ⓘ</button>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Stat

@@ -83,4 +83,99 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
     title: "Evolved: Sharpe — How It Works",
     body: "The Sharpe ratio measures how much return you earn per unit of risk. A Sharpe of 1.0 is decent. 2.0 is considered excellent by professional standards. This strategy was trained to maximise that ratio — the most return possible for the least risk taken.\n\nThis is the metric that professional fund managers use to evaluate whether a strategy is actually good or just got lucky. High return with low volatility = high Sharpe.\n\nIn practice: the bot finds a middle ground — strikes not too close (avoiding unnecessary risk), not too far (keeping premiums meaningful), position sizes carefully managed, and trades only taken when conditions are genuinely favourable.\n\nThis strategy tends to perform well across different market conditions — it won't top the charts in a bull run, but it also won't blow up in a correction. It's designed to be robust.\n\nBest suited for: traders who want to be serious about this long-term. It's the most 'professionally optimised' of all four goals, and usually the best choice once you've run all four and are picking one to run live.",
   },
+  // Dashboard
+  bot_status: {
+    title: "Bot Status",
+    body: "Shows whether the automated trading bot is currently running or stopped.\n\nRunning (green dot): the bot is active, watching the market, and will open or manage positions according to your settings.\n\nStopped (red dot): the bot is inactive. No new trades will be opened and no automatic management will occur. Any open position stays open but unmonitored — you'd need to manage it manually or restart the bot.",
+  },
+  paper_mode: {
+    title: "Paper vs Live Mode",
+    body: "Paper mode means the bot is trading with simulated money — it goes through all the real motions (checking prices, selecting strikes, 'placing orders') but no real money moves and nothing happens on your actual Deribit account.\n\nPaper mode is safe to run indefinitely. Use it to observe the strategy, build confidence, and verify the bot is behaving correctly before committing real funds.\n\nLive mode uses real money on your real Deribit account. Only switch to live when you're satisfied the strategy works and you understand the risks.",
+  },
+  heartbeat: {
+    title: "Last Heartbeat",
+    body: "The bot sends a 'heartbeat' signal every minute to confirm it's still alive and running.\n\nIf the last heartbeat was recent (within the last few minutes), the bot is healthy. If it was a long time ago, the bot may have crashed or been interrupted — check the logs or restart it.\n\nThis is your early warning system that something might have gone wrong.",
+  },
+  // Trades
+  trade_pnl: {
+    title: "P&L (Profit & Loss)",
+    body: "How much money this individual trade made or lost.\n\nPositive = you kept some or all of the premium collected when you sold the option.\n\nNegative = BTC moved against your position and the option expired in-the-money, meaning you had to buy BTC at the strike price when the market price was lower — a loss.\n\nThe wheel strategy aims for the vast majority of trades to be profitable, with occasional small losses that are more than offset by consistent premium income.",
+  },
+  trade_reason: {
+    title: "Close Reason",
+    body: "Why this position was closed:\n\nExpired — the option reached its expiry date with BTC above the strike price. You keep the full premium. This is the ideal outcome.\n\nStopped — the bot closed the position early, usually because risk limits were hit or market conditions changed significantly.\n\nManual — you closed the position yourself using the 'Close Position' button.\n\nAssigned — BTC fell below the strike and you were 'assigned' — meaning you effectively bought BTC at the strike price. In the wheel strategy this isn't necessarily bad; you'd then sell covered calls on that BTC.",
+  },
+  trade_dte: {
+    title: "DTE at Entry / Close",
+    body: "DTE = Days To Expiry.\n\nDTE at Entry: how many days were left on the option when the bot opened the trade. A higher number means the option had more time value.\n\nDTE at Close: how many days were left when the trade was closed. If this is 0, the option expired naturally. If it's higher, the position was closed early.\n\nThe difference between entry and close DTE tells you how long you were in the trade.",
+  },
+  trade_instrument: {
+    title: "Instrument",
+    body: "The specific option contract that was traded.\n\nFormat: BTC-DDMMMYY-STRIKE-TYPE\n\nExample: BTC-25APR25-70000-P means:\n• BTC = Bitcoin options\n• 25APR25 = expires 25 April 2025\n• 70000 = strike price of $70,000\n• P = Put option (you sold the right for someone to sell BTC to you at $70,000)\n\nA Put option profits when BTC stays above the strike price.",
+  },
+  // Optimizer metrics
+  sharpe_ratio: {
+    title: "Sharpe Ratio",
+    body: "A measure of how much return a strategy earns relative to the risk it takes.\n\nSimply: how smooth and efficient is the profit curve?\n\nBelow 0.5 = poor — barely worth the risk\n0.5–1.0 = acceptable\n1.0–2.0 = good — this is what professional funds aim for\nAbove 2.0 = excellent\n\nA strategy with a high Sharpe ratio earns consistent returns without wild swings. A low Sharpe means returns are erratic — sometimes great, sometimes painful.",
+  },
+  max_drawdown: {
+    title: "Max Drawdown",
+    body: "The largest peak-to-trough loss the strategy experienced during the test period.\n\nExample: if your account grew to $10,000 then fell to $8,500 before recovering, that's a 15% drawdown.\n\nThis is one of the most important risk metrics. It tells you the worst-case pain you'd have experienced if you ran this strategy in the past.\n\nA low drawdown means the strategy is resilient. A high drawdown means you'd need a strong stomach to stick with it through rough patches.",
+  },
+  win_rate: {
+    title: "Win Rate",
+    body: "The percentage of trades that were profitable.\n\nA win rate of 80% means 8 out of every 10 trades made money.\n\nFor options selling strategies like the wheel, win rates of 70–90% are common and normal — you win most trades but occasionally take a larger loss.\n\nImportant: a high win rate doesn't guarantee profitability. If your losses are much bigger than your wins, you can still lose money overall. Always look at win rate alongside P&L and drawdown.",
+  },
+  fitness_score: {
+    title: "Fitness Score",
+    body: "An internal score the optimizer uses to rank strategies against each other.\n\nIt's a combined measure — not a single thing like return or Sharpe, but a weighted formula that scores a strategy across multiple dimensions (return, consistency, win rate, drawdown).\n\nHigher is better, but the exact number is only meaningful when comparing two strategies optimised with the same goal. A fitness of 7.0 in Max Yield mode vs a 7.0 in Safest mode don't mean the same thing.",
+  },
+  return_pct: {
+    title: "Total Return %",
+    body: "The overall percentage gain or loss over the entire test period.\n\nExample: +45% means the strategy grew a $10,000 account to $14,500 over the backtest.\n\nImportant context: this number alone doesn't tell the whole story. A 100% return with extreme volatility and 50% drawdowns is a very different experience from a 40% return with smooth, consistent growth. Always read return alongside Sharpe ratio and max drawdown.",
+  },
+  // Optimizer modes
+  sweep_mode: {
+    title: "Parameter Sweep",
+    body: "Tests every combination of settings across a defined grid to find which individual values perform best.\n\nThink of it as a systematic survey: for IV Threshold, test 0.1, 0.2, 0.3... all the way up. For each value, run a full backtest and record the score. At the end, pick the best value for each parameter.\n\nStrength: thorough and easy to understand.\nLimitation: it optimises each parameter in isolation — it doesn't discover combinations where two settings work exceptionally well together. For that, use Evolution.\n\nSweep is fast and gives you a solid 'best individual settings' baseline.",
+  },
+  evolve_mode_desc: {
+    title: "Evolution Optimizer",
+    body: "Finds the best combination of all settings working together, using a genetic algorithm — the same principle as biological evolution.\n\nIt starts with hundreds of random strategy configurations. Each generation, the best performers survive, combine their settings (like breeding), and small random mutations are introduced. Over many generations, the population converges on genuinely high-quality combinations.\n\nStrength: discovers synergies between settings that a sweep can't find. Often finds significantly better results.\nLimitation: slower than sweep, and results can vary between runs due to randomness.\n\nUse sweep first to understand which parameters matter, then evolution to find the best overall combination.",
+  },
+  // Walk-forward specific
+  is_fitness: {
+    title: "In-Sample (IS) Fitness",
+    body: "The strategy's score on the historical data it was trained on — the 75% of history used to find the best parameters.\n\nThis number is expected to be high — the optimizer specifically searched for settings that work well on this data. Think of it as the 'exam score when you've seen the questions before'.\n\nAlways compare IS fitness to OOS fitness to see if the strategy truly generalised.",
+  },
+  oos_fitness: {
+    title: "Out-of-Sample (OOS) Fitness",
+    body: "The strategy's score on historical data it has never seen — the 25% of history held back during optimisation.\n\nThis is the real test. The optimizer had no access to this data, so performance here reflects genuine predictive ability rather than memorising history.\n\nIf OOS fitness is close to IS fitness: robust strategy — it generalises well.\nIf OOS fitness is much lower: the strategy was 'overfit' — it learned the specific quirks of the training data and won't work as well going forward.",
+  },
+  robustness_score: {
+    title: "Robustness Score",
+    body: "OOS fitness ÷ IS fitness — a simple ratio that tells you how well the strategy held up on unseen data.\n\n1.0 = perfect: performs identically on new data as on training data (rare).\n0.7–1.0 = good: some degradation but the strategy is genuinely working.\n0.5–0.7 = marginal: significant drop-off, worth being cautious.\nBelow 0.5 = poor: the strategy likely overfit and may not work in the future.\n\nThis is one of the most important numbers for deciding whether to trust a strategy.",
+  },
+  // Monte Carlo
+  mc_percentiles: {
+    title: "Percentile Results (p5–p95)",
+    body: "Monte Carlo runs your strategy 100 times on randomly selected 6-month windows from history. These percentiles show the spread of outcomes:\n\np5 (5th percentile): near-worst case — only 5% of runs did worse than this. This is roughly 'how bad could it get'.\n\np25: below-average run — a bad quarter but not catastrophic.\n\np50 (median): the typical outcome — half the runs did better, half did worse.\n\np75: an above-average run — a good stretch.\n\np95 (95th percentile): near-best case — only 5% of runs did better. This is roughly 'how good could it get'.\n\nA tight spread (p5 close to p95) means consistent performance. A wide spread means highly variable results — good sometimes, rough other times.",
+  },
+  prob_profit: {
+    title: "Probability of Profit",
+    body: "Out of the 100 random 6-month windows tested in Monte Carlo, what percentage were profitable?\n\n90% means 90 out of 100 random historical periods would have made money with this strategy.\n\nThis gives you a sense of how reliably the strategy works across different market conditions — bull markets, bear markets, sideways markets, high volatility, low volatility. A strategy with 90%+ probability of profit across random historical periods is genuinely robust.",
+  },
+  // Settings
+  otm_offset: {
+    title: "OTM Offset",
+    body: "An additional buffer applied when selecting the strike price, on top of the delta-based calculation.\n\nOTM = Out of The Money — meaning the strike price is below the current BTC price (for a put option).\n\nA higher offset pushes the strike further away from current BTC price, making the trade safer (BTC needs to fall further to cause a loss) but reducing the premium collected.\n\nThink of it as an extra safety margin on top of the delta filter.",
+  },
+  starting_equity: {
+    title: "Starting Equity",
+    body: "The account size used in backtests and evolution calculations.\n\nThis should match your actual Deribit account balance for the most accurate simulation results. If you set this to $10,000 but your real account has $6,000, position sizing in backtests will be wrong and results won't translate accurately to real trading.\n\nThis setting doesn't affect live trading directly — the bot uses your real account balance for live trades. It's used purely for simulation accuracy.",
+  },
+  regime_filter: {
+    title: "Regime Filter",
+    body: "A market condition filter that tries to detect whether BTC is in a healthy uptrend (safe to sell puts) or a dangerous downtrend (avoid new trades).\n\nWhen enabled: the bot checks whether BTC's price is above its moving average. If BTC is trending down, the bot skips opening new positions until conditions improve.\n\nWhen disabled: the bot trades regardless of overall BTC trend direction.\n\nEnabling this typically reduces trade frequency but can significantly reduce losses during sustained BTC downturns. Worth enabling in volatile market conditions.",
+  },
 }
