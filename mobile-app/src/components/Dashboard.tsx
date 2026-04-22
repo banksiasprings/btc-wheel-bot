@@ -621,20 +621,47 @@ function BlackSwanCard({
     marginSafety >= 2   ? 'border-green-900/50' :
     marginSafety >= 1.2 ? 'border-amber-900/50' : 'border-red-900/50'
 
-  const moves  = [-0.05, -0.10, -0.20, -0.30, -0.50, -0.70, -1.00]
-  const labels = ['-5%', '-10%', '-20%', '-30%', '-50%', '-70%', '→ $0']
+  // Delta of the option leg — used to estimate hedge P&L
+  // Real position: use live delta; hypothetical: midpoint of configured delta range
+  const optionDelta = position?.current_delta
+    ?? (((configParams.target_delta_min ?? 0.15) + (configParams.target_delta_max ?? 0.35)) / 2)
 
-  const rows = moves.map((move, i) => {
-    const sPrice    = Math.max(1, btcPrice * (1 + move))
-    const intrinsic = Math.max(0, strike - sPrice) * contracts
-    const pnlUsd    = premiumUsd - intrinsic
-    const eqAfter   = effectiveEquity + pnlUsd
-    const lossPct   = effectiveEquity > 0 ? Math.max(0, (intrinsic - premiumUsd) / effectiveEquity * 100) : 0
-    const status    =
-      eqAfter <= 0  ? '❌ Liq.' :
+  // Short perp hedge size in BTC (negative = short)
+  // Real: use actual perp position; hypothetical: estimate from delta × contracts
+  const perpBtc = position?.hedge?.perp_position_btc ?? -(optionDelta * contracts)
+
+  // Full scenario range: crash → flat → rise
+  // For a short put + delta hedge, flat/slight rise is the WIN zone
+  type Scenario = { label: string; move: number; zone: 'crash' | 'flat' | 'rise' }
+  const scenarios: Scenario[] = [
+    { label: '→ $0',  move: -1.00, zone: 'crash' },
+    { label: '-70%',  move: -0.70, zone: 'crash' },
+    { label: '-50%',  move: -0.50, zone: 'crash' },
+    { label: '-30%',  move: -0.30, zone: 'crash' },
+    { label: '-20%',  move: -0.20, zone: 'crash' },
+    { label: '-10%',  move: -0.10, zone: 'crash' },
+    { label: 'Flat',  move:  0.00, zone: 'flat'  },
+    { label: '+10%',  move: +0.10, zone: 'rise'  },
+    { label: '+30%',  move: +0.30, zone: 'rise'  },
+  ]
+
+  const rows = scenarios.map(({ label, move, zone }) => {
+    const sPrice      = Math.max(1, btcPrice * (1 + move))
+    // Put option P&L: premium collected minus intrinsic loss
+    const intrinsic   = Math.max(0, strike - sPrice) * contracts
+    const putPnl      = premiumUsd - intrinsic
+    // Hedge P&L: short perp gains when price falls, loses when price rises
+    // perpBtc is negative (short), so: short × (new - old) = gain on fall
+    const hedgePnl    = perpBtc * (sPrice - btcPrice)
+    const netPnl      = putPnl + hedgePnl
+    const eqAfter     = effectiveEquity + netPnl
+    const lossPct     = effectiveEquity > 0 ? Math.max(0, -netPnl / effectiveEquity * 100) : 0
+    const status      =
+      eqAfter <= 0  ? '❌ Liq.'    :
       lossPct > 30  ? '🔴 Critical' :
-      lossPct > 10  ? '🟡 Warning'  : '🟢 Safe'
-    return { label: labels[i], sPrice, pnlUsd, eqAfter, lossPct, status }
+      lossPct > 10  ? '🟡 Warning'  :
+      zone === 'flat' || netPnl > 0 ? '🟢 Win'  : '🟢 Safe'
+    return { label, zone, sPrice, putPnl, hedgePnl, netPnl, eqAfter, lossPct, status }
   })
 
   return (
@@ -684,43 +711,51 @@ function BlackSwanCard({
             </span>
           </div>
 
-          {/* Scenario label */}
-          <p className="text-xs text-slate-500 uppercase tracking-wide">
-            BTC crash scenarios (put risk)
-          </p>
-
           {/* Scenario rows */}
-          <div className="space-y-1.5">
-            {rows.map(({ label, sPrice, pnlUsd, eqAfter, lossPct, status }) => {
+          <div className="space-y-1">
+            {rows.map(({ label, zone, sPrice, putPnl, hedgePnl, netPnl, eqAfter, lossPct, status }, idx) => {
+              // Zone divider labels
+              const prevZone = idx > 0 ? rows[idx - 1].zone : null
+              const showDivider = prevZone && prevZone !== zone
+
               const rowBg =
-                eqAfter <= 0   ? 'bg-red-950/60 border-red-900/50' :
-                lossPct > 30   ? 'bg-red-950/30 border-red-900/30' :
-                lossPct > 10   ? 'bg-amber-950/30 border-amber-900/30' :
-                                 'bg-navy border-transparent'
+                eqAfter <= 0  ? 'bg-red-950/60 border-red-900/60' :
+                lossPct > 30  ? 'bg-red-950/30 border-red-900/30' :
+                lossPct > 10  ? 'bg-amber-950/30 border-amber-900/30' :
+                zone === 'flat' ? 'bg-green-950/40 border-green-900/40' :
+                zone === 'rise' ? 'bg-sky-950/20 border-sky-900/20' :
+                                  'bg-navy border-transparent'
+
+              const zoneLabel: Record<string, string> = {
+                flat: '── Flat (your win zone) ──',
+                rise: '── BTC rises (put safe, hedge loses) ──',
+              }
+
               return (
-                <div key={label} className={`rounded-xl border px-3 py-2 ${rowBg}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    {/* Move label */}
-                    <span className="text-sm font-bold font-mono text-white w-12 flex-shrink-0">
-                      {label}
-                    </span>
-                    {/* BTC price */}
-                    <span className="text-xs text-slate-400 flex-1">
-                      {fmt$(Math.round(sPrice))}
-                    </span>
-                    {/* P&L */}
-                    <span className={`text-xs font-bold ${pnlUsd >= 0 ? 'text-green-400' : 'text-red-400'} flex-shrink-0`}>
-                      {pnlUsd >= 0 ? '+' : ''}{fmt$(pnlUsd)}
-                    </span>
-                    {/* Status */}
-                    <span className="text-xs flex-shrink-0">{status}</span>
-                  </div>
-                  {/* Secondary line: equity after + loss% */}
-                  <div className="flex items-center gap-3 mt-0.5 pl-14">
-                    <span className="text-xs text-slate-500">Eq. {fmt$(eqAfter)}</span>
-                    {lossPct > 0 && (
-                      <span className="text-xs text-slate-500">Loss {lossPct.toFixed(1)}%</span>
-                    )}
+                <div key={label}>
+                  {showDivider && zone in zoneLabel && (
+                    <p className="text-center text-xs text-slate-600 py-1">{zoneLabel[zone]}</p>
+                  )}
+                  <div className={`rounded-xl border px-3 py-2 ${rowBg}`}>
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-sm font-bold font-mono text-white w-14 flex-shrink-0">{label}</span>
+                      <span className="text-xs text-slate-400 flex-1">{fmt$(Math.round(sPrice))}</span>
+                      <span className={`text-xs font-bold flex-shrink-0 ${netPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {netPnl >= 0 ? '+' : ''}{fmt$(netPnl)}
+                      </span>
+                      <span className="text-xs flex-shrink-0 ml-1">{status}</span>
+                    </div>
+                    <div className="flex items-center gap-3 mt-0.5 pl-14 flex-wrap">
+                      <span className="text-xs text-slate-500">Eq. {fmt$(eqAfter)}</span>
+                      {Math.abs(hedgePnl) > 1 && (
+                        <span className={`text-xs ${hedgePnl > 0 ? 'text-sky-600' : 'text-slate-600'}`}>
+                          hedge {hedgePnl >= 0 ? '+' : ''}{fmt$(hedgePnl)}
+                        </span>
+                      )}
+                      {lossPct > 0 && (
+                        <span className="text-xs text-slate-500">loss {lossPct.toFixed(1)}%</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               )
@@ -728,8 +763,7 @@ function BlackSwanCard({
           </div>
 
           <p className="text-xs text-slate-600 leading-snug">
-            Estimates use intrinsic value only — real losses at intermediate DTEs will be smaller
-            due to remaining time value. Kill switch + drawdown checks monitor live for automatic halt.
+            Net = put P&L + delta hedge P&L. Hedge estimate assumes static position — real daily rebalancing reduces crash losses further. Intrinsic value only; DTEs with remaining theta will show smaller real losses.
           </p>
         </div>
       )}
