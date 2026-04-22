@@ -1026,17 +1026,30 @@ def notifications_test() -> dict:
 # ── PWA static file serving ────────────────────────────────────────────────────
 _STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
 
+# Files that must never be cached so the browser always fetches the latest SW
+_NO_CACHE_FILES = {"sw.js", "registerSW.js", "workbox-8c29f6e4.js", "index.html", "manifest.webmanifest"}
+
+def _static_response(path) -> FileResponse:
+    """Return a FileResponse with appropriate cache headers."""
+    name = path.name if hasattr(path, "name") else str(path).split("/")[-1]
+    headers = (
+        {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
+        if name in _NO_CACHE_FILES
+        else {}
+    )
+    return FileResponse(path, headers=headers)
+
 if _STATIC_DIR.exists():
     # Serve the SPA index for all unmatched paths so client-side routing works
     @app.get("/", include_in_schema=False)
     async def serve_root():
-        return FileResponse(_STATIC_DIR / "index.html")
+        return _static_response(_STATIC_DIR / "index.html")
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
         file = _STATIC_DIR / full_path
         if file.exists() and file.is_file():
-            return FileResponse(file)
-        return FileResponse(_STATIC_DIR / "index.html")
+            return _static_response(file)
+        return _static_response(_STATIC_DIR / "index.html")
 
     app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
