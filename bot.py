@@ -122,18 +122,6 @@ class WheelBot:
         except Exception:
             pass
 
-        # If no open positions on startup, any persisted hedge state is orphaned
-        # (e.g. bot was killed mid-session without closing the hedge).
-        # Reset it so the equity calculation starts clean.
-        if self._hedge is not None and not self._positions:
-            if self._hedge.position_btc != 0.0:
-                logger.warning(
-                    f"Stale hedge position detected on startup "
-                    f"({self._hedge.position_btc:+.3f} BTC with no open options). "
-                    "Resetting hedge state."
-                )
-                self._hedge.reset()
-
         if not self._paper:
             # LIVE_ONLY: connect WebSocket (auth + subscribe)
             await self._client.connect_live()
@@ -146,8 +134,23 @@ class WheelBot:
                 ),
             )
             await self._setup_live_subscriptions()
-            # Reconcile open positions from Deribit
+            # Reconcile open positions from Deribit BEFORE stale-hedge check so
+            # we don't reset a valid hedge that corresponds to a live open position.
             await self._sync_positions_from_exchange()
+
+        # If no open positions on startup, any persisted hedge state is orphaned
+        # (e.g. bot was killed mid-session without closing the hedge).
+        # Reset it so the equity calculation starts clean.
+        # NOTE: must run AFTER _sync_positions_from_exchange() in live mode so that
+        # reconciled positions are visible before we decide the hedge is stale.
+        if self._hedge is not None and not self._positions:
+            if self._hedge.position_btc != 0.0:
+                logger.warning(
+                    f"Stale hedge position detected on startup "
+                    f"({self._hedge.position_btc:+.3f} BTC with no open options). "
+                    "Resetting hedge state."
+                )
+                self._hedge.reset()
 
         try:
             while True:
@@ -521,11 +524,15 @@ class WheelBot:
             self._force_close_position = False
             pos = self._positions[0]
             logger.info(f"Force-closing {pos.instrument_name} (mobile command)")
-            closed = await self._close_position(pos, "mobile_force_close", underlying_price)
+            # Close hedge first to capture its realised P&L for the experience record
+            hedge_pnl = 0.0
+            if self._hedge is not None:
+                hedge_pnl = await self._hedge.close_all(underlying_price, self._client.ws)
+            closed = await self._close_position(
+                pos, "mobile_force_close", underlying_price, hedge_pnl_usd=hedge_pnl
+            )
             if closed:
                 self._positions.remove(pos)
-                if self._hedge is not None:
-                    await self._hedge.close_all(underlying_price, self._client.ws)
 
         # Delta-hedge rebalance (replaces rolling)
         if self._hedge is not None:
@@ -636,10 +643,19 @@ class WheelBot:
             pass
 
     async def _close_position(
-        self, pos: Position, reason: str, underlying_price: float = 0.0
+        self,
+        pos: Position,
+        reason: str,
+        underlying_price: float = 0.0,
+        hedge_pnl_usd: float = 0.0,
     ) -> bool:
         """
         Close / roll a position (paper or live).
+
+        hedge_pnl_usd: realised P&L from closing the delta-hedge position (if any).
+            Passed in by callers that call hedge.close_all() immediately after this.
+            Used to record the *total* trade P&L (option + hedge) in experience.jsonl
+            so the adaptive calibration gets an accurate signal.
 
         Returns True if the close was confirmed (or paper mode).
         Returns False if the live order failed — caller should NOT remove the
@@ -793,11 +809,15 @@ class WheelBot:
                     "dte_at_entry": pos.dte_at_entry,
                 },
                 "outcome": {
-                    "pnl_usd":   round(pnl_usd, 2),
-                    "pnl_pct":   round(pnl_usd / equity_before, 4) if equity_before > 0 else 0.0,
+                    # total_pnl_usd = option P&L + delta-hedge P&L so the calibration
+                    # learns from the true combined outcome, not just the option leg.
+                    "pnl_usd":        round(pnl_usd, 2),
+                    "hedge_pnl_usd":  round(hedge_pnl_usd, 2),
+                    "total_pnl_usd":  round(pnl_usd + hedge_pnl_usd, 2),
+                    "pnl_pct":   round((pnl_usd + hedge_pnl_usd) / equity_before, 4) if equity_before > 0 else 0.0,
                     "hold_days": max(0, pos.dte_at_entry - dte_at_close),
                     "reason":    reason,
-                    "win":       pnl_usd > 0,
+                    "win":       (pnl_usd + hedge_pnl_usd) > 0,
                 },
             }
             with open(_exp_path, "a") as _expf:
@@ -859,11 +879,15 @@ class WheelBot:
                     f"returning to put-selling mode"
                 )
 
-            closed = await self._close_position(pos, "expiry_settlement", underlying_price)
+            # Close hedge first to capture its realised P&L for the experience record
+            hedge_pnl = 0.0
+            if self._hedge is not None:
+                hedge_pnl = await self._hedge.close_all(underlying_price, self._client.ws)
+            closed = await self._close_position(
+                pos, "expiry_settlement", underlying_price, hedge_pnl_usd=hedge_pnl
+            )
             if closed:
                 self._positions.remove(pos)
-                if self._hedge is not None:
-                    await self._hedge.close_all(underlying_price, self._client.ws)
 
     def _parse_expiry(self, instrument_name: str) -> datetime | None:
         """Parse expiry datetime from Deribit instrument like BTC-25APR25-90000-P."""
