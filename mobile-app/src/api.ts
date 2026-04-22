@@ -8,6 +8,16 @@ export interface StatusData {
   last_heartbeat: string | null
 }
 
+export interface HedgeData {
+  enabled: boolean
+  perp_position_btc: number
+  avg_entry_price: number
+  unrealised_pnl_usd: number | null
+  realised_pnl_usd: number
+  funding_paid_usd: number
+  rebalance_count: number
+}
+
 export interface PositionData {
   open: boolean
   type?: string
@@ -20,6 +30,9 @@ export interface PositionData {
   unrealized_pnl_usd?: number
   unrealized_pnl_pct?: number
   days_to_expiry?: number
+  current_delta?: number
+  net_delta?: number | null
+  hedge?: HedgeData | null
 }
 
 export interface EquityData {
@@ -189,6 +202,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const getStatus = () => request<StatusData>('/status')
 export const getPosition = () => request<PositionData>('/position')
+export const getHedge = () => request<HedgeData>('/hedge')
 export const getEquity = () => request<EquityData>('/equity')
 export const getTrades = () => request<Trade[]>('/trades')
 export const getOptimizerSummary = () => request<OptimizerSummary>('/optimizer/summary')

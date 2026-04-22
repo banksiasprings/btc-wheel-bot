@@ -176,6 +176,51 @@ def get_position() -> dict:
     return pos
 
 
+# ── Hedge ─────────────────────────────────────────────────────────────────────
+
+@app.get("/hedge", dependencies=[Depends(_require_api_key)])
+def get_hedge() -> dict:
+    """Return the current delta-hedge (BTC-PERPETUAL) position and P&L."""
+    hedge_state = _read_json(DATA_DIR / "hedge_state.json")
+    if hedge_state is None:
+        return {
+            "enabled": False,
+            "perp_position_btc": 0.0,
+            "avg_entry_price": 0.0,
+            "unrealised_pnl_usd": None,
+            "realised_pnl_usd": 0.0,
+            "funding_paid_usd": 0.0,
+            "rebalance_count": 0,
+        }
+    # Enrich with current spot for unrealised P&L
+    btc_price: float | None = None
+    try:
+        r = _requests.get(
+            "https://www.deribit.com/api/v2/public/get_index_price",
+            params={"index_name": "btc_usd"},
+            timeout=3,
+        )
+        btc_price = r.json()["result"]["index_price"]
+    except Exception:
+        pass
+
+    pos_btc = hedge_state.get("perp_position_btc", 0.0)
+    entry   = hedge_state.get("avg_entry_price", 0.0)
+    unrealised = None
+    if btc_price and pos_btc != 0.0 and entry > 0.0:
+        unrealised = round(pos_btc * (btc_price - entry), 2)
+
+    return {
+        "enabled": True,
+        "perp_position_btc":  hedge_state.get("perp_position_btc", 0.0),
+        "avg_entry_price":    hedge_state.get("avg_entry_price", 0.0),
+        "unrealised_pnl_usd": unrealised,
+        "realised_pnl_usd":   hedge_state.get("realised_pnl_usd", 0.0),
+        "funding_paid_usd":   hedge_state.get("funding_paid_usd", 0.0),
+        "rebalance_count":    hedge_state.get("rebalance_count", 0),
+    }
+
+
 # ── Equity ────────────────────────────────────────────────────────────────────
 
 @app.get("/equity", dependencies=[Depends(_require_api_key)])

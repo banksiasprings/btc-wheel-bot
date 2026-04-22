@@ -328,6 +328,7 @@ export default function Dashboard({ onNavigateTo }: Props) {
               <Stat label="Premium" value={fmt$(position.premium_collected)} />
               <Stat label="Spot" value={fmt$(position.current_spot)} />
               <Stat label="Contracts" value={String(position.contracts ?? '—')} />
+              <Stat label="Option Δ" value={position.current_delta != null ? position.current_delta.toFixed(3) : '—'} />
               {(() => {
                 const committed = (position.strike ?? 0) * (position.contracts ?? 0)
                 const free = equity?.current_equity != null ? equity.current_equity - committed : null
@@ -338,6 +339,35 @@ export default function Dashboard({ onNavigateTo }: Props) {
                   </>
                 )
               })()}
+              {/* Hedge stats */}
+              {position.hedge && (
+                <>
+                  <div className="col-span-2 border-t border-border/40 mt-1 pt-2">
+                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Delta Hedge (BTC-PERP)</p>
+                  </div>
+                  <Stat
+                    label="Net Δ"
+                    value={position.net_delta != null ? `${position.net_delta >= 0 ? '+' : ''}${position.net_delta.toFixed(3)} BTC` : '—'}
+                    accent={position.net_delta != null && Math.abs(position.net_delta) > 0.05}
+                  />
+                  <Stat
+                    label="Perp Position"
+                    value={position.hedge.perp_position_btc !== 0
+                      ? `${position.hedge.perp_position_btc > 0 ? '+' : ''}${position.hedge.perp_position_btc.toFixed(3)} BTC`
+                      : 'Flat'}
+                  />
+                  <Stat
+                    label="Hedge P&L"
+                    value={position.hedge.unrealised_pnl_usd != null
+                      ? fmt$(position.hedge.unrealised_pnl_usd)
+                      : '—'}
+                  />
+                  <Stat
+                    label="Realised (hedge)"
+                    value={fmt$(position.hedge.realised_pnl_usd)}
+                  />
+                </>
+              )}
               {(() => {
                 const { premium_collected, strike, contracts, days_to_expiry } = position
                 if (

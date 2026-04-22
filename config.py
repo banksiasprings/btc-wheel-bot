@@ -97,6 +97,12 @@ class BacktestConfig:
 
 
 @dataclass
+class HedgeConfig:
+    enabled: bool = True
+    rebalance_threshold: float = 0.05   # min BTC drift before a hedge trade fires
+
+
+@dataclass
 class OverseerConfig:
     enabled: bool
     check_interval_minutes: int
@@ -123,6 +129,11 @@ class Config:
     backtest: BacktestConfig
     overseer: OverseerConfig
     logging: LoggingConfig
+    hedge: HedgeConfig = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.hedge is None:
+            self.hedge = HedgeConfig()
 
 
 # ── Loader ─────────────────────────────────────────────────────────────────────
@@ -230,6 +241,12 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         trade_log_csv=lg["trade_log_csv"],
     )
 
+    hg = raw.get("hedge", {})
+    hedge_cfg = HedgeConfig(
+        enabled=bool(hg.get("enabled", True)),
+        rebalance_threshold=float(hg.get("rebalance_threshold", 0.05)),
+    )
+
     return Config(
         deribit=deribit_cfg,
         strategy=strategy_cfg,
@@ -239,6 +256,7 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         backtest=backtest_cfg,
         overseer=overseer_cfg,
         logging=logging_cfg,
+        hedge=hedge_cfg,
     )
 
 

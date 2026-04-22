@@ -33,6 +33,7 @@ from loguru import logger
 from ai_overseer import AIOverSeer
 from config import Config, cfg
 from deribit_client import DeribitClient, DeribitPublicREST
+from hedge_manager import HedgeManager
 import notifier
 from order_tracker import OrderTracker, OrderStatus
 from risk_manager import Position, RiskManager
@@ -89,6 +90,12 @@ class WheelBot:
         self._started_at: datetime = datetime.now(timezone.utc)
         self._force_close_position: bool = False
         self._state_path = Path(__file__).parent / "data" / "bot_state.json"
+
+        # Delta-hedging manager
+        self._hedge = HedgeManager(
+            paper=paper,
+            rebalance_threshold=self._cfg.hedge.rebalance_threshold,
+        ) if self._cfg.hedge.enabled else None
 
         # AI Overseer
         if self._cfg.overseer.enabled:
@@ -469,13 +476,22 @@ class WheelBot:
                     pos.current_delta = abs(ticker.greeks.get("delta", pos.current_delta))
 
         # Recalculate equity (paper mode): starting equity + realised + unrealised P&L
+        # Includes hedge P&L so the equity curve reflects the true delta-neutral position.
         if self._paper:
             realised_pnl = sum(t.get("pnl_usd", 0.0) for t in self._trades_log)
             unrealised_pnl = sum(
                 (pos.entry_price - pos.current_price) * pos.contracts * underlying_price
                 for pos in self._positions
             )
-            self._equity_usd = self._cfg.backtest.starting_equity + realised_pnl + unrealised_pnl
+            hedge_realised   = self._hedge.realised_pnl_usd if self._hedge else 0.0
+            hedge_unrealised = (
+                self._hedge.unrealised_pnl_usd(underlying_price) if self._hedge else 0.0
+            )
+            self._equity_usd = (
+                self._cfg.backtest.starting_equity
+                + realised_pnl + unrealised_pnl
+                + hedge_realised + hedge_unrealised
+            )
         self._equity_history.append(self._equity_usd)
 
         if not self._risk.check_drawdown(self._equity_history):
@@ -496,19 +512,26 @@ class WheelBot:
             closed = await self._close_position(pos, "mobile_force_close", underlying_price)
             if closed:
                 self._positions.remove(pos)
+                if self._hedge is not None:
+                    await self._hedge.close_all(underlying_price, self._client.ws)
 
-        # In-trade checks (roll if needed)
-        for pos in list(self._positions):
-            should_roll, reason = self._risk.should_roll(pos)
-            if should_roll:
-                logger.warning(f"Rolling {pos.instrument_name}: {reason}")
-                closed = await self._close_position(pos, reason, underlying_price)
-                if closed:
-                    self._positions.remove(pos)
-                else:
-                    logger.error(
-                        f"Close failed for {pos.instrument_name} — keeping in position list; "
-                        f"will retry next tick"
+        # Delta-hedge rebalance (replaces rolling)
+        if self._hedge is not None:
+            for pos in self._positions:
+                adjustment = await self._hedge.rebalance(
+                    pos.option_type,
+                    pos.current_delta,
+                    pos.contracts,
+                    underlying_price,
+                    ws_client=self._client.ws,
+                )
+                if adjustment != 0.0:
+                    net_delta = self._hedge.net_delta_btc(
+                        pos.option_type, pos.current_delta, pos.contracts
+                    )
+                    logger.info(
+                        f"Hedge rebalanced {adjustment:+.3f} BTC | "
+                        f"net delta: {net_delta:+.3f} BTC"
                     )
 
         # Open new leg if flat
@@ -827,6 +850,8 @@ class WheelBot:
             closed = await self._close_position(pos, "expiry_settlement", underlying_price)
             if closed:
                 self._positions.remove(pos)
+                if self._hedge is not None:
+                    await self._hedge.close_all(underlying_price, self._client.ws)
 
     def _parse_expiry(self, instrument_name: str) -> datetime | None:
         """Parse expiry datetime from Deribit instrument like BTC-25APR25-90000-P."""
@@ -864,6 +889,11 @@ class WheelBot:
                     pass
                 unrealized = (p.entry_price - p.current_price) * p.contracts * spot
                 pct = unrealized / (p.strike * p.contracts) * 100 if p.strike > 0 else 0.0
+                hedge_data = self._hedge.to_dict(spot) if self._hedge else None
+                net_delta  = (
+                    self._hedge.net_delta_btc(p.option_type, p.current_delta, p.contracts)
+                    if self._hedge else None
+                )
                 payload = {
                     "open": True,
                     "type": f"short_{p.option_type}",
@@ -876,6 +906,9 @@ class WheelBot:
                     "unrealized_pnl_usd": round(unrealized, 2),
                     "unrealized_pnl_pct": round(pct, 2),
                     "days_to_expiry": dte,
+                    "current_delta": round(p.current_delta, 4),
+                    "net_delta": round(net_delta, 4) if net_delta is not None else None,
+                    "hedge": hedge_data,
                 }
             (data_dir / "current_position.json").write_text(json.dumps(payload))
         except Exception:
@@ -999,15 +1032,26 @@ class WheelBot:
             mode_str = "paper" if self._paper else (
                 "testnet" if self._cfg.deribit.testnet else "live"
             )
+            hedge_data = self._hedge.to_dict(spot) if self._hedge else None
+            net_delta  = (
+                self._hedge.net_delta_btc(
+                    self._positions[0].option_type,
+                    self._positions[0].current_delta,
+                    self._positions[0].contracts,
+                )
+                if self._hedge and self._positions else 0.0
+            )
             heartbeat = {
-                "pid":       os.getpid(),
-                "timestamp": time.time(),
-                "mode":      mode_str,
+                "pid":        os.getpid(),
+                "timestamp":  time.time(),
+                "mode":       mode_str,
                 "equity_usd": self._equity_usd,
-                "btc_price": spot,
-                "iv_rank":   round(self._last_iv_rank, 4),
-                "wheel":     cycle_state,
-                "position":  pos_data,   # None when flat, dict when in trade
+                "btc_price":  spot,
+                "iv_rank":    round(self._last_iv_rank, 4),
+                "wheel":      cycle_state,
+                "position":   pos_data,
+                "hedge":      hedge_data,
+                "net_delta":  round(net_delta, 4),
             }
             hb_path = Path(__file__).parent / "bot_heartbeat.json"
             hb_path.write_text(json.dumps(heartbeat))
