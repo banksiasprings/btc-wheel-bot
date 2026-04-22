@@ -24,9 +24,12 @@ from typing import Any
 import requests as _requests
 import yaml
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Header
+import asyncio
+import httpx
+import websockets as _websockets
+from fastapi import Depends, FastAPI, HTTPException, Header, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1021,6 +1024,162 @@ def notifications_test() -> dict:
         return {"ok": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Streamlit Dashboard Proxy ─────────────────────────────────────────────────
+#
+# Streamlit binds to 0.0.0.0:8501 but rejects connections that arrive via the
+# Mac's own LAN IP (192.168.x.x) with ERR_EMPTY_RESPONSE — a known macOS
+# self-connection quirk combined with Streamlit's Host-header check.
+#
+# Fix: proxy all dashboard traffic through FastAPI (already LAN-accessible at
+# :8765).  The browser visits http://<lan-ip>:8765/dashboard; that page's HTML
+# references Streamlit-internal paths like /_stcore/*, /static/*, /media/*,
+# /component/* which FastAPI forwards to localhost:8501.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SL_HTTP = "http://127.0.0.1:8501"
+_SL_WS   = "ws://127.0.0.1:8501"
+
+# Headers that must not be forwarded between proxy hops
+_HOP_BY_HOP = frozenset({
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade",
+})
+
+_sl_client: httpx.AsyncClient | None = None
+
+
+def _get_sl_client() -> httpx.AsyncClient:
+    global _sl_client
+    if _sl_client is None:
+        _sl_client = httpx.AsyncClient(
+            base_url=_SL_HTTP,
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, connect=5.0),
+        )
+    return _sl_client
+
+
+async def _sl_http_proxy(request: Request, target_path: str) -> Response:
+    """Forward one HTTP request to Streamlit and return the response."""
+    client = _get_sl_client()
+    url = target_path or "/"
+    if request.url.query:
+        url += f"?{request.url.query}"
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in _HOP_BY_HOP and k.lower() != "host"
+    }
+    body = await request.body()
+    try:
+        resp = await client.request(request.method, url, headers=headers, content=body)
+    except httpx.ConnectError:
+        return Response(
+            content=b"Streamlit dashboard is not running (start it with: streamlit run dashboard_ui.py)",
+            status_code=503,
+            media_type="text/plain",
+        )
+    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in _HOP_BY_HOP}
+    return Response(content=resp.content, status_code=resp.status_code, headers=resp_headers)
+
+
+# /dashboard  →  Streamlit root
+@app.api_route("/dashboard", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_dashboard_root(request: Request) -> Response:
+    return await _sl_http_proxy(request, "/")
+
+
+# /dashboard/<anything>  →  Streamlit /<anything>
+@app.api_route("/dashboard/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_dashboard_path(request: Request, path: str) -> Response:
+    return await _sl_http_proxy(request, f"/{path}")
+
+
+# Streamlit's HTML references /_stcore/*, /static/*, /media/*, /component/*
+# at the root of the origin — proxy those through as well.
+
+@app.api_route("/_stcore/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_sl_stcore(request: Request, path: str) -> Response:
+    return await _sl_http_proxy(request, f"/_stcore/{path}")
+
+
+@app.api_route("/static/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_sl_static(request: Request, path: str) -> Response:
+    return await _sl_http_proxy(request, f"/static/{path}")
+
+
+@app.api_route("/media/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_sl_media(request: Request, path: str) -> Response:
+    return await _sl_http_proxy(request, f"/media/{path}")
+
+
+@app.api_route("/component/{path:path}",
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def proxy_sl_component(request: Request, path: str) -> Response:
+    return await _sl_http_proxy(request, f"/component/{path}")
+
+
+# WebSocket proxy — Streamlit's real-time stream lives at /_stcore/stream
+@app.websocket("/_stcore/stream")
+async def proxy_sl_ws(client_ws: WebSocket):
+    """Bi-directional WebSocket bridge between the browser and Streamlit."""
+    qs = client_ws.url.query
+    target = f"{_SL_WS}/_stcore/stream" + (f"?{qs}" if qs else "")
+
+    await client_ws.accept()
+    try:
+        async with _websockets.connect(target) as sl_ws:
+
+            async def browser_to_sl():
+                try:
+                    while True:
+                        msg = await client_ws.receive()
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                        if msg.get("bytes") is not None:
+                            await sl_ws.send(msg["bytes"])
+                        elif msg.get("text") is not None:
+                            await sl_ws.send(msg["text"])
+                except Exception:
+                    pass
+
+            async def sl_to_browser():
+                try:
+                    async for msg in sl_ws:
+                        if isinstance(msg, bytes):
+                            await client_ws.send_bytes(msg)
+                        else:
+                            await client_ws.send_text(msg)
+                except Exception:
+                    pass
+
+            tasks = [
+                asyncio.create_task(browser_to_sl()),
+                asyncio.create_task(sl_to_browser()),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+
+    except Exception as exc:
+        print(f"[dashboard-proxy] WS error: {exc}")
+    finally:
+        try:
+            await client_ws.close()
+        except Exception:
+            pass
 
 
 # ── PWA static file serving ────────────────────────────────────────────────────
