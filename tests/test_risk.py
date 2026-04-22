@@ -40,8 +40,11 @@ def test_contracts_basic(rm):
 def test_contracts_large_equity(rm):
     """Larger equity should yield proportionally more contracts."""
     c = rm.calculate_contracts(equity_usd=1_000_000, strike_usd=50_000)
-    # max_notional = $1M * 5% = $50k; collateral_per = $50k * 0.1 = $5k; contracts = 10.0
-    assert c == 10.0
+    # With current config: max_equity_per_leg=0.1078
+    # max_notional = $1M × 0.1078 = $107,800
+    # collateral_per_contract = strike = $50,000 (1 contract = 1 BTC notional)
+    # raw = 107,800 / 50,000 = 2.156 → floored to nearest 0.1 lot = 2.1
+    assert c == 2.1
 
 
 def test_contracts_zero_equity(rm):
