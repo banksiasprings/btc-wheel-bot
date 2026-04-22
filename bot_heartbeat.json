@@ -1,0 +1,1 @@
+{"pid": 5577, "timestamp": 1776854300.040112, "mode": "paper", "equity_usd": 1255.8933, "btc_price": 78106.95, "iv_rank": 0.9392, "wheel": "\u2192put-mode", "position": null, "hedge": {"perp_position_btc": 0.0, "avg_entry_price": 0.0, "unrealised_pnl_usd": 0.0, "realised_pnl_usd": 0.0, "funding_paid_usd": 0.0, "rebalance_count": 0}, "net_delta": 0.0}

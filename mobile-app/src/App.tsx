@@ -5,23 +5,26 @@ import Trades from './components/Trades'
 import Optimizer from './components/Optimizer'
 import Settings from './components/Settings'
 import CodeGuide from './components/CodeGuide'
+import GraphTab from './components/GraphTab'
 
-type Tab = 'dashboard' | 'trades' | 'optimizer' | 'code' | 'settings'
+type Tab = 'dashboard' | 'graph' | 'trades' | 'optimizer' | 'code' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   dashboard: '⬡',
-  trades: '≡',
+  graph:     '📈',
+  trades:    '≡',
   optimizer: '⌁',
-  code: '</>',
-  settings: '⚙',
+  code:      '</>',
+  settings:  '⚙',
 }
 
 const TAB_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
-  trades: 'Trades',
+  graph:     'Graph',
+  trades:    'Trades',
   optimizer: 'Optimizer',
-  code: 'Code',
-  settings: 'Settings',
+  code:      'Code',
+  settings:  'Settings',
 }
 
 export default function App() {
@@ -42,10 +45,11 @@ export default function App() {
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'trades' && <Trades />}
+        {activeTab === 'graph'     && <GraphTab />}
+        {activeTab === 'trades'    && <Trades />}
         {activeTab === 'optimizer' && <Optimizer />}
-        {activeTab === 'code' && <CodeGuide />}
-        {activeTab === 'settings' && <Settings onLogout={() => setIsSetup(false)} />}
+        {activeTab === 'code'      && <CodeGuide />}
+        {activeTab === 'settings'  && <Settings onLogout={() => setIsSetup(false)} />}
       </main>
 
       {/* Bottom tab bar */}

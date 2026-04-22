@@ -1,0 +1,491 @@
+
+[TIDY 2026-04-21 21:35] Terminals: was 4, closed 1, now 3 | Quit: none | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, Calendar, System Preferences, System Settings | Preview: running but no excess windows
+
+[HEALTH 2026-04-21 21:35]
+Uptime: up 1 day, 54 mins, load averages: 0.76 0.73 0.60
+Top CPU processes:
+  claude          0.0%  152M
+  (all processes idle - no high CPU)
+Memory: 2076 MB free (pages free: 531505), 28GB total RAM, no compressor activity
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+Alerts: None triggered (disk OK, memory OK, no high CPU)
+[TIDY 2026-04-21] Terminals: was 20, closed 17, now 3 | Quit: none (all target apps not running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit | Preview: running but not scriptable
+[HEALTH 2026-04-21 21:36] Uptime: up 1 day 56 mins | Load: 0.71 0.76 0.63 | Disk /: 705Gi free / 855Gi (2% used) | RAM: 30GB total, 90% free | Memory pressure: NORMAL | Top procs: all <1% CPU | No alerts triggered
+[TIDY 2026-04-21 22:05] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar
+[HEALTH 2026-04-21 22:06]
+Uptime: up 1 day, 1:24, 4 users, load averages: 1.46 0.91 0.63
+Top CPU processes: (all at 0.0% during snapshot - system idle)
+  mdworker_shared, System Events, FolderActionsDispatcher, uncd
+Memory: 28GB total, ~2.0GB free, ~8.9GB inactive, ~11.6GB active, 0 pages compressed
+Disk: 855Gi total, 13Gi used, 705Gi available (2% used)
+Thermal: N/A (pmset thermlog unavailable)
+Memory Pressure: NORMAL (no warning)
+Alerts: None
+
+[TIDY 2026-04-21 22:35] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime, TextEdit
+
+[HEALTH 2026-04-21 22:35]
+Uptime: up 1 day, 1:54, 4 users, load averages: 0.92 0.51 0.42
+Top CPU processes:
+  mdworker_shared  0.0%  2180K
+  uncd             0.0%  1552K
+  FolderActionsDis 0.0%  3856K
+  System Events    0.0%  6748K
+  claude           0.0%  151M
+Memory: 2263MB free (pages free: 579309), 28GB total, no compressor activity
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+[TIDY 2026-04-21 23:04] Terminals: was 3, closed 0, now 3 | Quit: none | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-21 23:04]
+Uptime: up 1 day, 2:23, load averages: 0.43 0.30 0.32
+Top CPU processes:
+  claude           0.0%  153M
+  System Events    0.0%  7.8M
+  mdworker_shared  0.0%  2.3M
+  FolderActionsDis 0.0%  3.8M
+  uncd             0.0%  1.5M
+Memory: 2237MB free of 28672MB total (pages free: 572762, inactive: 2279127, speculative: 852347)
+Disk: 13Gi used / 705Gi available (2% used)
+Thermal: N/A
+
+[TIDY 2026-04-22 00:06] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, Calendar, System Settings | Preview: running, kept
+[HEALTH 2026-04-22 00:06]
+Uptime: up 1 day, 3:26, load avg: 1.60 0.81 0.49
+Top CPU processes:
+  (all at 0.0% — idle snapshot: tail, top, bash, osascript, mdworker_shared)
+Memory: ~2154 MB free (552845 pages free), 30 GB total, no compressor activity
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 00:35] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, QuickTime Player
+
+[HEALTH 2026-04-22 00:35]
+Uptime: up 1 day, 3:54, load averages: 0.70 0.49 0.39
+Top CPU processes: all idle (0.0% across top 10)
+Memory: ~2.1GB free (551K pages), ~8.7GB inactive, 28GB total, no compressor usage
+Disk: 13GB used / 705GB available of 855GB (2% used)
+Memory Pressure: Normal
+Thermal: N/A
+Alerts: None triggered
+[TIDY 2026-04-22 01:06] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, System Settings
+[HEALTH 2026-04-22 01:06]
+Uptime: 1 day, 4:25, load averages: 1.71 0.79 0.46
+Top CPU processes:
+  All processes at 0% CPU at snapshot (top: claude 156M, mdworker, System Events, FolderActionsDispatcher)
+Memory: 2181 MB free (558458 pages free), 28 GB total, no compressor activity
+Disk: 855Gi total, 13Gi used, 705Gi available (2% used)
+Thermal: N/A
+
+[TIDY 2026-04-22 01:35] Terminals: was 3, closed 0, now 3 | Quit: TextEdit, Preview | Skipped (not running): Music, Podcasts, News, Stocks, Maps, Reminders, Books, QuickTime Player, Calendar, App Store, System Settings
+[HEALTH 2026-04-22 01:36]
+Uptime: 1 day, 4:55, load avg: 1.93 1.47 0.80
+Top CPU processes:
+  claude         0.0%  145M
+  System Events  0.0%  7.8M
+  mdworker       0.0%  2.3M
+  (all processes at 0% CPU at snapshot)
+Memory: ~2.2GB free (557k pages), 28GB total, 0 pages in compressor
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+Alerts: None triggered
+[TIDY 2026-04-22 02:05] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, System Settings, Preview
+[HEALTH 2026-04-22 02:06]
+Uptime: up 1 day, 5:25, load averages: 0.99 0.58 0.46
+Top CPU processes:
+  WindowServer     8.4%  288M
+  osascript        6.5%  4.3M
+  claude           1.4%  153M
+  com.apple.Virtua 1.2%  3001M
+Memory: ~2164MB free (pages free: 554184 x 4096), 28GB total, no compressor activity
+Disk: 13Gi used / 705Gi available (855Gi total)
+Thermal: N/A
+[TIDY 2026-04-22 02:37] Terminals: was 3, closed 0, now 3 | Quit: Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Calendar
+[HEALTH 2026-04-22 02:38]
+Uptime: 2:37 up 1 day, 5:56, 4 users, load averages: 0.59 0.58 0.45
+Top CPU processes:
+  All processes at 0.0% CPU — system idle
+  Top resident: claude 153M, System Events 7.8M
+Memory: 2063 MB free (528165 pages free), 28 GB total RAM, no compressor activity
+Disk: 855Gi total, 13Gi used, 705Gi available (2% used)
+Thermal: N/A
+Alerts: None triggered (disk OK, memory OK, CPU OK)
+---
+[TIDY 2026-04-22 03:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 03:04]
+Uptime: up 1 day, 6:23, load averages: 0.92 0.58 0.43
+Top CPU processes:
+  claude          0.0%  151M
+  mdworker_shared 0.0%  2272K
+  System Events   0.0%  7692K
+  FolderActionsDis 0.0% 3808K
+  uncd            0.0%  1528K
+Memory: ~2063MB free (540666 pages), 2945284 active, 2279868 inactive
+Disk: 855Gi total, 13Gi used, 705Gi available (2%)
+Thermal: N/A
+Alerts: None triggered (disk 705GB OK, memory normal, no high CPU)
+---
+
+[TIDY 2026-04-22 15:35] Terminals: was 3, closed 0, now 3 | Quit: none (no target apps running) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, Books, QuickTime, TextEdit
+[HEALTH 2026-04-22 15:35]
+Uptime: up 1 day, 6:55, load averages: 0.62 0.32 0.27
+Top CPU processes: (all idle at snapshot - 0% CPU across board)
+  osascript 0.0% | System Events 0.0% | FolderActionsDispatcher 0.0% | mdworker_shared 0.0% | uncd 0.0%
+Memory: ~2094 MB pages free, ~28 GB total, no compressor activity
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+Alerts: None triggered
+[TIDY 2026-04-22 04:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Preview, TextEdit, Calendar, System Settings
+[HEALTH 2026-04-22 04:04]
+Uptime: up 1 day, 7:23, load averages: 1.56 0.52 0.34
+Top CPU processes:
+  claude 0.0% 169M
+  System Events 0.0% 7760K
+  mdworker_shared 0.0% 2264K
+  mdworker_shared 0.0% 2132K
+  FolderActionsDispatch 0.0% 3884K
+Memory: ~1973 MB free (505426 pages free), 0 pages in compressor
+Disk: 855G total, 13G used, 705G available (2% used)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 04:38] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, Books, QuickTime Player, System Settings
+[HEALTH 2026-04-22 04:38]
+Uptime: 1 day, 7:57, load averages: 0.90 0.49 0.39
+Top CPU processes:
+  All processes at 0.0% CPU — system idle
+Memory: ~1956 MB free (500738 pages free), 28GB total, no compressor activity
+Disk: 855Gi total, 13Gi used, 705Gi available (2% used)
+Thermal: N/A
+
+[TIDY 2026-04-22 05:07] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Calendar, System Settings
+[HEALTH 2026-04-22 05:07]
+Uptime: 1 day, 8:27, load avg: 0.63 0.41 0.35
+Top CPU processes:
+  All processes at 0.0% CPU (idle system)
+  Top by mem: System Events 7.8MB, top 4.7MB, osascript 4.3MB
+Memory: ~1866MB pages free, ~9037MB inactive, 28GB total | No compressor activity
+Disk: 855GB total, 13GB used, 705GB available (2% used)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 05:34] Terminals: was 3, closed 0, now 3 | Quit: Preview (no windows) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 05:34]
+Uptime: 5:34 up 1 day, 8:54, 4 users, load averages: 1.31 0.86 0.57
+Top CPU processes: all below 1% (idle system snapshot)
+Memory: ~1755 MB free pages (28GB system)
+Disk: Used 13Gi / Available 705Gi (2% used)
+Thermal: N/A
+Memory Pressure: Normal (system has 28GB)
+---
+[TIDY 2026-04-22 06:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Calendar, System Settings, TextEdit, Preview
+[HEALTH 2026-04-22 06:05]
+Uptime: up 1 day, 9:24, 4 users, load averages: 1.47 1.28 1.08
+Top CPU processes: (all idle at snapshot - 0% CPU across top 10)
+Memory: 113MB free of ~28671MB mapped (28890 free pages)
+Disk: 13Gi used / 704Gi available (2% used) on 855Gi volume
+Thermal: N/A
+[TIDY 2026-04-22 06:34] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Preview
+[HEALTH 2026-04-22 06:35]
+Uptime: up 1 day, 9:54, load avg: 0.78 0.74 0.88
+Top CPU processes:
+  All processes at 0.0% CPU (idle snapshot)
+  claude: 153M resident
+Memory: 300MB pages free, ~11.3GB inactive+free, 28GB total RAM, 0 pages in compressor
+Disk: 855GB total, 13GB used, 704GB available (2% used)
+Thermal: N/A
+[TIDY 2026-04-22 07:03] Terminals: was 3, closed 0, now 3 | Quit: TextEdit, Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Calendar, System Settings
+[HEALTH 2026-04-22 07:04]
+Uptime: up 1 day, 10:24, 4 users, load averages: 2.03 1.47 1.10
+Top CPU processes:
+  top              0.0%  4944K
+  osascript        0.0%  4412K
+  mdworker_shared  0.0%  2356K
+  FolderActionsDis 0.0%  3828K
+  System Events    0.0%  7968K
+Memory: 839MB free (pages free: 214840)
+Disk: 13Gi used / 704Gi available (2% used)
+Thermal: N/A
+[TIDY 2026-04-22 07:35] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Preview, Calendar
+[HEALTH 2026-04-22 07:35]
+Uptime: up 1 day, 10:53, load averages: 0.83 0.78 1.11
+Top CPU processes:
+  claude           0.0%  153M
+  System Events    0.0%  7940K
+  mdworker_shared  0.0%  2340K
+  mdworker_shared  0.0%  2276K
+  FolderActionsDis 0.0%  3852K
+Memory: 574MB pages free (~12.5GB incl inactive), 28GB total, 0 compressed
+Disk: 855GB total, 13GB used, 704GB available (2%)
+Thermal: N/A
+[TIDY 2026-04-22 08:03] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, System Settings, Preview, Calendar
+[HEALTH 2026-04-22 08:04]
+Uptime: up 1 day, 11:23, load avg: 1.60 0.92 0.87
+Top CPU processes:
+  FolderActionsDispatcher 0.0% 3924K
+  System Events 0.0% 7724K
+  QuickLookUIService 0.0% 4280K
+  com.apple.appkit 0.0% 18M
+  ptpcamerad 0.0% 1712K
+Memory: ~197MB free (pages free) + ~12.2GB inactive reclaimable | 28GB total | Pressure: Normal
+Disk: 855GB total, 13GB used, 704GB available (2%)
+Thermal: N/A (no thermlog data)
+Alerts: None triggered
+[TIDY 2026-04-22 08:37] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar
+
+[HEALTH 2026-04-22 08:37]
+Uptime: up 1 day, 11:55, 4 users, load averages: 0.81 0.81 0.78
+Top CPU processes: all idle (0.0% - mdworker_shared, uncd, etc.)
+Memory: 28GB total, ~324MB free, ~12.4GB active, ~12.2GB inactive, ~2.8GB wired, 0 compressed
+Disk: 855GB total, 13GB used, 703GB available (2%)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 09:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Preview, Calendar
+[HEALTH 2026-04-22 09:04]
+Uptime: up 1 day, 12:23, 4 users, load averages: 0.55 0.57 0.65
+Top CPU processes:
+  (all idle — no process above 0% at sample time)
+  mdworker_shared, System Events, FolderActionsDispatcher active
+Memory: 359MB pages free, ~12.4GB inactive (reclaimable), 28GB total RAM
+Disk: 13Gi used / 703Gi available (2% used) on 855Gi drive
+Thermal: N/A
+Alerts: None triggered (disk 703GB OK, memory normal, no high CPU)
+[TIDY 2026-04-22 09:35] Terminals: was 3, closed 0, now 3 | Quit: TextEdit, Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar
+[HEALTH 2026-04-22 09:35]
+Uptime: up 1 day, 12:54, load averages: 0.90 0.77 0.81
+Top CPU processes:
+  mdworker_shared 0.0% | com.apple.iCloud 0.0% | remindd 0.0%
+  (All processes at 0.0% CPU — system idle)
+Memory: ~4516 MB free (1,156,176 pages free), 28GB total, no compressor activity
+Disk: 855GB total, 13GB used, 704GB available (2% used)
+Thermal: N/A
+Alerts: None triggered
+[TIDY 2026-04-22 10:06] Terminals: was 3, closed 0, now 3 | Quit: Preview (no windows) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Calendar
+[HEALTH 2026-04-22 10:06]
+Uptime: up 1 day, 13:24, 4 users, load averages: 0.99 0.65 0.50
+Top CPU processes:
+  Claude Helper (Renderer) 81.4% CPU, 2.3% MEM
+  claude-code 5.6% CPU, 1.1% MEM
+  WindowServer 3.4% CPU, 0.4% MEM
+  Claude 1.5% CPU, 1.8% MEM
+  Virtualization.VirtualMachine 1.4% CPU, 7.3% MEM
+Memory: 4486 MB free (+ 10420 MB inactive)
+Disk: 13Gi Used / 704Gi Available (2% used)
+Thermal: N/A
+[TIDY 2026-04-22 10:33] Terminals: was 3, closed 0, now 3 | Quit: none needed | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 10:34]
+Uptime: up 1 day, 13:53, load averages: 1.02 0.39 0.37
+Top CPU processes:
+  tail 0.0% 1324K | top 0.0% 4872K | bash 0.0% 1356K | claude 0.0% 170M | mdworker_shared 0.0% 2280K
+Memory: 4462MB free (14885MB incl. inactive)
+Disk: 13Gi used / 704Gi available (2% used)
+Thermal: N/A
+Memory pressure: Normal (28GB total, no compressor activity)
+[TIDY 2026-04-22 11:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 11:04]
+Uptime: up 1 day, 14:23, 4 users, load averages: 5.57 1.71 0.89
+Top CPU processes:
+  tail 0.0% 1312K
+  top 0.0% 4940K
+  bash 0.0% 1344K
+  osascript 0.0% 4240K
+  claude 0.0% 171M
+Memory: ~2053 MB free (525412 pages free)
+Disk: 855Gi total, 13Gi used, 704Gi available (2%)
+Thermal: N/A
+
+[TIDY 2026-04-22 12:49] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 12:50]
+Uptime: up 29 mins, 4 users, load averages: 22.82 27.55 14.07
+Top CPU processes (all idle at snapshot):
+  top              0.0%  3908K
+  osascript        0.0%  4384K
+  spotlightknowled 0.0%  4884K
+  AppPredictionInt 0.0%  3304K
+  MessagesBlastDoo 0.0%  2788K
+Memory: ~5262MB free (1347072 free pages), 28GB total, no compressor activity
+Disk: 855GB total, 13GB used, 704GB available (2%)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 13:05] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Preview
+[HEALTH 2026-04-22 13:05]
+Uptime: 13:05  up 45 mins, 4 users, load averages: 0.89 1.81 5.05
+Top CPU processes:
+  Claude 191.5% 2.4%mem
+  osascript 20.2% 0.1%mem
+  sh 16.2% 0.0%mem
+  PrivateFramework 4.6% 0.3%mem
+  Python 3.2% 1.1%mem
+Memory: 5374 MB free
+Disk: 13Gi used / 704Gi available (2%)
+Thermal: N/A
+Memory Pressure: Normal
+
+[TIDY 2026-04-22 13:33] Terminals: was 3, closed 0, now 3 | Quit: Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime, TextEdit
+
+[HEALTH 2026-04-22 13:33]
+Uptime: up 1:13, 4 users, load averages: 1.51 0.99 1.39
+Top CPU processes:
+  claude           0.0%  178M
+  System Events    0.0%  7.7M
+  FolderActionsDis 0.0%  3.8M
+  mdworker_shared  0.0%  2.3M
+  disclaimer       0.0%  1.3M
+Memory: 4816 MB free (pages free: 1237254 x 4096B), 0 pages compressed
+Disk: 855Gi total, 13Gi used, 704Gi available (2% used)
+Thermal: N/A
+No alerts triggered.
+[TIDY 2026-04-22 14:05] Terminals: was 3, closed 0, now 3 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player | Preview: 0 windows, no action
+[HEALTH 2026-04-22 14:05]
+Uptime: 1:45, 4 users, load averages: 0.84 0.51 0.49
+Top CPU processes:
+  All at 0.0% — idle snapshot (top, tail, bash, mdworker, osascript)
+Memory: ~4825 MB free (1177706 pages × 4KB), 0 compressed, 28GB total
+Disk: 855GB total, 13GB used, 704GB available (2% used)
+Thermal: N/A
+Alerts: None triggered (disk OK, memory OK, CPU OK)
+[TIDY 2026-04-22 14:33] Terminals: was 3, closed 0, now 3 | Quit: Preview (0 windows, idle) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime, TextEdit
+[HEALTH 2026-04-22 14:33]
+Uptime: 14:34 up 2:14, 4 users, load averages: 0.84 0.39 0.44
+Top CPU processes:
+  tail 0.0% 1352K | top 0.0% 3872K | bash 0.0% 1404K | claude 0.0% 155M | mdworker_shared 0.0% 2284K
+Memory: ~4.4GB pages free (1141361 pages), 0 pages in compressor
+Disk: 855GB total, 13GB used, 704GB available (2% used)
+Thermal: N/A (pmset thermlog unavailable)
+No alerts triggered.
+[TIDY 2026-04-22 15:13] Terminals: was 3, closed 0, now 3 | Quit: TextEdit, Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Calendar, System Settings
+[HEALTH 2026-04-22 15:14]
+Uptime: 15:13 up 14 mins, 4 users, load averages: 23.83 20.31 9.52
+Top CPU processes:
+  tail 0.0% 1352K
+  top 0.0% 3796K
+  com.apple.Stream 0.0% 5012K
+  bash 0.0% 1404K
+  osascript 0.0% 4444K
+Memory: ~10.0 GB free (2622290 pages free x 4096B), 30GB total, no compressor activity
+Disk: 13Gi used / 704Gi available (855Gi total) — 2% used
+Thermal: N/A (requires elevated privileges)
+Alerts: None triggered
+[TIDY 2026-04-22 15:34] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 15:35]
+Uptime: up 35 mins, 4 users, load averages: 0.93 1.07 2.84
+Top CPU processes:
+  claude           0.0%  154M
+  System Events    0.0%  7512K
+  mdworker_shared  0.0%  2296K
+  FolderActionsDis 0.0%  3848K
+  mdworker_shared  0.0%  2248K
+Memory: ~9293 MB free (2,379,175 pages free)
+Disk: 855Gi total, 13Gi used, 704Gi available (2%)
+Thermal: N/A
+No alerts triggered.
+
+[TIDY 2026-04-22 16:04] Terminals: was 3, closed 0, now 3 | Quit: (none needed) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 16:04]
+Uptime: up 1:04, 4 users, load averages: 0.49 0.42 0.71
+Top CPU processes:
+  claude           0.0%  153M
+  System Events    0.0%  7.6M
+  FolderActionsDis 0.0%  3.9M
+  mdworker_shared  0.0%  2.3M
+  osascript        0.0%  4.5M
+Memory: 8866 MB free (pages free: 2321684)
+Disk: 13Gi used / 704Gi available (2% used)
+Thermal: N/A
+---
+[TIDY 2026-04-22 16:34] Terminals: was 3, closed 0, now 3 | Quit: none | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 16:35]
+Uptime: 16:35  up  1:35, 4 users, load averages: 1.13 0.74 0.59
+Top CPU processes:
+  All processes at 0.0% CPU (idle system)
+  claude 152M | System Events 7.6M | osascript 4.4M | top 3.9M | FolderActionsDispatcher 3.8M
+Memory: 8684 MB free (2267262 pages x 4096 / 1048576), 28 GB total
+Disk: 855Gi total, 13Gi used, 704Gi available (2% used)
+Thermal: N/A
+[TIDY 2026-04-22 17:04] Terminals: was 3, closed 0, now 3 | Quit: (none needed) | Skipped (not running): Music, Podcasts, Photos, Preview, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
+[HEALTH 2026-04-22 17:05]
+Uptime: up 2:05, load averages: 1.00 0.99 0.70
+Top CPU processes: (all idle, no process above 1%)
+  tail 0.0% 1312K | top 0.0% 3792K | osascript 0.0% 4364K | mdworker_shared 0.0% 2216K | System Events 0.0% 7608K
+Memory: ~8830 MB free (2260236 pages free)
+Disk: 13Gi used / 704Gi available (2% used)
+Thermal: N/A
+Alerts: None triggered
+[TIDY 2026-04-22 17:35] Terminals: was 3, closed 0, now 3 | Quit: (none running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, Calendar, Books, QuickTime Player, App Store, System Settings, Preview, TextEdit
+[HEALTH 2026-04-22 17:35]
+Uptime: up 2:35, 4 users, load averages: 0.57 0.56 0.51
+Top CPU processes:
+  All processes < 1% CPU — system idle
+Memory: ~8353 MB free (pages free: 2138382 × 4096), 28 GB total, no compressor activity
+Disk: 13Gi used / 704Gi available on 855Gi volume (2% used)
+Thermal: N/A
+
+[TIDY 2026-04-22 18:04] Terminals: was 3, closed 0, now 3 | Quit: none | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, Calendar, System Settings
+[HEALTH 2026-04-22 18:06]
+Uptime: up 3:05, 4 users, load averages: 1.71 0.93 0.69
+Top CPU processes:
+  claude 0.0% 154M
+  System Events 0.0% 7780K
+  mdworker_shared 0.0% 2304K
+  FolderActionsDis 0.0% 3824K
+  disclaimer 0.0% 1256K
+Memory: 7789 MB (~7.6 GB) free (28 GB total)
+Disk: 13Gi used / 704Gi available (2% used)
+Thermal: N/A
+
+[TIDY 2026-04-22 18:35] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, Calendar, System Settings
+[HEALTH 2026-04-22 18:35]
+Uptime: up 3:36, 4 users, load averages: 0.75 0.50 0.47
+Top CPU processes:
+  claude        0.0%  154M
+  mdworker_shared 0.0%  2296K
+  System Events 0.0%  7824K
+  FolderActionsDis 0.0%  3792K
+  uncd          0.0%  1540K
+Memory: ~7746 MB free (pages free: 1982912)
+Disk: 855Gi total, 13Gi used, 704Gi available (2%)
+Thermal: N/A
+Alerts: None triggered
+
+[TIDY 2026-04-22 19:05] Terminals: was 3, closed 0, now 3 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, Preview (0 windows)
+[HEALTH 2026-04-22 19:06]
+Uptime: 19:05  up  4:06, 4 users, load averages: 1.17 0.49 0.37
+Top CPU processes:
+  claude           0.0%  153M
+  System Events    0.0%  7852K
+  mdworker_shared  0.0%  2292K
+  uncd             0.0%  1532K
+  FolderActionsDis 0.0%  3892K
+Memory: ~7.6GB free (1993228 pages free), 28GB total, no compressor activity
+Disk: 855GB total, 13GB used, 704GB available (2% used)
+Thermal: N/A
+Memory Pressure: Normal (no WARN/CRITICAL)
+Alerts: None triggered
+
+[TIDY 2026-04-22 20:04] Terminals: was 3, closed 0, now 3 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar, Preview (0 windows)
+[HEALTH 2026-04-22 20:04]
+Uptime: up 5:05, 5 users, load averages: 2.42 2.00 1.49
+Top CPU processes:
+  (all idle — no process above 0.0% CPU in snapshot)
+  top 3 by memory: osascript 4476K, osascript 4408K, top 4028K
+Memory: ~6330 MB free (1620396 pages free), 28 GB total, 0 pages in compressor
+Disk: 855Gi total, 13Gi used, 704Gi available (2% used)
+Thermal: N/A (requires elevated privileges)
+Memory Pressure: Normal (30GB system, no compression activity)
+[TIDY 2026-04-22 20:35] Terminals: was 6, closed 3, now 3 | Quit: (none running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Calendar, Preview
+[HEALTH 2026-04-22 20:35]
+Uptime: up 5:35, 4 users, load averages: 5.51 4.97 3.94
+Top CPU processes:
+  claude           0.0%  151M
+  System Events    0.0%  7.8M
+  mdworker_shared  0.0%  2.2M
+  FolderActionsDis 0.0%  3.9M
+  osascript        0.0%  4.5M
+Memory: ~5331 MB free (1364864 pages free)
+Disk: 13Gi used / 703Gi available (2% used)
+Thermal: N/A
+No alerts triggered.
+

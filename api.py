@@ -1026,6 +1026,158 @@ def notifications_test() -> dict:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ── Chart data ─────────────────────────────────────────────────────────────────
+
+_chart_cache: dict = {}
+
+@app.get("/chart/btc_history", dependencies=[Depends(_require_api_key)])
+def get_btc_history(days: int = 30) -> dict:
+    """Return BTC OHLC candles + strategy overlay values for the chart."""
+    cache_key = f"chart_{days}"
+    now = time.time()
+    if _chart_cache.get(cache_key, {}).get("expires", 0) > now:
+        return _chart_cache[cache_key]["data"]
+
+    # Resolution: 4-hour candles for 7d, daily for 30d/90d
+    resolution = "240" if days <= 7 else "1D"
+    end_ts = int(now * 1000)
+    start_ts = end_ts - days * 24 * 60 * 60 * 1000
+
+    try:
+        r = _requests.get(
+            "https://www.deribit.com/api/v2/public/get_tradingview_chart_data",
+            params={
+                "instrument_name": "BTC-PERPETUAL",
+                "start_timestamp": start_ts,
+                "end_timestamp":   end_ts,
+                "resolution":      resolution,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        result = r.json()["result"]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Deribit OHLC unavailable: {e}")
+
+    ticks  = result.get("ticks",  [])
+    opens  = result.get("open",   [])
+    highs  = result.get("high",   [])
+    lows   = result.get("low",    [])
+    closes = result.get("close",  [])
+
+    candles = [
+        {"time": ticks[i] // 1000, "open": opens[i], "high": highs[i],
+         "low": lows[i], "close": closes[i]}
+        for i in range(len(ticks))
+    ]
+
+    # Live spot price (overrides last close so current candle is accurate)
+    current_price: float | None = closes[-1] if closes else None
+    try:
+        lp = _requests.get(
+            "https://www.deribit.com/api/v2/public/get_index_price",
+            params={"index_name": "btc_usd"}, timeout=3,
+        )
+        current_price = lp.json()["result"]["index_price"]
+        # Update last candle's close with live price
+        if candles:
+            last = candles[-1]
+            candles[-1] = {
+                **last,
+                "close": current_price,
+                "high":  max(last["high"], current_price),
+                "low":   min(last["low"],  current_price),
+            }
+    except Exception:
+        pass
+
+    # Config overlays
+    cfg = _read_yaml(BASE_DIR / "config.yaml") or {}
+    pos = _read_json(DATA_DIR / "current_position.json") or {}
+
+    otm_offset       = cfg.get("backtest",  {}).get("approx_otm_offset",        0.05)
+    delta_min        = cfg.get("strategy",  {}).get("target_delta_min",          0.15)
+    delta_max        = cfg.get("strategy",  {}).get("target_delta_max",          0.35)
+    min_dte          = cfg.get("strategy",  {}).get("min_dte",                   14)
+    max_dte          = cfg.get("strategy",  {}).get("max_dte",                   45)
+    max_eq_per_leg   = cfg.get("sizing",    {}).get("max_equity_per_leg",        0.10)
+    iv_threshold     = cfg.get("strategy",  {}).get("iv_rank_threshold",         30)
+    premium_fraction = cfg.get("backtest",  {}).get("premium_fraction_of_spot",  0.02)
+    starting_equity  = cfg.get("backtest",  {}).get("starting_equity",           0)
+
+    # Target zone where bot would place puts (±50% of offset, centered on otm strike)
+    zone_center = round(current_price * (1 - otm_offset), 0)          if current_price else None
+    zone_upper  = round(current_price * (1 - otm_offset * 0.5), 0)    if current_price else None
+    zone_lower  = round(current_price * (1 - otm_offset * 1.5), 0)    if current_price else None
+
+    # Active position
+    is_open        = bool(pos.get("open"))
+    active_strike  = pos.get("strike")            if is_open else None
+    contracts      = pos.get("contracts", 0)      if is_open else 0
+    prem_collected = pos.get("premium_collected", 0) if is_open else 0
+    breakeven: float | None = None
+    if active_strike and contracts and contracts > 0:
+        prem_per_btc = prem_collected / contracts
+        breakeven = round(active_strike - prem_per_btc, 0)
+
+    expiry_ts: int | None = None
+    if is_open and pos.get("expiry"):
+        try:
+            expiry_ts = int(datetime.strptime(pos["expiry"], "%Y-%m-%d").timestamp())
+        except Exception:
+            pass
+
+    # Trade history markers
+    raw_trades = _read_json(DATA_DIR / "paper_trades" / "paper_trades.json") or []
+    trade_markers = []
+    for t in raw_trades:
+        try:
+            entry_ts = int(datetime.fromisoformat(t["entry_date"]).timestamp())
+            exit_ts: int | None = None
+            if t.get("exit_date"):
+                exit_ts = int(datetime.fromisoformat(t["exit_date"]).timestamp())
+            pnl = t.get("pnl_usd") or 0
+            trade_markers.append({
+                "entry_time": entry_ts,
+                "exit_time":  exit_ts,
+                "strike":     t.get("strike"),
+                "pnl_usd":    pnl,
+                "won":        pnl >= 0,
+                "reason":     t.get("reason", ""),
+            })
+        except Exception:
+            continue
+
+    payload = {
+        "candles":      candles,
+        "current_price": current_price,
+        "resolution":   resolution,
+        "overlays": {
+            "zone_upper":    zone_upper,
+            "zone_center":   zone_center,
+            "zone_lower":    zone_lower,
+            "active_strike": active_strike,
+            "breakeven":     breakeven,
+            "expiry_ts":     expiry_ts,
+        },
+        "config": {
+            "otm_offset":       otm_offset,
+            "target_delta_min": delta_min,
+            "target_delta_max": delta_max,
+            "min_dte":          min_dte,
+            "max_dte":          max_dte,
+            "max_equity_per_leg": max_eq_per_leg,
+            "iv_rank_threshold":  iv_threshold,
+            "premium_fraction":   premium_fraction,
+            "starting_equity":    starting_equity,
+        },
+        "trade_markers": trade_markers,
+    }
+    # Cache 60s for 30d/90d, 20s for 7d (more real-time feel)
+    _chart_cache[cache_key] = {"data": payload, "expires": now + (20 if days <= 7 else 60)}
+    return payload
+
+
 # ── Streamlit Dashboard Proxy ─────────────────────────────────────────────────
 #
 # Streamlit binds to 0.0.0.0:8501 but rejects connections that arrive via the

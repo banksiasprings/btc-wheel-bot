@@ -1,15 +1,11 @@
-hedge:
-  enabled: true
-  rebalance_threshold: 0.05   # min BTC drift before hedging fires
-
 backtest:
-  approx_otm_offset: 0.18
+  approx_otm_offset: 0.0487
   lookback_months: 12
-  premium_fraction_of_spot: 0.0205
+  premium_fraction_of_spot: 0.0288
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 100000.0
+  starting_equity: 1255.8933
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -23,6 +19,9 @@ execution:
   order_confirm_timeout: 30
   poll_interval: 60
   slippage_tolerance: 0.005
+hedge:
+  enabled: true
+  rebalance_threshold: 0.05
 logging:
   level: INFO
   log_dir: logs
@@ -42,9 +41,9 @@ risk:
 sizing:
   collateral_buffer: 1.0
   contract_size_btc: 0.1
-  max_equity_per_leg: 0.1141
+  max_equity_per_leg: 0.1052
   max_open_legs: 1
-  min_free_equity_fraction: 0.0
+  min_free_equity_fraction: 0.0843
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -53,9 +52,9 @@ strategy:
   - weekly
   - monthly
   initial_cycle: put
-  iv_rank_threshold: 0.4797
+  iv_rank_threshold: 0.4995
   liquidity_top_n: 100
-  max_dte: 24
-  min_dte: 9
-  target_delta_max: 0.2402
-  target_delta_min: 0.1
+  max_dte: 21
+  min_dte: 8
+  target_delta_max: 0.3852
+  target_delta_min: 0.1543

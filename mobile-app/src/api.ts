@@ -279,6 +279,56 @@ export const setupNotifier = (bot_token: string, chat_id: string) =>
   })
 export const testNotifier = () => request<{ ok: boolean }>('/notifications/test', { method: 'POST' })
 
+export interface Candle {
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+}
+
+export interface TradeMarker {
+  entry_time: number
+  exit_time: number | null
+  strike: number | null
+  pnl_usd: number
+  won: boolean
+  reason: string
+}
+
+export interface ChartOverlays {
+  zone_upper: number | null
+  zone_center: number | null
+  zone_lower: number | null
+  active_strike: number | null
+  breakeven: number | null
+  expiry_ts: number | null
+}
+
+export interface ChartConfig {
+  otm_offset: number
+  target_delta_min: number
+  target_delta_max: number
+  min_dte: number
+  max_dte: number
+  max_equity_per_leg: number
+  iv_rank_threshold: number
+  premium_fraction: number
+  starting_equity: number
+}
+
+export interface ChartData {
+  candles: Candle[]
+  current_price: number | null
+  resolution: string
+  overlays: ChartOverlays
+  config: ChartConfig
+  trade_markers: TradeMarker[]
+}
+
+export const getChartData = (days: number) =>
+  request<ChartData>(`/chart/btc_history?days=${days}`)
+
 export async function testConnection(): Promise<boolean> {
   try {
     await getStatus()
