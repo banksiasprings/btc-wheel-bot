@@ -612,11 +612,11 @@ export default function Optimizer() {
 
   const fetchAll = useCallback(async () => {
     try {
-      const [s, r, sw, ev] = await Promise.all([
+      // Core data — if any of these fail, show the error banner
+      const [s, r, sw] = await Promise.all([
         getOptimizerSummary(),
         getOptimizerRunning(),
         getSweepResults(),
-        getEvolveResultsAll(),
       ])
       setSummary(s)
 
@@ -629,12 +629,20 @@ export default function Optimizer() {
       })
 
       setSweepData(sw?.params?.length ? sw : null)
-      setEvolveAll(ev ?? null)
       setError('')
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false)
+    }
+
+    // Evolution history — isolated so a missing endpoint (server restart needed)
+    // doesn't crash the rest of the optimizer tab
+    try {
+      const ev = await getEvolveResultsAll()
+      setEvolveAll(ev ?? null)
+    } catch {
+      // Silently ignore — panels show "Not yet run" until server is restarted
     }
   }, [])
 
