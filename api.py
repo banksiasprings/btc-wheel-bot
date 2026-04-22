@@ -861,7 +861,7 @@ class OptimizerRunRequest(BaseModel):
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
 # Modes not yet implemented in optimizer.py — return a clear error rather than crashing
-_UNIMPLEMENTED_MODES = {"reconcile"}
+_UNIMPLEMENTED_MODES: set[str] = set()  # reconcile is now implemented
 
 
 @app.post("/optimizer/run", dependencies=[Depends(_require_api_key)])

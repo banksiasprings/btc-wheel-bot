@@ -33,7 +33,7 @@ import os
 import random
 import time
 from dataclasses import dataclass, asdict, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1179,6 +1179,297 @@ def run_walk_forward(results_dir: Path, workers: int | None = None) -> None:
     print(f"\n  Walk-forward complete. Robustness: {robustness:.2f} — {verdict}")
 
 
+# ── Reconciliation ────────────────────────────────────────────────────────────
+
+
+def _parse_instrument_expiry(instrument_name: str) -> "datetime | None":
+    """Parse expiry date from a Deribit instrument name like BTC-25APR25-90000-P."""
+    try:
+        from datetime import timezone as _tz
+        parts = instrument_name.split("-")
+        return datetime.strptime(parts[1], "%d%b%y").replace(tzinfo=_tz.utc)
+    except Exception:
+        return None
+
+
+def run_reconcile(results_dir: Path) -> None:
+    """
+    Reconcile backtester predictions against actual paper/live trading results.
+
+    Method
+    ------
+    1. Load actual closed trades from data/trades.csv.
+    2. Fetch historical BTC price and implied-vol data for each trade's entry date.
+    3. For each trade, run Black-Scholes to predict what the premium *should* have
+       been at entry, and compare it to the actual premium collected.
+    4. Also run a mini-backtest over the actual trading date range (using the current
+       best genome) and compare aggregate stats to what actually happened.
+    5. Compute metrics: premium RMSE, premium bias, win-rate accuracy, overall accuracy.
+    6. Save results to data/optimizer/reconcile_results.json.
+
+    Outputs used by the mobile API /optimizer/summary endpoint:
+        metrics.accuracy          — overall model accuracy score (0-1)
+        metrics.premium_rmse_usd  — RMS premium-prediction error per contract (USD)
+        metrics.premium_bias_usd  — mean premium over/under-estimation (USD, + = overestimates)
+    """
+    import csv as _csv
+    from datetime import timezone as _tz
+    from backtester import Backtester, bs_put_price, bs_call_price
+    from config import cfg
+
+    logger.info("=== Reconciliation: Backtest vs Actual Trades ===")
+
+    trades_path = results_dir.parent / "trades.csv"
+    if not trades_path.exists():
+        print(
+            "\n  No trades.csv found. Run the bot in paper or live mode first "
+            "to collect at least 3 completed trades, then retry."
+        )
+        return
+
+    # ── Load completed trades ──────────────────────────────────────────────────
+    all_trades = []
+    with open(trades_path, newline="") as f:
+        for row in _csv.DictReader(f):
+            # Only settle/force-close counts as a completed cycle
+            if row.get("reason") in ("expiry_settlement", "mobile_force_close"):
+                all_trades.append(row)
+
+    if len(all_trades) < 3:
+        print(
+            f"\n  Only {len(all_trades)} completed trade(s) found in trades.csv. "
+            "Need at least 3 for a meaningful reconciliation."
+        )
+        return
+
+    logger.info(f"  {len(all_trades)} completed trades loaded from {trades_path}")
+
+    # ── Fetch historical market data ───────────────────────────────────────────
+    logger.info("Fetching historical market data...")
+    bt = Backtester()
+    ohlcv_full = bt._fetch_prices()
+
+    raw_iv = bt._rest._get("get_historical_volatility", {"currency": "BTC"})
+    if raw_iv and len(raw_iv) >= 60:
+        _iv_raw = pd.DataFrame(raw_iv, columns=["ts_ms", "iv"])
+        _iv_raw["date"] = pd.to_datetime(_iv_raw["ts_ms"], unit="ms", utc=True).dt.normalize()
+        iv_df = _iv_raw.sort_values("date").drop_duplicates("date")[["date", "iv"]]
+        if len(iv_df) < 30:
+            iv_df = bt._synthesise_iv(ohlcv_full)
+    else:
+        iv_df = bt._synthesise_iv(ohlcv_full)
+
+    # Build O(1) date lookups: date → spot / IV
+    ohlcv_by_date: dict = {
+        row["date"].date(): float(row["close"])
+        for _, row in ohlcv_full.iterrows()
+    }
+    iv_by_date: dict = {
+        row["date"].date(): float(row["iv"])
+        for _, row in iv_df.iterrows()
+    }
+
+    def _nearest_value(lookup: dict, target_date) -> float | None:
+        """Return the closest available value within ±5 days."""
+        for delta in range(6):
+            for sign in (0, 1, -1):
+                d = target_date + timedelta(days=delta * sign)
+                if d in lookup:
+                    return lookup[d]
+        return None
+
+    # ── Trade-level BS reconciliation ──────────────────────────────────────────
+    r_free = cfg.backtest.risk_free_rate
+    comparisons: list[dict] = []
+    win_pred_correct = 0
+
+    for row in all_trades:
+        try:
+            instrument = row.get("instrument", "")
+            dte_at_entry = int(row.get("dte_at_entry", 7))
+            opt_type = row.get("option_type", "put")
+            strike = float(row.get("strike", 0))
+            contracts = float(row.get("contracts", 0.1))
+            entry_price_btc = float(row.get("entry_price", 0))
+            spot_at_close = float(row.get("btc_price", 0))
+            actual_pnl_usd = float(row.get("pnl_usd", 0))
+
+            if not strike or not entry_price_btc or not spot_at_close:
+                continue
+
+            # Derive entry date: expiry_date − dte_at_entry
+            expiry_dt = _parse_instrument_expiry(instrument)
+            if expiry_dt is None:
+                continue
+            entry_date = (expiry_dt - timedelta(days=dte_at_entry)).date()
+
+            spot_at_entry = _nearest_value(ohlcv_by_date, entry_date)
+            iv_at_entry   = _nearest_value(iv_by_date, entry_date)
+            if not spot_at_entry or not iv_at_entry:
+                continue
+
+            # BS-predicted premium (USD per contract per BTC underlying)
+            T = max(dte_at_entry / 365.0, 1e-8)
+            sigma = iv_at_entry / 100.0
+            if opt_type == "put":
+                bs_usd_per_unit = bs_put_price(spot_at_entry, strike, T, r_free, sigma)
+            else:
+                bs_usd_per_unit = bs_call_price(spot_at_entry, strike, T, r_free, sigma)
+            predicted_premium_usd = bs_usd_per_unit * contracts
+
+            # Actual premium collected: entry_price_btc × spot_at_entry × contracts
+            # (entry_price_btc is in BTC per 1 BTC underlying notional)
+            actual_premium_usd = entry_price_btc * spot_at_entry * contracts
+
+            premium_error_usd = predicted_premium_usd - actual_premium_usd
+
+            # Win/loss prediction: option expires worthless (OTM) if spot moved away from strike
+            if opt_type == "put":
+                model_win = spot_at_close >= strike   # put OTM if spot above strike
+            else:
+                model_win = spot_at_close <= strike   # call OTM if spot below strike
+            actual_win = actual_pnl_usd > 0
+            if model_win == actual_win:
+                win_pred_correct += 1
+
+            comparisons.append({
+                "instrument":            instrument,
+                "entry_date":            str(entry_date),
+                "close_date":            str(expiry_dt.date()),
+                "option_type":           opt_type,
+                "strike":                round(strike, 0),
+                "spot_at_entry":         round(spot_at_entry, 0),
+                "spot_at_close":         round(spot_at_close, 0),
+                "iv_at_entry_pct":       round(iv_at_entry, 2),
+                "predicted_premium_usd": round(predicted_premium_usd, 2),
+                "actual_premium_usd":    round(actual_premium_usd, 2),
+                "premium_error_usd":     round(premium_error_usd, 2),
+                "premium_error_pct":     round(
+                    premium_error_usd / actual_premium_usd * 100 if actual_premium_usd else 0, 1
+                ),
+                "model_win":             model_win,
+                "actual_win":            actual_win,
+                "actual_pnl_usd":        round(actual_pnl_usd, 2),
+            })
+        except Exception as exc:
+            logger.debug(f"Reconcile: skipped {row.get('instrument', '?')}: {exc}")
+            continue
+
+    if not comparisons:
+        print("\n  Could not match any trades to historical data (date range may be out of scope).")
+        return
+
+    n = len(comparisons)
+    errors = np.array([c["premium_error_usd"] for c in comparisons])
+    premium_rmse      = float(np.sqrt(np.mean(errors ** 2)))
+    premium_bias      = float(np.mean(errors))
+    win_accuracy      = win_pred_correct / n
+
+    # Premium accuracy: penalise large relative errors
+    rel_errors = np.array([abs(c["premium_error_pct"]) for c in comparisons])
+    premium_accuracy  = float(np.clip(1.0 - np.mean(rel_errors) / 100.0, 0.0, 1.0))
+
+    # Overall accuracy: 50% win prediction + 50% premium accuracy
+    overall_accuracy  = round(0.5 * win_accuracy + 0.5 * premium_accuracy, 4)
+
+    logger.info(f"\n  Trade-level results ({n} trades matched):")
+    logger.info(f"    Win-rate prediction accuracy : {win_accuracy:.1%}")
+    logger.info(f"    Premium RMSE                 : ${premium_rmse:,.2f}")
+    logger.info(f"    Premium bias                 : ${premium_bias:+,.2f}  "
+                f"({'overestimates' if premium_bias > 0 else 'underestimates'} premiums)")
+    logger.info(f"    Premium accuracy             : {premium_accuracy:.1%}")
+    logger.info(f"    Overall accuracy             : {overall_accuracy:.1%}")
+
+    # ── Aggregate backtest comparison ──────────────────────────────────────────
+    # Run the current best genome backtest over the same date span as actual trades
+    backtest_comparison: dict = {}
+    best_genome_path = results_dir / "best_genome.yaml"
+    if best_genome_path.exists() and len(comparisons) >= 1:
+        try:
+            import yaml
+            genome_dict = yaml.safe_load(best_genome_path.open())
+            params = ParamSet(**{k: v for k, v in genome_dict.items()
+                                 if k in ParamSet.__dataclass_fields__})
+
+            cfg.strategy.iv_rank_threshold      = params.iv_rank_threshold
+            cfg.strategy.target_delta_min       = params.target_delta_min
+            cfg.strategy.target_delta_max       = params.target_delta_max
+            cfg.strategy.min_dte                = int(params.min_dte)
+            cfg.strategy.max_dte                = int(params.max_dte)
+            cfg.sizing.max_equity_per_leg       = params.max_equity_per_leg
+            cfg.sizing.min_free_equity_fraction = params.min_free_equity_fraction
+            cfg.backtest.approx_otm_offset      = params.approx_otm_offset
+            cfg.backtest.premium_fraction_of_spot = params.premium_fraction_of_spot
+            cfg.backtest.starting_equity        = params.starting_equity
+
+            # Trim OHLCV to the actual trading window (±30 days warmup)
+            first_entry = min(
+                (_parse_instrument_expiry(c["instrument"]) - timedelta(days=int(row["dte_at_entry"])))
+                for c, row in zip(comparisons, all_trades) if _parse_instrument_expiry(c["instrument"])
+            )
+            warmup_start = first_entry - timedelta(days=400)
+            mask = ohlcv_full["date"] >= pd.Timestamp(warmup_start)
+            bt_slice = ohlcv_full[mask].reset_index(drop=True)
+
+            raw_iv_list = raw_iv if (raw_iv and len(raw_iv) >= 60) else []
+            iv_window = int(params.iv_rank_window_days)
+            bt_compare = Backtester()
+            bt_r = bt_compare.run_with_data(bt_slice, raw_iv_list, iv_window=iv_window)
+
+            # Actual aggregate stats from trades
+            actual_wins    = sum(1 for c in comparisons if c["actual_win"])
+            actual_wr      = actual_wins / n * 100
+            actual_pnl_sum = sum(c["actual_pnl_usd"] for c in comparisons)
+
+            backtest_comparison = {
+                "backtest_win_rate_pct":    bt_r.win_rate_pct,
+                "actual_win_rate_pct":      round(actual_wr, 1),
+                "win_rate_delta_pp":        round(bt_r.win_rate_pct - actual_wr, 1),
+                "backtest_return_pct":      bt_r.total_return_pct,
+                "backtest_sharpe":          bt_r.sharpe_ratio,
+                "actual_total_pnl_usd":     round(actual_pnl_sum, 2),
+                "actual_trade_count":       n,
+                "backtest_trade_count":     bt_r.num_cycles,
+            }
+
+            logger.info(
+                f"\n  Aggregate comparison:"
+                f"\n    Backtest win rate : {bt_r.win_rate_pct:.1f}%  |  "
+                f"Actual : {actual_wr:.1f}%  "
+                f"(Δ {backtest_comparison['win_rate_delta_pp']:+.1f}pp)"
+                f"\n    Actual total P&L  : ${actual_pnl_sum:+,.2f} over {n} trades"
+            )
+        except Exception as exc:
+            logger.warning(f"Aggregate comparison failed: {exc}")
+
+    # ── Save results ───────────────────────────────────────────────────────────
+    output = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "trade_count": n,
+        "metrics": {
+            "accuracy":          overall_accuracy,
+            "win_accuracy":      round(win_accuracy, 4),
+            "premium_accuracy":  round(premium_accuracy, 4),
+            "premium_rmse_usd":  round(premium_rmse, 2),
+            "premium_bias_usd":  round(premium_bias, 2),
+        },
+        "backtest_vs_actual": backtest_comparison,
+        "trades": comparisons,
+    }
+
+    out_path = results_dir / "reconcile_results.json"
+    with open(out_path, "w") as f:
+        json.dump(output, f, indent=2, default=str)
+
+    logger.info(f"\n  Results saved → {out_path}")
+    print(
+        f"\n  Reconciliation complete: {n} trades analysed."
+        f"\n  Overall accuracy: {overall_accuracy:.1%} | "
+        f"Premium RMSE: ${premium_rmse:,.2f} | "
+        f"Bias: ${premium_bias:+,.2f}"
+    )
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -1193,7 +1484,7 @@ Examples:
   python optimizer.py --mode evolve --pop 20 --gen 8
         """,
     )
-    parser.add_argument("--mode", choices=["sweep", "evolve", "walk_forward", "monte_carlo"], default="sweep")
+    parser.add_argument("--mode", choices=["sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"], default="sweep")
     parser.add_argument("--param", type=str, default=None,
                         help="For sweep mode: which parameter to sweep (default: all)")
     parser.add_argument("--population", "--pop", dest="population", type=int, default=20,
@@ -1265,6 +1556,9 @@ Examples:
         run_monte_carlo(
             results_dir=Path("data/optimizer"),
         )
+
+    elif args.mode == "reconcile":
+        run_reconcile(results_dir=Path("data/optimizer"))
 
 
 if __name__ == "__main__":
