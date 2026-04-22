@@ -58,6 +58,10 @@ class StrategyConfig:
     initial_cycle: Literal["put", "call"]
     expiry_execution_hour: int
     liquidity_top_n: int
+    # Dynamic delta: shift the target delta midpoint with IV rank.
+    # When True: low IV rank → conservative (target_delta_min side),
+    #            high IV rank → aggressive (target_delta_max side).
+    iv_dynamic_delta: bool = False
 
 
 @dataclass
@@ -189,6 +193,7 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         initial_cycle=s["initial_cycle"],
         expiry_execution_hour=int(s["expiry_execution_hour"]),
         liquidity_top_n=int(s["liquidity_top_n"]),
+        iv_dynamic_delta=bool(s.get("iv_dynamic_delta", False)),
     )
 
     sz = raw["sizing"]

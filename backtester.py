@@ -291,12 +291,18 @@ class Backtester:
         fn = bs_put_delta if cyc == "put" else bs_call_delta
         return abs(fn(S, K, T, r, sig))
 
-    def _target_strike(self, cyc: Cycle, S: float, T: float, iv: float) -> float:
+    def _target_strike(
+        self, cyc: Cycle, S: float, T: float, iv: float, iv_rank: float = 0.5
+    ) -> float:
         r, sig = self._cfg.backtest.risk_free_rate, iv / 100.0
-        mid = (
-            self._cfg.strategy.target_delta_min
-            + self._cfg.strategy.target_delta_max
-        ) / 2.0
+        d_min = self._cfg.strategy.target_delta_min
+        d_max = self._cfg.strategy.target_delta_max
+        if getattr(self._cfg.strategy, "iv_dynamic_delta", False):
+            # Shift the target delta toward the aggressive (higher delta) end
+            # when IV rank is high — more premium on offer, so sell closer ATM.
+            mid = d_min + (d_max - d_min) * float(np.clip(iv_rank, 0.0, 1.0))
+        else:
+            mid = (d_min + d_max) / 2.0
         if cyc == "put":
             return strike_for_put_delta(S, -mid, T, r, sig)
         return strike_for_call_delta(S, mid, T, r, sig)
@@ -563,7 +569,7 @@ class Backtester:
                 dte = self._dte()
                 T   = dte / 365.0
                 try:
-                    strike  = self._target_strike(cycle, spot, T, iv)
+                    strike  = self._target_strike(cycle, spot, T, iv, iv_rank=ivr / 100.0)
                     premium = self._price(cycle, spot, strike, T, iv)
                 except Exception as exc:
                     logger.debug(f"BS failed {date.date()}: {exc}")

@@ -142,29 +142,50 @@ class WheelStrategy:
         tickers: dict[str, Ticker],
         cycle: Cycle,
         underlying_price: float,
+        iv_rank: float = 0.5,
     ) -> StrikeCandidate | None:
         """
         Select the best-scoring option strike within the target delta range.
 
         Scoring:
-          - Primary: delta closest to midpoint of target range (0.225)
+          - Primary: delta closest to dynamic target midpoint
           - Secondary: highest mark_iv (more premium)
           - Filter: DTE within [min_dte, max_dte]
           - Filter: option_type == cycle
           - Filter: has a live ticker with valid delta/price
+
+        Dynamic delta (when iv_dynamic_delta=True):
+          The target midpoint shifts linearly with IV rank.
+          Low IV rank → conservative (toward target_delta_min, sell far OTM).
+          High IV rank → aggressive (toward target_delta_max, sell closer ATM
+          to capture more premium when volatility is expensive).
 
         Args:
             instruments:      Full list of active instruments.
             tickers:          Dict of instrument_name → Ticker.
             cycle:            "put" or "call".
             underlying_price: Current BTC spot price.
+            iv_rank:          Current IV rank [0–1] for dynamic delta scaling.
 
         Returns:
             StrikeCandidate or None if no qualifying strikes found.
         """
-        target_delta_mid = (
-            cfg.strategy.target_delta_min + cfg.strategy.target_delta_max
-        ) / 2.0
+        d_min = cfg.strategy.target_delta_min
+        d_max = cfg.strategy.target_delta_max
+
+        if cfg.strategy.iv_dynamic_delta:
+            # Linearly interpolate: IV rank 0 → target midpoint = d_min,
+            #                        IV rank 1 → target midpoint = d_max.
+            # This biases strike selection toward more aggressive (higher delta)
+            # options when IV is richly priced and premiums are most attractive.
+            target_delta_mid = d_min + (d_max - d_min) * float(np.clip(iv_rank, 0.0, 1.0))
+            logger.debug(
+                f"Dynamic delta: IV rank={iv_rank:.2%} → "
+                f"target mid={target_delta_mid:.4f} "
+                f"(static mid would be {(d_min + d_max)/2:.4f})"
+            )
+        else:
+            target_delta_mid = (d_min + d_max) / 2.0
 
         candidates: list[StrikeCandidate] = []
 
@@ -266,8 +287,10 @@ class WheelStrategy:
             cycle = "put"
             self._current_cycle = "put"
 
-        # Step 3: Strike selection
-        candidate = self.select_strike(instruments, tickers, cycle, underlying_price)
+        # Step 3: Strike selection (pass iv_rank for dynamic delta targeting)
+        candidate = self.select_strike(
+            instruments, tickers, cycle, underlying_price, iv_rank=iv_rank
+        )
         if candidate is None:
             return None
 
