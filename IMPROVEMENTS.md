@@ -14,9 +14,21 @@
 
 ---
 
-## Improvement #2 — Regime Filter (pending)
+## Improvement #2 — Regime Filter (2026-04-23)
 
 **Goal:** Skip put-selling during BTC downtrends to reduce assignment risk.
+
+**Changes:**
+- `config.py`: Added `use_regime_filter: bool = False` and `regime_ma_days: int = 50` to `SizingConfig` dataclass with proper wiring in `load_config()`
+- `bot.py`: Added `_regime_daily_prices` deque (one sample per UTC calendar day), `_last_regime_sample_date` tracking, and `_is_above_regime_ma()` method. New position opening in `_tick()` is now gated on the regime check.
+- `backtester.py`: Pre-computes rolling N-day SMA on the price DataFrame and skips new leg entries when spot < SMA (with warmup period pass-through for the first N rows).
+- `config.yaml`: `use_regime_filter` remains `false` (opt-in) — the 12-month backtest period is mostly bearish, so enabling by default would reduce trades from 11 → 1. Enable manually when you want downtrend protection.
+
+**How to enable:** Set `sizing.use_regime_filter: true` in config.yaml. The bot will skip opening new put legs whenever BTC spot is below its `regime_ma_days`-day simple moving average, resuming automatically once BTC recovers above it. Existing open positions are always tracked to expiry regardless.
+
+**Why kept opt-in:** The 12-month backtested period (Apr 2025–Apr 2026) saw a significant BTC downtrend, which would have blocked 10 of 11 trades. In a bullish regime the filter has minimal impact; in a bear market it virtually halts trading — which is the intended behaviour for capital preservation, but the user should consciously decide to enable it.
+
+**Files changed:** `config.py`, `bot.py`, `backtester.py`, `config.yaml`
 
 ---
 

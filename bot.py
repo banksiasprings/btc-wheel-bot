@@ -25,7 +25,7 @@ import json
 import os
 import time
 from collections import deque
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from loguru import logger
@@ -82,6 +82,14 @@ class WheelBot:
         self._btc_price_history: deque[tuple[datetime, float]] = deque(
             maxlen=_BTC_PRICE_HISTORY_MAX
         )
+
+        # Regime filter: one daily close price per calendar day for MA calculation.
+        # We keep regime_ma_days + 10 extra days to handle weekends/gaps gracefully.
+        _regime_days = max(self._cfg.sizing.regime_ma_days + 10, 60)
+        self._regime_daily_prices: deque[tuple[date, float]] = deque(
+            maxlen=_regime_days
+        )
+        self._last_regime_sample_date: date | None = None
 
         # Stage 3: OrderTracker (initialised in live mode after WS connect)
         self._tracker: OrderTracker | None = None
@@ -331,6 +339,40 @@ class WheelBot:
             return 0.0
         return (newest_price - oldest_price) / oldest_price * 100.0
 
+    def _is_above_regime_ma(self, current_price: float) -> bool:
+        """
+        Return True when it is safe to open new put positions under the regime filter.
+
+        Safety rule: BTC must be trading above its N-day simple moving average
+        (where N = cfg.sizing.regime_ma_days, default 50).  During a downtrend
+        the probability of put assignment rises sharply; skipping new entries
+        in that environment preserves capital.
+
+        Returns True (allow trading) when:
+          - regime filter is disabled, OR
+          - we haven't accumulated enough daily history yet (fail-open during warmup), OR
+          - current BTC price >= N-day SMA of daily closing prices
+        """
+        if not self._cfg.sizing.use_regime_filter:
+            return True  # filter disabled — always allow
+
+        n = self._cfg.sizing.regime_ma_days
+        if len(self._regime_daily_prices) < n:
+            logger.debug(
+                f"Regime filter: warming up "
+                f"({len(self._regime_daily_prices)}/{n} days) — allowing trade"
+            )
+            return True  # not enough history yet; fail-open
+
+        prices = [p for _, p in self._regime_daily_prices]
+        sma = sum(prices[-n:]) / n
+        above = current_price >= sma
+        logger.debug(
+            f"Regime filter: BTC={current_price:,.0f}  {n}d-SMA={sma:,.0f}  "
+            f"{'ABOVE ✅' if above else 'BELOW ⛔'}"
+        )
+        return above
+
     def _run_overseer_check(self, now: datetime, btc_price: float, iv_rank: float) -> None:
         if self._overseer is None:
             return
@@ -456,6 +498,12 @@ class WheelBot:
         # Phase 2: update 7d BTC price ring-buffer
         self._btc_price_history.append((now, underlying_price))
 
+        # Regime filter: record one daily price sample (UTC calendar day).
+        today_utc = now.date()
+        if today_utc != self._last_regime_sample_date:
+            self._regime_daily_prices.append((today_utc, underlying_price))
+            self._last_regime_sample_date = today_utc
+
         # Phase 2 (live mode): refresh equity from Deribit account summary each tick
         if not self._paper and self._client.has_private_access():
             try:
@@ -555,15 +603,21 @@ class WheelBot:
 
         # Open new leg if flat
         if not self._positions:
-            signal = self._strategy.generate_signal(
-                iv_history=iv_history,
-                instruments=instruments,
-                tickers=tickers,
-                underlying_price=underlying_price,
-                last_cycle=None,
-            )
-            if signal:
-                await self._open_position(signal, underlying_price)
+            if not self._is_above_regime_ma(underlying_price):
+                logger.info(
+                    f"Regime filter ACTIVE — BTC ${underlying_price:,.0f} is below its "
+                    f"{self._cfg.sizing.regime_ma_days}-day MA; skipping new entry"
+                )
+            else:
+                signal = self._strategy.generate_signal(
+                    iv_history=iv_history,
+                    instruments=instruments,
+                    tickers=tickers,
+                    underlying_price=underlying_price,
+                    last_cycle=None,
+                )
+                if signal:
+                    await self._open_position(signal, underlying_price)
 
         self._print_status(now, underlying_price)
 

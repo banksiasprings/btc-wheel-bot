@@ -408,6 +408,21 @@ class Backtester:
         # iv_rank in data is 0-100; config threshold stored as 0-1
         iv_thresh = self._cfg.strategy.iv_rank_threshold * 100.0
 
+        # Regime filter: pre-compute N-day SMA of BTC closing prices.
+        # When enabled, new put legs are only opened when BTC is above its SMA —
+        # i.e., in an uptrend.  We fail-open (allow trading) during the warmup
+        # period where fewer than N rows of history are available.
+        _regime_enabled  = getattr(self._cfg.sizing, "use_regime_filter", False)
+        _regime_ma_days  = getattr(self._cfg.sizing, "regime_ma_days", 50)
+        if _regime_enabled:
+            df = df.copy()
+            df["_regime_sma"] = df["close"].rolling(
+                _regime_ma_days, min_periods=1
+            ).mean()
+            logger.info(
+                f"Regime filter ON — only opening new legs when BTC > {_regime_ma_days}d SMA"
+            )
+
         leg: dict | None = None
         equity_curve: list[float]    = [equity]
         dates:        list[datetime] = []
@@ -422,7 +437,7 @@ class Backtester:
         logger.info(f"  First leg : {cycle}")
         logger.info("=" * 60)
 
-        for _, row in df.iterrows():
+        for _row_idx, (_, row) in enumerate(df.iterrows()):
             date: datetime = row["date"].to_pydatetime()
             spot: float    = float(row["close"])
             iv:   float    = float(row["iv"])      # annualised % from Deribit
@@ -535,6 +550,15 @@ class Backtester:
                 continue
 
             # ── Open new leg ───────────────────────────────────────────────
+            # Regime gate: skip new entries when BTC is in a downtrend.
+            # During the SMA warmup period (row_idx < ma_days), fail-open so we
+            # don't waste the early simulation days.
+            if _regime_enabled and _row_idx >= _regime_ma_days:
+                sma_val = float(row.get("_regime_sma", spot))
+                if spot < sma_val:
+                    equity_curve.append(equity)
+                    continue
+
             if leg is None and ivr >= iv_thresh:
                 dte = self._dte()
                 T   = dte / 365.0

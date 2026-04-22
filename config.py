@@ -67,6 +67,9 @@ class SizingConfig:
     collateral_buffer: float
     contract_size_btc: float
     min_free_equity_fraction: float = 0.25
+    # Regime filter: skip put-selling when BTC is below its N-day MA
+    use_regime_filter: bool = False
+    regime_ma_days: int = 50
 
 
 @dataclass
@@ -195,6 +198,8 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         collateral_buffer=float(sz["collateral_buffer"]),
         contract_size_btc=float(sz["contract_size_btc"]),
         min_free_equity_fraction=float(sz.get("min_free_equity_fraction", 0.25)),
+        use_regime_filter=bool(sz.get("use_regime_filter", False)),
+        regime_ma_days=int(sz.get("regime_ma_days", 50)),
     )
 
     r = raw["risk"]
