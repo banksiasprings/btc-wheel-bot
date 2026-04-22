@@ -122,6 +122,18 @@ class WheelBot:
         except Exception:
             pass
 
+        # If no open positions on startup, any persisted hedge state is orphaned
+        # (e.g. bot was killed mid-session without closing the hedge).
+        # Reset it so the equity calculation starts clean.
+        if self._hedge is not None and not self._positions:
+            if self._hedge.position_btc != 0.0:
+                logger.warning(
+                    f"Stale hedge position detected on startup "
+                    f"({self._hedge.position_btc:+.3f} BTC with no open options). "
+                    "Resetting hedge state."
+                )
+                self._hedge.reset()
+
         if not self._paper:
             # LIVE_ONLY: connect WebSocket (auth + subscribe)
             await self._client.connect_live()
