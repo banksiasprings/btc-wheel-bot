@@ -604,7 +604,8 @@ function BlackSwanCard({
     const premFrac    = configParams.premium_fraction_of_spot ?? 0.02
     strike            = Math.round(btcPrice * (1 - otmOffset) / 1000) * 1000
     const maxNotional = effectiveEquity * legFrac
-    contracts         = strike > 0 ? Math.floor((maxNotional / strike) * 10) / 10 : 0
+    // No lot-size floor in hypothetical mode — this is a calculator, not an order
+    contracts         = strike > 0 ? maxNotional / strike : 0
     premiumUsd        = btcPrice * premFrac * contracts
   }
 
@@ -633,16 +634,18 @@ function BlackSwanCard({
   // Full scenario range: crash → flat → rise
   // For a short put + delta hedge, flat/slight rise is the WIN zone
   type Scenario = { label: string; move: number; zone: 'crash' | 'flat' | 'rise' }
+  // Order: mild → extreme crash, then flat win zone, then rise zone
+  // → $0 at the bottom of crash so severity reads top-to-bottom naturally
   const scenarios: Scenario[] = [
-    { label: '→ $0',  move: -1.00, zone: 'crash' },
-    { label: '-70%',  move: -0.70, zone: 'crash' },
-    { label: '-50%',  move: -0.50, zone: 'crash' },
-    { label: '-30%',  move: -0.30, zone: 'crash' },
-    { label: '-20%',  move: -0.20, zone: 'crash' },
-    { label: '-10%',  move: -0.10, zone: 'crash' },
-    { label: 'Flat',  move:  0.00, zone: 'flat'  },
-    { label: '+10%',  move: +0.10, zone: 'rise'  },
     { label: '+30%',  move: +0.30, zone: 'rise'  },
+    { label: '+10%',  move: +0.10, zone: 'rise'  },
+    { label: 'Flat',  move:  0.00, zone: 'flat'  },
+    { label: '-10%',  move: -0.10, zone: 'crash' },
+    { label: '-20%',  move: -0.20, zone: 'crash' },
+    { label: '-30%',  move: -0.30, zone: 'crash' },
+    { label: '-50%',  move: -0.50, zone: 'crash' },
+    { label: '-70%',  move: -0.70, zone: 'crash' },
+    { label: '→ $0',  move: -1.00, zone: 'crash' },
   ]
 
   const rows = scenarios.map(({ label, move, zone }) => {
@@ -714,9 +717,9 @@ function BlackSwanCard({
           {/* Scenario rows */}
           <div className="space-y-1">
             {rows.map(({ label, zone, sPrice, putPnl, hedgePnl, netPnl, eqAfter, lossPct, status }, idx) => {
-              // Zone divider labels
-              const prevZone = idx > 0 ? rows[idx - 1].zone : null
-              const showDivider = prevZone && prevZone !== zone
+              // Zone divider: show label above first row of each new zone
+              const prevZone = idx > 0 ? rows[idx - 1].zone : zone
+              const showDivider = zone !== prevZone
 
               const rowBg =
                 eqAfter <= 0  ? 'bg-red-950/60 border-red-900/60' :
@@ -727,8 +730,8 @@ function BlackSwanCard({
                                   'bg-navy border-transparent'
 
               const zoneLabel: Record<string, string> = {
-                flat: '── Flat (your win zone) ──',
-                rise: '── BTC rises (put safe, hedge loses) ──',
+                flat: '── Flat · your ideal outcome ──',
+                crash: '── BTC falls · crash risk ──',
               }
 
               return (
