@@ -57,7 +57,7 @@ function InfoModal({ onClose }: { onClose: () => void }) {
         </Section>
 
         <Section title="⏱ Time periods">
-          <strong>7d</strong> — last 7 days, 4-hour candles (42 candles). Good for watching intraday moves around your strike.
+          <strong>7d</strong> — last 7 days, 6-hour candles (28 candles). Good for watching intraday moves around your strike.
           <br /><strong>30d</strong> — last 30 days, daily candles. Best view for a typical options cycle.
           <br /><strong>90d</strong> — 3 months, daily candles. Useful for context and trend.
         </Section>

@@ -1038,8 +1038,9 @@ def get_btc_history(days: int = 30) -> dict:
     if _chart_cache.get(cache_key, {}).get("expires", 0) > now:
         return _chart_cache[cache_key]["data"]
 
-    # Resolution: 4-hour candles for 7d, daily for 30d/90d
-    resolution = "240" if days <= 7 else "1D"
+    # Resolution: 360-min (6h) candles for 7d, daily for 30d/90d
+    # Deribit valid resolutions: 1,3,5,10,15,30,60,120,180,360,720,1D
+    resolution = "360" if days <= 7 else "1D"
     end_ts = int(now * 1000)
     start_ts = end_ts - days * 24 * 60 * 60 * 1000
 
