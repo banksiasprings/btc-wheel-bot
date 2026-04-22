@@ -237,6 +237,33 @@ export default function Dashboard({ onNavigateTo }: Props) {
         )}
       </div>
 
+      {/* Quick actions */}
+      <div className="bg-card rounded-2xl p-4 border border-border">
+        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">
+          Quick Actions
+        </p>
+        <div className="grid grid-cols-3 gap-2">
+          <ActionBtn
+            label="Start Bot"
+            color="green"
+            onClick={handleStart}
+            disabled={status?.bot_running}
+          />
+          <ActionBtn
+            label="Stop Bot"
+            color="red"
+            onClick={() => setConfirm('stop')}
+            disabled={!status?.bot_running}
+          />
+          <ActionBtn
+            label="Close Position"
+            color="amber"
+            onClick={() => setConfirm('close')}
+            disabled={!position?.open}
+          />
+        </div>
+      </div>
+
       {/* Capital overview strip */}
       {equity && (
         <CapitalStrip
@@ -468,33 +495,6 @@ export default function Dashboard({ onNavigateTo }: Props) {
           </ResponsiveContainer>
         </div>
       )}
-
-      {/* Quick actions */}
-      <div className="bg-card rounded-2xl p-4 border border-border">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">
-          Quick Actions
-        </p>
-        <div className="grid grid-cols-3 gap-2">
-          <ActionBtn
-            label="Start Bot"
-            color="green"
-            onClick={handleStart}
-            disabled={status?.bot_running}
-          />
-          <ActionBtn
-            label="Stop Bot"
-            color="red"
-            onClick={() => setConfirm('stop')}
-            disabled={!status?.bot_running}
-          />
-          <ActionBtn
-            label="Close Position"
-            color="amber"
-            onClick={() => setConfirm('close')}
-            disabled={!position?.open}
-          />
-        </div>
-      </div>
 
       {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
 
