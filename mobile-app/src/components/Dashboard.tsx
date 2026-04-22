@@ -21,6 +21,7 @@ import {
   PositionData,
   EquityData,
   PresetsData,
+  PresetParams,
 } from '../api'
 
 function fmt$(n: number | undefined | null) {
@@ -291,12 +292,13 @@ export default function Dashboard({ onNavigateTo }: Props) {
         </div>
       )}
 
-      {/* Black Swan Calculator — only shown when a position is open */}
-      {position?.open && (
+      {/* Black Swan Calculator — always shown when config is loaded */}
+      {cp && (btcPrice ?? 0) > 0 && (
         <BlackSwanCard
-          position={position}
+          position={position?.open ? position : null}
           equityUsd={equity?.current_equity ?? 0}
-          btcPrice={btcPrice ?? position.current_spot ?? 0}
+          btcPrice={btcPrice ?? 0}
+          configParams={cp}
         />
       )}
 
@@ -568,50 +570,65 @@ function BlackSwanCard({
   position,
   equityUsd,
   btcPrice,
+  configParams,
 }: {
-  position: PositionData
+  position: PositionData | null
   equityUsd: number
   btcPrice: number
+  configParams: PresetParams
 }) {
   const [open, setOpen] = useState(false)
 
-  const strike    = position.strike    ?? 0
-  const contracts = position.contracts ?? 0
-  const premiumUsd = position.premium_collected ?? 0
-  const isPut = (position.type ?? 'put').toLowerCase().includes('put')
+  // ── Derive inputs: real position if open, otherwise hypothetical from config ──
+  const isHypothetical = !position
+
+  let strike: number
+  let contracts: number
+  let premiumUsd: number
+  const isPut = true  // bot only sells puts currently
+
+  if (position) {
+    strike     = position.strike     ?? 0
+    contracts  = position.contracts  ?? 0
+    premiumUsd = position.premium_collected ?? 0
+  } else {
+    // Hypothetical: estimate what the bot would open given the active config
+    const otmOffset   = configParams.approx_otm_offset    ?? 0.05
+    const legFrac     = configParams.max_equity_per_leg    ?? 0.10
+    const premFrac    = configParams.premium_fraction_of_spot ?? 0.02
+    strike            = Math.round(btcPrice * (1 - otmOffset) / 1000) * 1000
+    const maxNotional = equityUsd * legFrac
+    contracts         = strike > 0 ? Math.floor((maxNotional / strike) * 10) / 10 : 0
+    // Premium ≈ premium_fraction_of_spot × spot price per contract
+    premiumUsd        = btcPrice * premFrac * contracts
+  }
 
   const maxLossUsd = isPut
     ? strike * contracts
     : Math.max(0, btcPrice * 10 - strike) * contracts
 
-  const marginSafety = maxLossUsd > 0 ? equityUsd / maxLossUsd : Infinity
+  const marginSafety  = maxLossUsd > 0 ? equityUsd / maxLossUsd : Infinity
   const marginDisplay = marginSafety === Infinity ? '∞' : `${marginSafety.toFixed(1)}×`
-  const marginColor =
-    marginSafety >= 2 ? 'text-green-400' :
+  const marginColor   =
+    marginSafety >= 2   ? 'text-green-400' :
     marginSafety >= 1.2 ? 'text-amber-400' : 'text-red-400'
-  const marginBorder =
-    marginSafety >= 2 ? 'border-green-900/50' :
+  const marginBorder  =
+    marginSafety >= 2   ? 'border-green-900/50' :
     marginSafety >= 1.2 ? 'border-amber-900/50' : 'border-red-900/50'
 
-  const moves  = isPut
-    ? [-0.05, -0.10, -0.20, -0.30, -0.50, -0.70, -1.00]
-    : [+0.10, +0.20, +0.50, +1.00, +2.00, +5.00]
-  const labels = isPut
-    ? ['-5%', '-10%', '-20%', '-30%', '-50%', '-70%', '→ $0']
-    : ['+10%', '+20%', '+50%', '+100%', '+200%', '+500%']
+  const moves  = [-0.05, -0.10, -0.20, -0.30, -0.50, -0.70, -1.00]
+  const labels = ['-5%', '-10%', '-20%', '-30%', '-50%', '-70%', '→ $0']
 
   const rows = moves.map((move, i) => {
-    const sPrice      = Math.max(1, btcPrice * (1 + move))
-    const intrinsic   = isPut
-      ? Math.max(0, strike - sPrice) * contracts
-      : Math.max(0, sPrice - strike) * contracts
-    const pnlUsd      = premiumUsd - intrinsic
-    const eqAfter     = equityUsd + pnlUsd
-    const lossPct     = Math.max(0, (intrinsic - premiumUsd) / equityUsd * 100)
-    const status      =
-      eqAfter <= 0    ? '❌ Liq.' :
-      lossPct > 30    ? '🔴 Critical' :
-      lossPct > 10    ? '🟡 Warning'  : '🟢 Safe'
+    const sPrice    = Math.max(1, btcPrice * (1 + move))
+    const intrinsic = Math.max(0, strike - sPrice) * contracts
+    const pnlUsd    = premiumUsd - intrinsic
+    const eqAfter   = equityUsd + pnlUsd
+    const lossPct   = equityUsd > 0 ? Math.max(0, (intrinsic - premiumUsd) / equityUsd * 100) : 0
+    const status    =
+      eqAfter <= 0  ? '❌ Liq.' :
+      lossPct > 30  ? '🔴 Critical' :
+      lossPct > 10  ? '🟡 Warning'  : '🟢 Safe'
     return { label: labels[i], sPrice, pnlUsd, eqAfter, lossPct, status }
   })
 
@@ -624,10 +641,14 @@ function BlackSwanCard({
       >
         <div className="flex items-center gap-2">
           <span className="text-amber-400 text-base">⚡</span>
-          <span className="text-sm font-medium text-white">Black Swan Calculator</span>
+          <div className="text-left">
+            <span className="text-sm font-medium text-white">Black Swan Calculator</span>
+            {isHypothetical && (
+              <span className="ml-2 text-xs text-slate-500">· hypothetical</span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Margin safety teaser when collapsed */}
           {!open && (
             <span className={`text-sm font-bold ${marginColor}`}>
               {marginDisplay} cover
@@ -639,20 +660,28 @@ function BlackSwanCard({
 
       {open && (
         <div className="px-4 pb-4 space-y-3 border-t border-border/40">
+          {/* Hypothetical notice */}
+          {isHypothetical && (
+            <div className="mt-3 rounded-xl px-3 py-2 bg-slate-800/60 border border-slate-700/50">
+              <p className="text-xs text-slate-400">
+                No open position — showing estimated exposure if the bot opens a put now based on the active config.
+                Strike ≈ {fmt$(strike)} · Contracts ≈ {contracts.toFixed(1)}
+              </p>
+            </div>
+          )}
+
           {/* Margin Safety Banner */}
-          <div className={`mt-3 rounded-xl px-4 py-3 bg-navy border ${marginBorder} flex items-baseline gap-3 flex-wrap`}>
+          <div className={`${isHypothetical ? '' : 'mt-3'} rounded-xl px-4 py-3 bg-navy border ${marginBorder} flex items-baseline gap-3 flex-wrap`}>
             <span className="text-xs text-slate-500 whitespace-nowrap">Margin Safety</span>
             <span className={`text-2xl font-bold ${marginColor}`}>{marginDisplay}</span>
             <span className="text-xs text-slate-500 leading-snug">
-              {isPut
-                ? `Max loss (BTC → $0): ${fmt$(maxLossUsd)}`
-                : `Practical ceiling (10× spike): ${fmt$(maxLossUsd)}`}
+              Max loss (BTC → $0): {fmt$(maxLossUsd)}
             </span>
           </div>
 
           {/* Scenario label */}
           <p className="text-xs text-slate-500 uppercase tracking-wide">
-            {isPut ? 'BTC crash scenarios (put risk)' : 'BTC spike scenarios (call risk)'}
+            BTC crash scenarios (put risk)
           </p>
 
           {/* Scenario rows */}
