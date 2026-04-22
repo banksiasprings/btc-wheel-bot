@@ -74,6 +74,12 @@ class SizingConfig:
     # Regime filter: skip put-selling when BTC is below its N-day MA
     use_regime_filter: bool = False
     regime_ma_days: int = 50
+    # Strike laddering: open N puts at evenly-spaced delta targets simultaneously
+    # instead of a single large put. Total equity exposure is unchanged (each leg
+    # uses max_equity_per_leg / ladder_legs of equity). max_open_legs should be
+    # set to ladder_legs when this is enabled.
+    ladder_enabled: bool = False
+    ladder_legs: int = 2
 
 
 @dataclass
@@ -205,6 +211,8 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         min_free_equity_fraction=float(sz.get("min_free_equity_fraction", 0.25)),
         use_regime_filter=bool(sz.get("use_regime_filter", False)),
         regime_ma_days=int(sz.get("regime_ma_days", 50)),
+        ladder_enabled=bool(sz.get("ladder_enabled", False)),
+        ladder_legs=int(sz.get("ladder_legs", 2)),
     )
 
     r = raw["risk"]

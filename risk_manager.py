@@ -71,7 +71,12 @@ class RiskManager:
             return False
         return True
 
-    def calculate_contracts(self, equity_usd: float, strike_usd: float) -> float:
+    def calculate_contracts(
+        self,
+        equity_usd: float,
+        strike_usd: float,
+        equity_fraction: float | None = None,
+    ) -> float:
         """
         Calculate the number of contracts to sell given account equity and strike.
 
@@ -79,13 +84,17 @@ class RiskManager:
         But since we're selling puts, the collateral is in USD notional.
         We target max_equity_per_leg fraction of equity.
 
+        equity_fraction: optional override for the max_equity_per_leg fraction.
+        Used by the strike ladder to split exposure evenly across legs.
+
         Returns number of contracts (floored to nearest 0.1 for Deribit).
         """
         if strike_usd <= 0 or equity_usd <= 0:
             return 0.0
 
         # Maximum notional exposure
-        max_notional = equity_usd * cfg.sizing.max_equity_per_leg
+        fraction    = equity_fraction if equity_fraction is not None else cfg.sizing.max_equity_per_leg
+        max_notional = equity_usd * fraction
 
         # On Deribit: 1 contract = 1 BTC notional, minimum lot = contract_size_btc (0.1)
         # Collateral per FULL contract = strike_usd (USD value of 1 BTC at strike)

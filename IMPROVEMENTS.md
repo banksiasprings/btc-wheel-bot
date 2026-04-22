@@ -57,9 +57,24 @@
 
 ---
 
-## Improvement #4 — Strike Laddering (pending)
+## Improvement #4 — Strike Laddering (2026-04-23)
 
 **Goal:** Split a single large put into multiple smaller puts at different strikes.
+
+**Changes:**
+- `config.py`: Added `ladder_enabled: bool = False` and `ladder_legs: int = 2` to `SizingConfig`; wired in `load_config()`
+- `config.yaml`: New `sizing.ladder_enabled: false`, `sizing.ladder_legs: 2` settings (opt-in)
+- `strategy.py`: Added `delta_target_override` parameter to `select_strike()` (explicit delta target, bypasses IV-rank interpolation). Added `select_ladder_strikes()` method that returns N candidates at evenly-spaced delta positions across [target_delta_min, target_delta_max]. Duplicate strikes are excluded so each leg is at a distinct price level.
+- `bot.py`: "Open new leg" section is now ladder-aware. When `ladder_enabled=True`, the bot tracks open put count and opens up to `ladder_legs` positions simultaneously. Each leg receives `max_equity_per_leg / ladder_legs` equity allocation so total exposure equals a single standard leg.
+- `risk_manager.py`: `calculate_contracts()` accepts optional `equity_fraction` override for per-leg sizing.
+
+**How to enable:** Set `sizing.ladder_enabled: true` and `sizing.max_open_legs: 2` (or 3) in config.yaml. For 2 ladder legs, the two puts will target delta ≈ 1/3 and 2/3 of the configured range (conservative + aggressive).
+
+**Why it helps:** A single large put at one strike creates binary exposure — BTC either stays above it (full win) or crosses it (full loss). Two smaller puts at different strikes smooth this out: if BTC drops to the lower (aggressive) leg's strike but not the conservative leg's strike, you only take partial assignment. Each leg also hits a different gamma/theta profile which reduces mark-to-market volatility.
+
+**Backtester note:** The backtester remains single-leg (it's a simulation of representative trades). The laddering benefit (smoother P&L curve, reduced concentration risk) shows up in live/paper operation.
+
+**Files changed:** `config.py`, `config.yaml`, `strategy.py`, `bot.py`, `risk_manager.py`
 
 ---
 

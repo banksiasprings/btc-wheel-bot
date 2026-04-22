@@ -37,7 +37,7 @@ from hedge_manager import HedgeManager
 import notifier
 from order_tracker import OrderTracker, OrderStatus
 from risk_manager import Position, RiskManager
-from strategy import WheelStrategy
+from strategy import OpenSignal, WheelStrategy
 
 # ── BTC price ring-buffer (7 days × 24h × 1 sample/min ≈ 10 080 entries max) ──
 # We just need the oldest and newest values, so we keep a lightweight deque.
@@ -601,14 +601,68 @@ class WheelBot:
                         f"net delta: {net_delta:+.3f} BTC"
                     )
 
-        # Open new leg if flat
-        if not self._positions:
+        # Open new leg if flat (or if ladder has unfilled slots)
+        ladder_enabled = getattr(self._cfg.sizing, "ladder_enabled", False)
+        ladder_legs    = getattr(self._cfg.sizing, "ladder_legs", 2)
+
+        # Count open put positions (ladder only applies to puts; calls are single)
+        open_puts  = [p for p in self._positions if p.option_type == "put"]
+        open_calls = [p for p in self._positions if p.option_type == "call"]
+        needs_new_leg = (
+            (ladder_enabled and len(open_puts) < ladder_legs and not open_calls)
+            or (not ladder_enabled and not self._positions)
+        )
+
+        if needs_new_leg:
             if not self._is_above_regime_ma(underlying_price):
                 logger.info(
                     f"Regime filter ACTIVE — BTC ${underlying_price:,.0f} is below its "
                     f"{self._cfg.sizing.regime_ma_days}-day MA; skipping new entry"
                 )
+            elif ladder_enabled and self._strategy._put_cycle_complete is False:
+                # ── LADDER MODE ──────────────────────────────────────────────
+                # Check IV rank once — use same condition as generate_signal()
+                iv_rank = self._strategy.calculate_iv_rank(iv_history)
+                if iv_rank < self._cfg.strategy.iv_rank_threshold:
+                    logger.info(
+                        f"Ladder: IV rank {iv_rank:.2%} below threshold — skipping"
+                    )
+                else:
+                    # How many ladder legs still need to be opened?
+                    slots_needed = ladder_legs - len(open_puts)
+                    candidates = self._strategy.select_ladder_strikes(
+                        instruments=instruments,
+                        tickers=tickers,
+                        underlying_price=underlying_price,
+                        n_legs=slots_needed,
+                        iv_rank=iv_rank,
+                    )
+                    # Each ladder leg receives an equal fraction of the total
+                    # equity allocation so the combined exposure equals what
+                    # a single full-sized leg would have used.
+                    per_leg_fraction = (
+                        self._cfg.sizing.max_equity_per_leg / ladder_legs
+                    )
+                    for cand in candidates:
+                        ladder_signal = OpenSignal(
+                            instrument_name=cand.instrument.instrument_name,
+                            strike=cand.instrument.strike,
+                            option_type="put",
+                            expiry_ts=cand.instrument.expiry_ts,
+                            dte=cand.instrument.dte,
+                            delta=cand.ticker.delta,
+                            mark_iv=cand.ticker.mark_iv,
+                            mark_price=cand.ticker.mark_price,
+                            underlying_price=underlying_price,
+                            cycle="put",
+                            iv_rank=iv_rank,
+                        )
+                        await self._open_position(
+                            ladder_signal, underlying_price,
+                            equity_fraction=per_leg_fraction,
+                        )
             else:
+                # ── STANDARD MODE (single leg) ───────────────────────────────
                 signal = self._strategy.generate_signal(
                     iv_history=iv_history,
                     instruments=instruments,
@@ -623,11 +677,20 @@ class WheelBot:
 
     # ── Position management ────────────────────────────────────────────────────
 
-    async def _open_position(self, signal, underlying_price: float) -> None:
-        """Open a new option position (paper or live)."""
+    async def _open_position(
+        self, signal, underlying_price: float, equity_fraction: float | None = None
+    ) -> None:
+        """
+        Open a new option position (paper or live).
+
+        equity_fraction: override the max_equity_per_leg fraction for this position.
+        Used by the ladder to divide total equity equally across legs so the
+        combined exposure matches a single full-sized leg.
+        """
         contracts = self._risk.calculate_contracts(
             equity_usd=self._equity_usd,
             strike_usd=signal.strike,
+            equity_fraction=equity_fraction,
         )
         if contracts <= 0:
             logger.warning("Zero contracts sized — skipping open")

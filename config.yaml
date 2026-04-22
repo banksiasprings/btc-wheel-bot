@@ -41,6 +41,8 @@ risk:
 sizing:
   collateral_buffer: 1.0
   contract_size_btc: 0.1
+  ladder_enabled: false
+  ladder_legs: 2
   max_equity_per_leg: 0.1052
   max_open_legs: 1
   min_free_equity_fraction: 0.0843

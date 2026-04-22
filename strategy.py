@@ -143,6 +143,7 @@ class WheelStrategy:
         cycle: Cycle,
         underlying_price: float,
         iv_rank: float = 0.5,
+        delta_target_override: float | None = None,
     ) -> StrikeCandidate | None:
         """
         Select the best-scoring option strike within the target delta range.
@@ -173,7 +174,11 @@ class WheelStrategy:
         d_min = cfg.strategy.target_delta_min
         d_max = cfg.strategy.target_delta_max
 
-        if cfg.strategy.iv_dynamic_delta:
+        if delta_target_override is not None:
+            # Explicit delta target — used by strike laddering to place each
+            # ladder leg at a precise position within the delta range.
+            target_delta_mid = float(np.clip(delta_target_override, d_min, d_max))
+        elif cfg.strategy.iv_dynamic_delta:
             # Linearly interpolate: IV rank 0 → target midpoint = d_min,
             #                        IV rank 1 → target midpoint = d_max.
             # This biases strike selection toward more aggressive (higher delta)
@@ -248,6 +253,71 @@ class WheelStrategy:
         # best = candidates[0]
 
         return best
+
+    # ── Strike ladder ─────────────────────────────────────────────────────────
+
+    def select_ladder_strikes(
+        self,
+        instruments: list[Instrument],
+        tickers: dict[str, Ticker],
+        underlying_price: float,
+        n_legs: int,
+        iv_rank: float = 0.5,
+    ) -> list[StrikeCandidate]:
+        """
+        Select N put strike candidates at evenly-spaced delta targets across
+        the configured delta range.
+
+        For n_legs=2 with delta range [0.15, 0.39]:
+          Leg 1 (conservative): target delta ≈ 0.22  (far OTM, lower risk)
+          Leg 2 (aggressive):   target delta ≈ 0.31  (closer ATM, more premium)
+
+        Each leg targets delta at position (k / (n+1)) along the [min, max] range,
+        ensuring targets stay inside the configured bounds.  Duplicate strikes
+        are excluded so each leg is at a distinct price level.
+
+        Returns a list of up to n_legs candidates (may be shorter if fewer
+        qualifying strikes exist).
+        """
+        d_min = cfg.strategy.target_delta_min
+        d_max = cfg.strategy.target_delta_max
+
+        # Evenly space n_legs targets within [d_min, d_max]
+        targets = [
+            d_min + (d_max - d_min) * (k + 1) / (n_legs + 1)
+            for k in range(n_legs)
+        ]
+
+        results: list[StrikeCandidate] = []
+        used_strikes: set[float] = set()
+
+        for target in targets:
+            candidate = self.select_strike(
+                instruments=instruments,
+                tickers=tickers,
+                cycle="put",
+                underlying_price=underlying_price,
+                iv_rank=iv_rank,
+                delta_target_override=target,
+            )
+            if candidate is None:
+                continue
+            # Avoid duplicate strikes across ladder legs
+            if candidate.instrument.strike in used_strikes:
+                logger.debug(
+                    f"Ladder: skipping duplicate strike {candidate.instrument.strike:,.0f}"
+                )
+                continue
+            used_strikes.add(candidate.instrument.strike)
+            results.append(candidate)
+            logger.info(
+                f"Ladder leg {len(results)}/{n_legs}: "
+                f"{candidate.instrument.instrument_name} "
+                f"delta_tgt={target:.3f} actual={candidate.ticker.delta:.3f} "
+                f"strike={candidate.instrument.strike:,.0f}"
+            )
+
+        return results
 
     # ── Signal generation ─────────────────────────────────────────────────────
 
