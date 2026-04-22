@@ -38,6 +38,8 @@ risk:
   max_adverse_delta: 0.4
   max_daily_drawdown: 0.1
   max_loss_per_leg: 0.02
+  roll_enabled: false
+  roll_min_dte: 3
 sizing:
   collateral_buffer: 1.0
   contract_size_btc: 0.1

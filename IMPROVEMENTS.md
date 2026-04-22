@@ -78,9 +78,26 @@
 
 ---
 
-## Improvement #5 — Roll Losing Positions Before Expiry (pending)
+## Improvement #5 — Roll Losing Positions Before Expiry (2026-04-23)
 
-**Goal:** Buy back a breached put before expiry and re-sell further OTM / longer dated.
+**Goal:** Buy back a breached put before expiry and re-sell at a better strike / further out in time.
+
+**Changes:**
+- `config.py`: Added `roll_enabled: bool = False` and `roll_min_dte: int = 3` to `RiskConfig`; wired in `load_config()`
+- `config.yaml`: New `risk.roll_enabled: false`, `risk.roll_min_dte: 3` settings (opt-in)
+- `bot.py`: Added roll check loop in `_tick()` after mark-price updates. When `roll_enabled=True`, each open position is inspected via `risk_manager.should_roll()`. If a breach is detected AND `dte_remaining >= roll_min_dte`, the position is closed (bought back) with reason `roll_<reason>`. The existing "open new leg" logic then immediately opens a replacement put. The wheel guard (`_put_cycle_complete=False`) ensures the replacement is another put, not a call.
+
+**How rolling finds the replacement:** After the breached put is closed, the bot falls through to the normal signal generation on the same tick. `generate_signal()` computes IV rank, applies dynamic delta, and selects the best available put — which will typically be at a lower strike (since BTC moved down, the same delta target maps to a lower strike). This naturally achieves "rolling down and out" without hardcoded offset logic.
+
+**How to enable:** Set `risk.roll_enabled: true` in config.yaml. Tune `risk.roll_min_dte` (default 3) — positions within 3 days of expiry are left to settle naturally since rolling costs more in slippage than it saves.
+
+**Triggers:** Inherits from `risk_manager.should_roll()`:
+- `delta_breach`: `|delta| > max_adverse_delta` (0.40 by default)
+- `loss_breach`: unrealised loss > `max_loss_per_leg` (2% of equity)
+
+**Backtester note:** Rolling is not simulated in the backtester — it only applies in live/paper operation.
+
+**Files changed:** `config.py`, `config.yaml`, `bot.py`
 
 ---
 

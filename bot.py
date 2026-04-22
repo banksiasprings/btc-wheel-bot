@@ -582,6 +582,43 @@ class WheelBot:
             if closed:
                 self._positions.remove(pos)
 
+        # ── Roll check ────────────────────────────────────────────────────────
+        # If rolling is enabled, inspect each open position. When a delta or
+        # loss breach is detected AND enough time remains before expiry, buy
+        # back the position now and let the "open new leg" section below
+        # immediately find a replacement at a better strike.
+        # The wheel guard (_put_cycle_complete=False) ensures the replacement
+        # is another put, not a call.
+        if self._cfg.risk.roll_enabled:
+            for pos in list(self._positions):   # iterate a copy; we may mutate
+                dte_remaining = max(
+                    0,
+                    int((pos.expiry_ts / 1000 - now.timestamp()) / 86_400)
+                ) if pos.expiry_ts else 0
+                if dte_remaining < self._cfg.risk.roll_min_dte:
+                    # Too close to expiry — let it settle naturally
+                    continue
+                should_roll, reason = self._risk.should_roll(pos)
+                if should_roll:
+                    logger.warning(
+                        f"Rolling {pos.instrument_name} [{reason}]: "
+                        f"delta={pos.current_delta:.3f}  "
+                        f"DTE remaining={dte_remaining}"
+                    )
+                    # Close the hedge first so its P&L is captured in the trade log
+                    hedge_pnl = 0.0
+                    if self._hedge is not None:
+                        hedge_pnl = await self._hedge.close_all(
+                            underlying_price, self._client.ws
+                        )
+                    closed = await self._close_position(
+                        pos, f"roll_{reason}", underlying_price, hedge_pnl_usd=hedge_pnl
+                    )
+                    if closed:
+                        self._positions.remove(pos)
+                        # _put_cycle_complete stays False after a roll, so the
+                        # replacement leg will also be a put (wheel guard enforces this).
+
         # Delta-hedge rebalance (replaces rolling)
         if self._hedge is not None:
             for pos in self._positions:

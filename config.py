@@ -88,6 +88,12 @@ class RiskConfig:
     max_loss_per_leg: float
     max_daily_drawdown: float
     kill_switch_file: str
+    # Rolling: buy back a breached put and re-enter at a better strike.
+    # roll_min_dte: minimum days remaining before rolling is allowed.
+    # Positions within roll_min_dte of expiry are left to settle naturally
+    # (rolling too close to expiry costs more in bid-ask than it saves).
+    roll_enabled: bool = False
+    roll_min_dte: int = 3
 
 
 @dataclass
@@ -221,6 +227,8 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         max_loss_per_leg=float(r["max_loss_per_leg"]),
         max_daily_drawdown=float(r["max_daily_drawdown"]),
         kill_switch_file=r["kill_switch_file"],
+        roll_enabled=bool(r.get("roll_enabled", False)),
+        roll_min_dte=int(r.get("roll_min_dte", 3)),
     )
 
     e = raw["execution"]
