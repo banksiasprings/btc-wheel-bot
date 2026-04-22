@@ -237,6 +237,15 @@ export default function Dashboard({ onNavigateTo }: Props) {
         )}
       </div>
 
+      {/* Capital overview strip */}
+      {equity && (
+        <CapitalStrip
+          equity={equity}
+          position={position}
+          onInfo={(t, b) => setInfo({ title: t, body: b })}
+        />
+      )}
+
       {/* Active Config card */}
       {cp && (
         <div className="bg-card rounded-2xl p-4 border border-border">
@@ -798,5 +807,112 @@ function ActionBtn({
     >
       {label}
     </button>
+  )
+}
+
+// ── Capital overview strip ─────────────────────────────────────────────────────
+function CapitalStrip({
+  equity,
+  position,
+  onInfo,
+}: {
+  equity: EquityData
+  position: PositionData | null
+  onInfo: (title: string, body: string) => void
+}) {
+  const current  = equity.current_equity  ?? 0
+  const starting = equity.starting_equity ?? 0
+  const roiPct   = equity.total_return_pct ?? (starting > 0 ? ((current - starting) / starting) * 100 : null)
+
+  // Notional exposure = strike × contracts (the real risk number)
+  const notional = position?.open && position.strike && position.contracts
+    ? position.strike * position.contracts
+    : 0
+
+  // "Free" capital = equity minus notional at risk (can show leverage > 1)
+  const free = current - notional
+
+  // Leverage ratio
+  const leverage = current > 0 && notional > 0 ? notional / current : 0
+
+  const ROI_INFO = {
+    title: 'Overall ROI',
+    body: 'Total return since the starting equity recorded in your config. Calculated as (current equity − starting equity) ÷ starting equity × 100.\n\nThis is a simple point-to-point return — it doesn\'t account for time elapsed. For time-adjusted performance, the annualised yield shown in the position card is more informative.',
+  }
+
+  const NOTIONAL_INFO = {
+    title: 'Notional at Risk',
+    body: 'Strike price × number of contracts = your maximum possible loss if BTC went to zero.\n\nThis is the "true" exposure of the short put — not the margin held by the exchange (which is much smaller). Watching this number relative to total equity tells you how leveraged the position is.\n\nE.g. $80,000 strike × 0.02 contracts = $1,600 notional on $1,256 equity = 1.27× leverage.',
+  }
+
+  const FREE_INFO = {
+    title: 'Free Capital',
+    body: 'Total equity minus the notional risk of the open position. A negative number means your notional exposure exceeds your account equity (you\'re leveraged).\n\nNote: the exchange only holds a fraction of the notional as margin — so a negative "free capital" number doesn\'t mean you\'re underwater, it means your notional exposure is larger than your total equity.',
+  }
+
+  return (
+    <div className="bg-card rounded-2xl p-4 border border-border">
+      <div className="flex items-center gap-1 mb-3">
+        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Capital Overview</p>
+        <button
+          onClick={() => onInfo(
+            'Capital Overview',
+            'A quick snapshot of where your equity stands relative to your open position.\n\n• Total Equity — current account value\n• In Trade (Notional) — strike × contracts, your maximum possible loss\n• Free Capital — equity minus notional risk (negative = leveraged)\n• Overall ROI — total return since starting equity\n\nFor time-adjusted return, see the Annualised Yield in the position card below.'
+          )}
+          className="text-slate-600 hover:text-slate-400 text-xs leading-none"
+        >ⓘ</button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {/* Total equity */}
+        <div className="rounded-xl bg-navy px-3 py-2.5">
+          <p className="text-xs text-slate-500 mb-0.5">Total Equity</p>
+          <p className="text-sm font-semibold text-white">{fmt$(current)}</p>
+          <p className="text-xs text-slate-600 mt-0.5">started {fmt$(starting)}</p>
+        </div>
+
+        {/* ROI */}
+        <div className="rounded-xl bg-navy px-3 py-2.5">
+          <div className="flex items-center gap-1 mb-0.5">
+            <p className="text-xs text-slate-500">Overall ROI</p>
+            <button onClick={() => onInfo(ROI_INFO.title, ROI_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+          </div>
+          <p className={`text-sm font-semibold ${(roiPct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {roiPct != null ? `${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(2)}%` : '—'}
+          </p>
+          <p className="text-xs text-slate-600 mt-0.5">{fmt$(current - starting)} net</p>
+        </div>
+
+        {/* Notional at risk */}
+        <div className={`rounded-xl px-3 py-2.5 ${notional > 0 ? 'bg-orange-950/30 border border-orange-900/30' : 'bg-navy'}`}>
+          <div className="flex items-center gap-1 mb-0.5">
+            <p className="text-xs text-slate-500">In Trade (Notional)</p>
+            <button onClick={() => onInfo(NOTIONAL_INFO.title, NOTIONAL_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+          </div>
+          <p className={`text-sm font-semibold ${notional > 0 ? 'text-orange-300' : 'text-slate-400'}`}>
+            {notional > 0 ? fmt$(notional) : 'No position'}
+          </p>
+          {leverage > 0 && (
+            <p className="text-xs text-orange-500/60 mt-0.5">{leverage.toFixed(2)}× equity</p>
+          )}
+        </div>
+
+        {/* Free capital */}
+        <div className={`rounded-xl px-3 py-2.5 ${free < 0 ? 'bg-red-950/30 border border-red-900/30' : 'bg-navy'}`}>
+          <div className="flex items-center gap-1 mb-0.5">
+            <p className="text-xs text-slate-500">Free Capital</p>
+            <button onClick={() => onInfo(FREE_INFO.title, FREE_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+          </div>
+          <p className={`text-sm font-semibold ${notional === 0 ? 'text-slate-300' : free >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {notional === 0 ? fmt$(current) : fmt$(free)}
+          </p>
+          {notional > 0 && (
+            <p className="text-xs text-slate-600 mt-0.5">
+              {notional === 0 ? '100% undeployed' : free >= 0 ? `${((free / current) * 100).toFixed(0)}% undeployed` : 'leveraged'}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
