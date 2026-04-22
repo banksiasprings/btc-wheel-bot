@@ -23,6 +23,14 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
     title: "Premium Fraction of Spot",
     body: "The minimum premium you'll accept as a fraction of BTC's current price.\n\nIf BTC is at $70,000 and this is set to 0.008, you need at least $560 in premium to take the trade.\n\nThis filters out trades that aren't worth the risk — if the premium is too small, the income doesn't justify tying up your capital.",
   },
+  starting_equity: {
+    title: "Starting Equity",
+    body: "The total capital allocated to this strategy in USD. This is the baseline the bot uses to calculate position sizes, free reserve, and performance metrics.\n\nSet it to the actual amount you plan to deploy. Too low and position sizes will be unrealistically small; too high and the bot may think it can afford trades it can't.",
+  },
+  regime_filter: {
+    title: "Regime Filter",
+    body: "When enabled, the bot checks whether BTC is currently in an uptrend or downtrend before opening new positions.\n\nIt uses a moving average over the configured number of days. If BTC's current price is below the moving average, the bot considers it a downtrend and skips new trades — selling puts in a falling market is high risk.\n\nThe MA Days setting controls how sensitive this filter is: shorter (e.g. 30 days) reacts faster to trend changes; longer (e.g. 90 days) is slower but less whipsaw-prone.",
+  },
   capital_committed: {
     title: "Capital Committed",
     body: "For a short put, this is your worst-case financial obligation: if BTC dropped to zero, you'd owe strike price × contracts.\n\nIn practice BTC won't go to zero, and you'd close the position long before that — but this is the theoretical maximum at-risk amount.\n\nIt tells you how much of your account is 'claimed' by this trade.",

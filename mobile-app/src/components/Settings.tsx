@@ -276,6 +276,13 @@ export default function Settings({ onLogout }: Props) {
           <p className="text-sm font-semibold text-white">Trading Parameters</p>
 
           <NumberField
+            label="IV Rank Threshold"
+            value={config.iv_rank_threshold}
+            min={0} max={1} step={0.05}
+            onChange={(v) => updateField('iv_rank_threshold', v)}
+            onInfo={() => setInfo(GLOSSARY.iv_threshold)}
+          />
+          <NumberField
             label="Delta Target Min"
             value={config.delta_target_min}
             min={0.05} max={0.5} step={0.01}
@@ -311,6 +318,20 @@ export default function Settings({ onLogout }: Props) {
             onInfo={() => setInfo(GLOSSARY.premium_fraction)}
           />
           <NumberField
+            label="Max Leg Size (%)"
+            value={config.max_equity_per_leg != null ? config.max_equity_per_leg * 100 : null}
+            min={1} max={50} step={1}
+            onChange={(v) => updateField('max_equity_per_leg', v / 100)}
+            onInfo={() => setInfo(GLOSSARY.max_leg_size)}
+          />
+          <NumberField
+            label="Min Free Equity (%)"
+            value={config.min_free_equity_fraction != null ? config.min_free_equity_fraction * 100 : null}
+            min={0} max={50} step={1}
+            onChange={(v) => updateField('min_free_equity_fraction', v / 100)}
+            onInfo={() => setInfo(GLOSSARY.free_equity)}
+          />
+          <NumberField
             label="Starting Equity ($)"
             value={config.starting_equity}
             min={1000} max={1000000} step={1000}
@@ -340,6 +361,15 @@ export default function Settings({ onLogout }: Props) {
               {config.use_regime_filter ? 'Skips trades when BTC is in a downtrend' : 'Trades regardless of BTC trend'}
             </p>
           </div>
+          {config.use_regime_filter && (
+            <NumberField
+              label="Regime MA Days"
+              value={config.regime_ma_days}
+              min={10} max={200} step={5}
+              onChange={(v) => updateField('regime_ma_days', v)}
+              onInfo={() => setInfo(GLOSSARY.regime_filter)}
+            />
+          )}
 
           <button
             onClick={saveConfig}
@@ -577,6 +607,7 @@ function PresetCard({ title, icon, accent, available, fitness, params, isActive,
   const dteMin = params.min_dte
   const dteMax = params.max_dte
   const leg = params.max_equity_per_leg
+  const free = params.min_free_equity_fraction
 
   return (
     <div className={`rounded-xl p-3 bg-slate-900 border ${available ? accentCls.border : 'border-slate-700'}`}>
@@ -613,6 +644,9 @@ function PresetCard({ title, icon, accent, available, fitness, params, isActive,
             )}
             {leg != null && (
               <span className="text-slate-400">Max Leg: <span className="text-slate-200">{(leg * 100).toFixed(1)}%</span></span>
+            )}
+            {free != null && (
+              <span className="text-slate-400">Free Reserve: <span className="text-slate-200">{(free * 100).toFixed(0)}%</span></span>
             )}
           </div>
           <button

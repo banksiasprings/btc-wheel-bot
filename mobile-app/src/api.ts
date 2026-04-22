@@ -92,10 +92,13 @@ export interface EvolveResults {
 }
 
 export interface BotConfig {
+  iv_rank_threshold: number | null
   delta_target_min: number | null
   delta_target_max: number | null
   min_dte: number | null
   max_dte: number | null
+  max_equity_per_leg: number | null
+  min_free_equity_fraction: number | null
   premium_fraction_of_spot: number | null
   starting_equity: number | null
   use_regime_filter: boolean
