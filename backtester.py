@@ -107,10 +107,12 @@ class BacktestTrade:
     entry_iv: float
     premium_usd: float      # total premium received (per-contract * contracts)
     exit_value_usd: float   # option value at close (per-contract * contracts)
-    pnl_usd: float          # net P&L (premium - exit - costs)
+    pnl_usd: float          # net P&L (option pnl + hedge pnl - costs)
+    option_pnl_usd: float   # option-only P&L (premium - exit - transaction cost)
+    hedge_pnl_usd: float    # delta-hedge P&L (mark-to-market gains minus funding/spread)
     itm_at_expiry: bool
-    rolled: bool
-    roll_reason: str
+    rolled: bool            # always False (rolling removed; kept for CSV compatibility)
+    roll_reason: str        # always "" (kept for CSV compatibility)
     contracts: float
     equity_after: float
     iv_rank: float
@@ -435,9 +437,22 @@ class Backtester:
             # ── Expiry settlement ──────────────────────────────────────────
             if leg is not None and date >= leg["expiry"]:
                 exit_val  = self._price(leg["cycle"], spot, leg["strike"], 0.0, iv)
-                gross_pnl = (leg["premium"] - exit_val) * leg["contracts"]
-                pnl       = gross_pnl - self._cfg.backtest.transaction_cost * leg["contracts"]
-                equity   += pnl
+
+                # Option P&L
+                option_pnl = (leg["premium"] - exit_val) * leg["contracts"] \
+                             - self._cfg.backtest.transaction_cost * leg["contracts"]
+
+                # Final day hedge mark-to-market (close the hedge at expiry spot)
+                daily_hedge_pnl = leg["hedge_btc"] * (spot - leg["prev_spot"])
+                daily_funding   = abs(leg["hedge_btc"]) * spot * 0.0001
+                leg["hedge_pnl_total"]     += daily_hedge_pnl
+                leg["hedge_funding_total"] += daily_funding
+
+                # Close hedge: sell back the perp at expiry spot (no extra cost — spreads already charged on rebalances)
+                hedge_pnl = leg["hedge_pnl_total"] - leg["hedge_funding_total"]
+
+                pnl     = option_pnl + hedge_pnl
+                equity += pnl
 
                 itm = (leg["cycle"] == "put"  and spot < leg["strike"]) or \
                       (leg["cycle"] == "call" and spot > leg["strike"])
@@ -455,6 +470,8 @@ class Backtester:
                     premium_usd=round(leg["premium"] * leg["contracts"], 2),
                     exit_value_usd=round(exit_val * leg["contracts"], 2),
                     pnl_usd=round(pnl, 2),
+                    option_pnl_usd=round(option_pnl, 2),
+                    hedge_pnl_usd=round(hedge_pnl, 2),
                     itm_at_expiry=itm,
                     rolled=False,
                     roll_reason="",
@@ -467,56 +484,45 @@ class Backtester:
                 logger.info(
                     f"[EXPIRY {date.date()}] {leg['cycle'].upper()} "
                     f"K={leg['strike']:,.0f} {tag}  {wnl} ${pnl:+,.0f}  "
+                    f"(opt ${option_pnl:+,.0f} | hedge ${hedge_pnl:+,.0f})  "
                     f"equity=${equity:,.0f}"
                 )
                 cycle = "call" if leg["cycle"] == "put" else "put"
                 leg   = None
 
-            # ── In-trade roll checks ───────────────────────────────────────
+            # ── In-trade: delta-hedge rebalancing ─────────────────────────
             elif leg is not None:
-                dte_left   = max((leg["expiry"] - date).days, 1)
-                T_left     = dte_left / 365.0
-                cur_val    = self._price(leg["cycle"], spot, leg["strike"], T_left, iv)
-                cur_delta  = self._delta_abs(leg["cycle"], spot, leg["strike"], T_left, iv)
-                unreal_pnl = (leg["premium"] - cur_val) * leg["contracts"]
-                loss_pct   = -unreal_pnl / equity if unreal_pnl < 0 else 0.0
+                dte_left  = max((leg["expiry"] - date).days, 1)
+                T_left    = dte_left / 365.0
+                cur_delta = self._delta_abs(leg["cycle"], spot, leg["strike"], T_left, iv)
 
-                roll_reason = ""
-                if cur_delta > self._cfg.risk.max_adverse_delta:
-                    roll_reason = "delta_breach"
-                elif loss_pct > self._cfg.risk.max_loss_per_leg:
-                    roll_reason = "loss_breach"
+                # Daily hedge mark-to-market P&L on the perp position
+                daily_hedge_pnl = leg["hedge_btc"] * (spot - leg["prev_spot"])
+                # Daily funding cost: ~0.01%/day on perp notional (BTC-PERP funding)
+                daily_funding   = abs(leg["hedge_btc"]) * spot * 0.0001
+                leg["hedge_pnl_total"]     += daily_hedge_pnl
+                leg["hedge_funding_total"] += daily_funding
+                leg["prev_spot"]            = spot
 
-                if roll_reason:
-                    pnl     = unreal_pnl - self._cfg.backtest.transaction_cost * leg["contracts"]
-                    equity += pnl
-                    trades.append(BacktestTrade(
-                        cycle_num=len(trades) + 1,
-                        open_date=str(leg["entry_date"].date()),
-                        close_date=str(date.date()),
-                        option_type=leg["cycle"],
-                        strike=round(leg["strike"], 0),
-                        spot_at_open=round(leg["entry_spot"], 0),
-                        spot_at_close=round(spot, 0),
-                        dte=leg["dte"],
-                        entry_iv=round(leg["entry_iv"], 2),
-                        premium_usd=round(leg["premium"] * leg["contracts"], 2),
-                        exit_value_usd=round(cur_val * leg["contracts"], 2),
-                        pnl_usd=round(pnl, 2),
-                        itm_at_expiry=False,
-                        rolled=True,
-                        roll_reason=roll_reason,
-                        contracts=leg["contracts"],
-                        equity_after=round(equity, 2),
-                        iv_rank=round(ivr, 1),
-                    ))
-                    logger.warning(
-                        f"[ROLL {date.date()}] {leg['cycle'].upper()} "
-                        f"K={leg['strike']:,.0f}  reason={roll_reason}  "
-                        f"${pnl:+,.0f}  equity=${equity:,.0f}"
+                # Rebalance check: required hedge vs current hedge
+                required_hedge = (
+                    -cur_delta * leg["contracts"] if leg["cycle"] == "put"
+                    else +cur_delta * leg["contracts"]
+                )
+                raw_adjustment = required_hedge - leg["hedge_btc"]
+                # Snap to nearest 0.1 BTC lot (Deribit minimum)
+                lots       = round(raw_adjustment / 0.1)
+                adjustment = lots * 0.1
+
+                if abs(adjustment) >= 0.1:
+                    # Spread/slippage: ~0.02% of notional per rebalance trade
+                    spread_cost = abs(adjustment) * spot * 0.0002
+                    leg["hedge_funding_total"] += spread_cost
+                    leg["hedge_btc"]           += adjustment
+                    logger.debug(
+                        f"[HEDGE {date.date()}] adj {adjustment:+.3f} BTC  "
+                        f"hedge={leg['hedge_btc']:+.3f}  spread=${spread_cost:.2f}"
                     )
-                    cycle = "call" if leg["cycle"] == "put" else "put"
-                    leg   = None
 
             # ── Drawdown guard ─────────────────────────────────────────────
             peak_equity = max(peak_equity, equity)
@@ -559,16 +565,31 @@ class Backtester:
                 expiry_dt  = date + timedelta(days=dte)
                 prem_yield = (premium / strike) * 100
 
+                # Initial delta hedge: short perp for puts, long perp for calls
+                entry_delta     = self._delta_abs(cycle, spot, strike, T, iv)
+                initial_hedge   = (
+                    -entry_delta * contracts if cycle == "put"
+                    else +entry_delta * contracts
+                )
+                # Opening spread cost for the initial hedge trade
+                opening_spread = abs(initial_hedge) * spot * 0.0002
+
                 leg = dict(
                     cycle=cycle, entry_date=date, expiry=expiry_dt,
                     strike=strike, premium=premium, contracts=contracts,
                     entry_spot=spot, entry_iv=iv, dte=dte,
+                    # Hedge tracking
+                    hedge_btc=initial_hedge,
+                    hedge_pnl_total=0.0,
+                    hedge_funding_total=opening_spread,
+                    prev_spot=spot,
                 )
                 logger.info(
                     f"[OPEN {date.date()}] {cycle.upper()} K={strike:,.0f} "
                     f"exp={expiry_dt.date()} DTE={dte} "
                     f"IV={iv:.1f}% IVR={ivr:.0f}% "
-                    f"prem=${premium:,.2f}/ct yield={prem_yield:.2f}% x{contracts}"
+                    f"prem=${premium:,.2f}/ct yield={prem_yield:.2f}% x{contracts}  "
+                    f"hedge={initial_hedge:+.3f} BTC"
                 )
 
             equity_curve.append(equity)
@@ -674,14 +695,16 @@ class Backtester:
                     t.option_type.upper(),
                     f"${t.strike:,.0f}",
                     f"${t.spot_at_close:,.0f}",
-                    "ITM" if t.itm_at_expiry else ("ROLL" if t.rolled else "OTM"),
+                    "ITM" if t.itm_at_expiry else "OTM",
+                    f"${t.option_pnl_usd:+,.2f}",
+                    f"${t.hedge_pnl_usd:+,.2f}",
                     f"${t.pnl_usd:+,.2f}",
                     f"${t.equity_after:,.0f}",
                 ]
                 for t in results.trades[-n_show:]
             ]
             hdrs = ["#", "Open", "Close", "Type", "Strike", "Close Px",
-                    "Result", "P&L", "Equity"]
+                    "Result", "Opt P&L", "Hedge P&L", "Total P&L", "Equity"]
             if _tab:
                 from tabulate import tabulate
                 print(tabulate(rows, headers=hdrs, tablefmt="simple"))
