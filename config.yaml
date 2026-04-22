@@ -54,7 +54,7 @@ strategy:
   initial_cycle: put
   iv_rank_threshold: 0.4995
   liquidity_top_n: 100
-  max_dte: 21
-  min_dte: 8
+  max_dte: 14
+  min_dte: 7
   target_delta_max: 0.3852
   target_delta_min: 0.1543
