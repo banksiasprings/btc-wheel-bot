@@ -292,7 +292,13 @@ class Backtester:
         return abs(fn(S, K, T, r, sig))
 
     def _target_strike(
-        self, cyc: Cycle, S: float, T: float, iv: float, iv_rank: float = 0.5
+        self,
+        cyc: Cycle,
+        S: float,
+        T: float,
+        iv: float,
+        iv_rank: float = 0.5,
+        recovery_min_strike: float | None = None,
     ) -> float:
         r, sig = self._cfg.backtest.risk_free_rate, iv / 100.0
         d_min = self._cfg.strategy.target_delta_min
@@ -305,7 +311,12 @@ class Backtester:
             mid = (d_min + d_max) / 2.0
         if cyc == "put":
             return strike_for_put_delta(S, -mid, T, r, sig)
-        return strike_for_call_delta(S, mid, T, r, sig)
+        raw_call_strike = strike_for_call_delta(S, mid, T, r, sig)
+        # Recovery mode: ensure call strike is at or above the put strike so
+        # BTC recovery above the assignment level is fully captured.
+        if recovery_min_strike is not None and raw_call_strike < recovery_min_strike:
+            return recovery_min_strike
+        return raw_call_strike
 
     def _size(self, equity: float, strike: float) -> float:
         max_notional = equity * self._cfg.sizing.max_equity_per_leg
@@ -433,6 +444,8 @@ class Backtester:
         equity_curve: list[float]    = [equity]
         dates:        list[datetime] = []
         trades:       list[BacktestTrade] = []
+        # Recovery call tracking: set after an ITM put expires
+        _recovery_min_strike: float | None = None
 
         logger.info("=" * 60)
         logger.info("BACKTEST START")
@@ -508,6 +521,17 @@ class Backtester:
                     f"(opt ${option_pnl:+,.0f} | hedge ${hedge_pnl:+,.0f})  "
                     f"equity=${equity:,.0f}"
                 )
+                # Recovery call mode (Improvement #6): if a put expired ITM,
+                # the next call leg should target a strike ≥ put strike.
+                if leg["cycle"] == "put" and itm:
+                    _recovery_min_strike = leg["strike"]
+                    logger.info(
+                        f"Recovery call mode: next CALL must be ≥ ${_recovery_min_strike:,.0f}"
+                    )
+                elif leg["cycle"] == "call":
+                    # After a call leg, recovery is complete — reset
+                    _recovery_min_strike = None
+
                 cycle = "call" if leg["cycle"] == "put" else "put"
                 leg   = None
 
@@ -569,7 +593,11 @@ class Backtester:
                 dte = self._dte()
                 T   = dte / 365.0
                 try:
-                    strike  = self._target_strike(cycle, spot, T, iv, iv_rank=ivr / 100.0)
+                    strike  = self._target_strike(
+                        cycle, spot, T, iv,
+                        iv_rank=ivr / 100.0,
+                        recovery_min_strike=_recovery_min_strike if cycle == "call" else None,
+                    )
                     premium = self._price(cycle, spot, strike, T, iv)
                 except Exception as exc:
                     logger.debug(f"BS failed {date.date()}: {exc}")

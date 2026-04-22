@@ -285,14 +285,20 @@ class WheelBot:
                 # After ANY put settlement (ITM or OTM), the put leg is complete
                 # and the call leg may now fire.
                 self._strategy._put_cycle_complete = True
+                # Improvement #6: track ITM status for recovery call targeting
+                self._strategy._last_put_was_itm  = expired_itm
+                self._strategy._last_put_strike   = pos.strike
                 logger.info(
                     f"WebSocket settlement: {instrument} expired "
-                    f"{'ITM' if expired_itm else 'OTM'} | P&L: {profit_loss:+.6f} BTC "
-                    f"→ put cycle complete, call leg now enabled"
+                    f"{'ITM — recovery call mode' if expired_itm else 'OTM'} | "
+                    f"P&L: {profit_loss:+.6f} BTC → put cycle complete, call leg now enabled"
                 )
             elif pos.option_type == "call":
-                # After a call settlement, reset so next cycle starts with a put
+                # After a call settlement, reset so next cycle starts with a put;
+                # clear recovery state
                 self._strategy._put_cycle_complete = False
+                self._strategy._last_put_was_itm   = False
+                self._strategy._last_put_strike     = 0.0
                 logger.info(
                     f"WebSocket settlement: {instrument} (call) expired "
                     f"{'ITM' if expired_itm else 'OTM'} | P&L: {profit_loss:+.6f} BTC "
@@ -1021,13 +1027,20 @@ class WheelBot:
             if pos.option_type == "put":
                 # Both OTM and ITM put expiry unlock the call leg
                 self._strategy._put_cycle_complete = True
+                # Improvement #6: track ITM status for recovery call targeting.
+                # If the put expired ITM (BTC < strike), the next call leg will
+                # prefer strikes ≥ put strike to capture a full BTC recovery.
+                self._strategy._last_put_was_itm  = expired_itm
+                self._strategy._last_put_strike   = pos.strike
                 logger.info(
-                    f"Put cycle complete ({'ITM' if expired_itm else 'OTM'}) — "
+                    f"Put cycle complete ({'ITM — recovery call mode' if expired_itm else 'OTM'}) — "
                     f"call leg now enabled for next cycle"
                 )
             elif pos.option_type == "call":
-                # After a call completes, go back to selling puts
+                # After a call completes, go back to selling puts; clear recovery state
                 self._strategy._put_cycle_complete = False
+                self._strategy._last_put_was_itm   = False
+                self._strategy._last_put_strike     = 0.0
                 logger.info(
                     f"Call cycle complete ({'ITM' if expired_itm else 'OTM'}) — "
                     f"returning to put-selling mode"

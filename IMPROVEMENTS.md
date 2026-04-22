@@ -101,6 +101,32 @@
 
 ---
 
-## Improvement #6 — Full Wheel Cycle: Covered Calls After Assignment (pending)
+## Improvement #6 — Full Wheel Cycle: Recovery Calls After ITM Put (2026-04-23)
 
-**Goal:** Sell covered calls after put assignment to earn additional premium while holding BTC.
+**Goal:** After a put expires ITM (assignment), sell a call at or above the put strike to position for maximum BTC recovery.
+
+**Background:** The bot already alternates puts and calls (full wheel). The improvement is in call STRIKE SELECTION after an ITM put. Previously, the call used the same generic delta targeting regardless of the prior put outcome. With this change, an ITM put triggers "recovery mode" where the call is constrained to strikes ≥ the put strike — ensuring that if BTC rallies back above the assignment level, the entire recovery is captured.
+
+**Changes:**
+- `strategy.py`: Added `_last_put_was_itm: bool` and `_last_put_strike: float` fields to `WheelStrategy`. `generate_signal()` passes `recovery_min_strike = last_put_strike` to `select_strike()` when `cycle == "call"` and the last put was ITM. `select_strike()` filters out call candidates with `strike < recovery_min_strike` in recovery mode.
+- `bot.py`: Paper-mode expiry handler and live-mode WebSocket settlement callback now both record `_last_put_was_itm` and `_last_put_strike` on put expiry, and reset them after a call completes.
+- `backtester.py`: `_target_strike()` accepts `recovery_min_strike` and enforces the floor on call strikes. Simulation loop tracks ITM put expiry and threads the recovery strike through to the open-new-leg call.
+
+**Backtest change (trade 6):** After trade 5 expired ITM (PUT K=$98,793 ITM at $96,226), the recovery call moved from $96,676 → **$98,793** (exactly the put strike). This costs ~$17 less in premium but positions the call to capture full recovery above $98,793 rather than leaving money on the table between $96,676 and $98,793.
+
+**Always on:** Recovery mode activates automatically when a put expires ITM — no config flag needed. When puts expire OTM, the call uses normal strike selection.
+
+**Files changed:** `strategy.py`, `bot.py`, `backtester.py`
+
+---
+
+## Summary of All 6 Improvements
+
+| # | Improvement | Status | Key Config | Backtest Impact |
+|---|-------------|--------|------------|-----------------|
+| 1 | Weekly expiries (min_dte 8→7, max_dte 21→14) | ✅ Enabled | `strategy.min_dte: 7` | Aligns live bot with backtester |
+| 2 | Regime filter (50-day MA gate) | ✅ Implemented, opt-in | `sizing.use_regime_filter: true` | Blocks entries in downtrend |
+| 3 | Dynamic delta based on IV rank | ✅ Enabled | `strategy.iv_dynamic_delta: true` | +74.4% vs +67.6%, Sharpe 1.22 |
+| 4 | Strike laddering (N puts at different strikes) | ✅ Implemented, opt-in | `sizing.ladder_enabled: true` | Reduces concentration risk |
+| 5 | Roll losing positions before expiry | ✅ Implemented, opt-in | `risk.roll_enabled: true` | Cuts runaway losses |
+| 6 | Recovery calls after ITM put | ✅ Enabled (automatic) | Always active after ITM | Captures full BTC recovery |

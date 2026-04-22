@@ -75,6 +75,12 @@ class WheelStrategy:
         _put_cycle_complete: bool = False
         self._put_cycle_complete: bool = _put_cycle_complete
 
+        # Recovery call tracking: when a put expires ITM ("assignment"),
+        # the subsequent call leg should target a strike ≥ put_strike so that
+        # BTC recovery above the put strike is fully captured.
+        self._last_put_was_itm: bool = False
+        self._last_put_strike: float = 0.0
+
     # ── IV rank ───────────────────────────────────────────────────────────────
 
     def calculate_iv_rank(self, iv_history: list[tuple[int, float]]) -> float:
@@ -144,6 +150,7 @@ class WheelStrategy:
         underlying_price: float,
         iv_rank: float = 0.5,
         delta_target_override: float | None = None,
+        recovery_min_strike: float | None = None,
     ) -> StrikeCandidate | None:
         """
         Select the best-scoring option strike within the target delta range.
@@ -161,12 +168,20 @@ class WheelStrategy:
           High IV rank → aggressive (toward target_delta_max, sell closer ATM
           to capture more premium when volatility is expensive).
 
+        Recovery mode (call legs after an ITM put):
+          When recovery_min_strike is set, only call strikes at or above that
+          level are considered.  This ensures the covered call can "recover" the
+          full put loss if BTC rallies back above the assignment strike.
+
         Args:
-            instruments:      Full list of active instruments.
-            tickers:          Dict of instrument_name → Ticker.
-            cycle:            "put" or "call".
-            underlying_price: Current BTC spot price.
-            iv_rank:          Current IV rank [0–1] for dynamic delta scaling.
+            instruments:          Full list of active instruments.
+            tickers:              Dict of instrument_name → Ticker.
+            cycle:                "put" or "call".
+            underlying_price:     Current BTC spot price.
+            iv_rank:              Current IV rank [0–1] for dynamic delta scaling.
+            delta_target_override: Explicit delta midpoint (used by laddering).
+            recovery_min_strike:  For covered calls after ITM put — only accept
+                                  strikes ≥ this value.
 
         Returns:
             StrikeCandidate or None if no qualifying strikes found.
@@ -216,6 +231,12 @@ class WheelStrategy:
             # Filter: must have a positive bid (liquidity check)
             if ticker.bid <= 0:
                 continue
+
+            # Filter: recovery mode — covered calls after ITM put must be
+            # at or above the put strike so BTC recovery is fully captured.
+            if recovery_min_strike is not None and cycle == "call":
+                if inst.strike < recovery_min_strike:
+                    continue
 
             # Score: penalise distance from target delta, reward IV
             delta_score = 1.0 - abs(delta_abs - target_delta_mid) / target_delta_mid
@@ -358,8 +379,20 @@ class WheelStrategy:
             self._current_cycle = "put"
 
         # Step 3: Strike selection (pass iv_rank for dynamic delta targeting)
+        # Recovery mode: if the previous put expired ITM ("assignment"), target
+        # a call strike ≥ the put strike so BTC recovery is fully captured.
+        recovery_min_strike: float | None = None
+        if cycle == "call" and self._last_put_was_itm and self._last_put_strike > 0:
+            recovery_min_strike = self._last_put_strike
+            logger.info(
+                f"Recovery call mode: targeting strikes ≥ ${recovery_min_strike:,.0f} "
+                f"(last put strike — ITM assignment)"
+            )
+
         candidate = self.select_strike(
-            instruments, tickers, cycle, underlying_price, iv_rank=iv_rank
+            instruments, tickers, cycle, underlying_price,
+            iv_rank=iv_rank,
+            recovery_min_strike=recovery_min_strike,
         )
         if candidate is None:
             return None
