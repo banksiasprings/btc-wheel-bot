@@ -5,12 +5,21 @@ interface Props {
 const SECTIONS = [
   {
     icon: '🎯',
-    title: 'The Core Strategy — Selling Options',
+    title: 'The Core Strategy — Selling Options for Premium Income',
     paras: [
-      'The bot runs a strategy called the "Wheel" — one of the most popular income-generating strategies in options trading.',
-      'Here\'s the core idea: when people are nervous about a market, they pay more for insurance. On Bitcoin, that insurance takes the form of "put options" — contracts that pay out if BTC falls below a certain price. The bot sells that insurance. In return, it collects a premium upfront, which it keeps regardless of what happens next.',
-      'Specifically, the bot sells "short puts." You promise to buy Bitcoin at a set price (the strike price) if it falls there — and you\'re paid immediately for making that promise. If BTC stays above your strike price when the contract expires, you keep the entire premium and the trade is done. That\'s the win condition.',
-      'If BTC falls below your strike, you buy BTC at the strike price (usually above market price at that moment). This sounds bad, but in the wheel strategy it\'s just the next step — you then sell "covered calls" on that BTC until you\'ve recovered the difference. The wheel keeps turning.',
+      'The bot\'s job is to collect option premium — the fee that nervous traders pay for price protection on Bitcoin. It sells short put options: contracts that pay out to the buyer if BTC falls below a set price. In return, the bot collects a cash premium upfront and keeps it regardless of what happens next.',
+      'If BTC stays above the strike price at expiry, the contract expires worthless and the bot keeps the full premium. That\'s the win condition. If BTC falls below the strike, the option costs money to close — but the delta-neutral hedge (described in the next section) has been earning on the way down, largely offsetting that loss.',
+      'The edge comes from systematically selling options that are priced expensively relative to how much BTC actually moves. Over many trades, the premium collected exceeds the losses — without needing to predict which direction BTC will move.',
+    ],
+  },
+  {
+    icon: '⚖️',
+    title: 'Delta-Neutral Hedging — Zero Directional Risk',
+    paras: [
+      'Selling a put option creates directional exposure: if BTC falls, the option loses value and so does your position. To strip out that risk, the bot simultaneously takes an offsetting position in BTC-PERPETUAL — a futures contract that moves dollar-for-dollar with BTC.',
+      'This is called delta-neutral hedging. "Delta" is the option\'s sensitivity to BTC price movement. A short put with a delta of 0.20 means the position gains or loses $0.20 for every $1 move in BTC. To cancel that out, the bot shorts 0.20 BTC worth of perpetual futures for every contract sold. Net portfolio delta ≈ 0.',
+      'The result: BTC going up or down no longer matters. What the bot earns is the pure time-decay of the option — the premium it was paid to write the contract, slowly decaying to zero as expiry approaches. This is sometimes called "harvesting theta" or "being short volatility."',
+      'The hedge is rebalanced daily as the option\'s delta drifts. Small costs apply: a funding rate on the perp position (~0.01%/day) and a spread cost when rebalancing. These are factored into every backtest and evolution run — the bot only trades when premium income exceeds these carrying costs.',
     ],
   },
   {
@@ -63,7 +72,7 @@ const SECTIONS = [
     title: 'The Feedback Loop — How It All Connects',
     paras: [
       'The system is designed as a continuous improvement loop:',
-      '1. Run a Parameter Sweep to find good individual settings.\n2. Run Evolution (with your chosen goal) to find the best combination.\n3. Validate with Walk-Forward and Monte Carlo to confirm robustness.\n4. Load the best preset into the live config.\n5. Start the bot — it trades using those settings in paper mode first.\n6. Monitor real results in the Trades and Dashboard tabs.\n7. Periodically re-run the optimizers as market conditions change.',
+      '1. Run a Parameter Sweep to find good individual settings.\n2. Run Evolution (with your chosen goal) to find the best combination.\n3. Validate with Walk-Forward and Monte Carlo to confirm robustness.\n4. Load the best preset into the live config.\n5. Start the bot — it trades using those settings in paper mode first.\n6. Monitor real results in the Trades and Dashboard tabs.\n7. Run Reconcile — compares what Black-Scholes predicted vs. what actually happened. Flags when real trades are consistently underperforming or overperforming the model.\n8. Periodically re-run the optimizers as market conditions change or reconciliation reveals model drift.',
       'The bot doesn\'t predict the future. It finds rules that have worked consistently across many historical conditions and applies them systematically — removing emotion, discipline failures, and inconsistency from the equation.',
     ],
   },
@@ -72,10 +81,11 @@ const SECTIONS = [
     title: 'Risk Management',
     paras: [
       'Several layers of protection run at all times:',
+      'Delta-neutral hedge — the primary risk layer. The BTC-PERPETUAL short hedge tracks the option\'s delta daily, cancelling out most directional BTC exposure. An option going deeply in-the-money is painful; the hedge running the other direction has been earning throughout the move, absorbing most of that loss.',
       'Position sizing limits ensure no single trade risks too much of your account. The Max Leg Size setting caps how much capital any one position can use.',
-      'The free equity buffer (Min Free Equity) keeps a cash reserve at all times — so you\'re never fully deployed and always have room to absorb a loss.',
-      'The IV Rank filter means the bot only trades when conditions are favourable — it sits on its hands during calm, low-premium periods rather than force trades.',
-      'The Kill Switch (Stop Bot) instantly halts all new activity. Any open position stays open but no new trades will be placed. The position can then be closed manually or left to expire.',
+      'The free equity buffer (Min Free Equity) keeps a cash reserve at all times — so you\'re never fully deployed and always have room to absorb a loss or margin call.',
+      'The IV Rank filter means the bot only trades when conditions are favourable — it sits on its hands during calm, low-premium periods rather than force trades that don\'t cover carry costs.',
+      'The Kill Switch (Stop Bot) instantly halts all new activity. Any open option and its paired hedge stay open but no new trades will be placed. Positions can then be closed manually or left to expire.',
     ],
   },
   {
@@ -84,7 +94,7 @@ const SECTIONS = [
     paras: [
       'Dashboard: your real-time command centre. See the bot\'s status, active config, current position, and quick action buttons.',
       'Trades: full history of every trade the bot has placed — premium collected, outcome, P&L.',
-      'Optimizer: run sweep, evolution, walk-forward, and Monte Carlo. Each builds on the last.',
+      'Optimizer: run sweep, evolution (four goals), walk-forward, Monte Carlo, and reconcile. Each builds on the last — sweep finds candidates, evolution refines them, walk-forward and Monte Carlo validate robustness, reconcile checks that live trades match model predictions.',
       'Settings: load a strategy preset (Sweep Best, or any of the four evolved goals), or fine-tune individual parameters manually. Always restart the bot after changing settings.',
     ],
   },

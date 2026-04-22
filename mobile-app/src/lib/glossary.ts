@@ -5,7 +5,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   delta_range: {
     title: "Delta Range",
-    body: "Delta is the probability that an option expires in-the-money — meaning the market moves against your position.\n\nA delta of 0.10 = roughly 10% chance of losing on this trade. A delta of 0.30 = roughly 30% chance.\n\nLower delta = strike price is further from current BTC price = safer, but smaller premium. Higher delta = closer to BTC price = bigger premium, higher risk of loss.\n\nThe bot targets strikes with a delta between these two numbers.",
+    body: "Delta has two roles here.\n\nFirst, it's the probability that an option expires in-the-money — meaning the market moves far enough against your strike to cost you money. A delta of 0.10 = roughly 10% chance; 0.30 = roughly 30%.\n\nSecond, delta is the hedge ratio: for every 1 BTC of delta, the bot shorts 1 BTC of BTC-PERPETUAL futures to cancel out directional exposure. Higher delta = larger hedge = more perp contracts held.\n\nLower delta = strike further from BTC price = smaller premium, smaller hedge. Higher delta = closer strike = bigger premium, bigger hedge.\n\nThe bot targets strikes with a delta between these two numbers.",
   },
   dte_range: {
     title: "Days To Expiry (DTE)",
@@ -33,7 +33,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   capital_committed: {
     title: "Capital Committed",
-    body: "For a short put, this is your worst-case financial obligation: if BTC dropped to zero, you'd owe strike price × contracts.\n\nIn practice BTC won't go to zero, and you'd close the position long before that — but this is the theoretical maximum at-risk amount.\n\nIt tells you how much of your account is 'claimed' by this trade.",
+    body: "For a short put, this is your worst-case financial obligation from the option alone: strike price × contracts.\n\nIn practice, the delta-neutral hedge offsets most of that risk — as BTC falls, the short perp position earns, partially compensating any option loss. The actual at-risk amount is the residual after the hedge.\n\nIt tells you how much of your account is 'claimed' by this trade's margin requirement.",
   },
   free_reserve: {
     title: "Free Reserve",
@@ -70,5 +70,21 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   monte_carlo: {
     title: "Monte Carlo Simulation",
     body: "Tests your strategy against 100 randomly selected 6-month windows from history.\n\nRather than one backtest, you get a distribution of outcomes — best case, worst case, and everything in between. Shows you the p5 (5th percentile, near-worst case) through p95 (95th percentile, near-best case) range.\n\nUseful for understanding how variable the strategy's performance is. A tight distribution = consistent. A wide one = highly dependent on market conditions.",
+  },
+  net_delta: {
+    title: "Net Delta",
+    body: "The combined directional exposure of your portfolio after the hedge.\n\nA short put has positive delta (you benefit if BTC rises). The BTC-PERPETUAL short hedge has negative delta. Net delta = option delta + hedge delta.\n\nThe goal is net delta ≈ 0 — meaning BTC moving up or down has almost no effect on your total position value. What you earn is the option's time decay (theta), not a bet on direction.\n\nSmall residual delta is normal between daily rebalances.",
+  },
+  perp_hedge: {
+    title: "Perp Hedge (BTC-PERPETUAL)",
+    body: "The offsetting position the bot holds in BTC-PERPETUAL futures to cancel the option's directional risk.\n\nFor a short put: the bot shorts BTC-PERPETUAL equal to the option's delta × contracts. If BTC falls, the put loses money but the short perp earns — keeping net P&L close to flat on price moves.\n\nThe hedge is rebalanced daily as delta drifts. Two small costs apply: a funding rate (~0.01%/day on the notional perp value) and a spread cost when buying or selling BTC to rebalance (~0.02% per lot). Both are included in every backtest.",
+  },
+  reconcile: {
+    title: "Reconcile (Optimizer Mode)",
+    body: "Compares what the Black-Scholes pricing model predicted against what your actual trades produced.\n\nFor each completed trade, the bot works out what premium it should have collected (based on IV and time to expiry at entry) and whether it should have won or lost. It then compares that to what actually happened.\n\nKey metrics: Premium Accuracy (how close predicted premium was to actual), Win Accuracy (how often the model correctly called win/loss), and Overall Accuracy — a combined score.\n\nA low accuracy score means real market conditions are drifting from the model's assumptions — a signal to re-run evolution with fresh data.",
+  },
+  hedge_pnl: {
+    title: "Hedge P&L",
+    body: "The profit or loss on the BTC-PERPETUAL hedge position for a trade.\n\nAs BTC price moves between entry and expiry, the short perp position gains or loses. Daily funding costs and rebalance spread costs are also deducted here.\n\nHedge P&L is shown separately from option P&L so you can see exactly how much of your income came from premium decay vs. how much was offset by hedge costs or gains. Total trade P&L = option P&L + hedge P&L.",
   },
 }
