@@ -3,10 +3,12 @@ interface Props {
 }
 
 interface Block {
-  type: 'heading' | 'sub' | 'prose' | 'code' | 'note' | 'file'
+  type: 'heading' | 'sub' | 'prose' | 'code' | 'note' | 'file' | 'image'
   text?: string
   lang?: string
   label?: string
+  src?: string
+  caption?: string
 }
 
 const SECTIONS: { title: string; icon: string; blocks: Block[] }[] = [
@@ -693,6 +695,361 @@ user.portfolio.btc          → portfolio update (equity changes)`,
       },
     ],
   },
+
+  // ── 12 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Strategy Improvements Overview',
+    icon: '🔧',
+    blocks: [
+      {
+        type: 'prose',
+        text: 'Six validated improvements were added to the live strategy in April 2026. Each is documented below with its implementation details, config flag, and expected impact.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvements_summary.png',
+        caption: 'Summary of all 6 strategy improvements and their backtest impact',
+      },
+    ],
+  },
+
+  // ── 13 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Weekly Expiries — Double Trade Frequency',
+    icon: '📅',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: "The live bot's instrument pre-filter silently excluded options with exactly 7 DTE. The backtester already used 7-DTE weeklies, creating a gap between simulated and live behaviour.",
+      },
+      {
+        type: 'heading',
+        text: 'The Fix',
+      },
+      {
+        type: 'prose',
+        text: 'Lowered min_dte from 8→7 and capped max_dte at 14 (bi-weekly). This captures all Deribit weekly expiries and keeps capital cycling faster.',
+      },
+      {
+        type: 'code',
+        lang: 'yaml',
+        label: 'config.yaml — DTE window',
+        text: `strategy:
+  min_dte: 7    # was 8 — now includes 7-DTE weekly expiries
+  max_dte: 14   # capped at bi-weekly; avoids slow monthly capital lock-up`,
+      },
+      {
+        type: 'note',
+        text: 'Always enabled. No config flag needed.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_1_weekly.png',
+        caption: 'Weekly expiry fix — trade frequency comparison',
+      },
+    ],
+  },
+
+  // ── 14 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Regime Filter — Skip Puts in Downtrends',
+    icon: '📉',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: 'Selling puts during a sustained BTC downtrend (spot below 50-day SMA) leads to repeated near-ITM or ITM assignments with no premium buffer.',
+      },
+      {
+        type: 'heading',
+        text: 'The Implementation',
+      },
+      {
+        type: 'prose',
+        text: 'A rolling N-day SMA is computed from daily close prices. If spot < SMA, the bot skips opening new put legs. Existing positions always run to expiry.',
+      },
+      {
+        type: 'code',
+        lang: 'python',
+        label: 'bot.py → _is_above_regime_ma()',
+        text: `def _is_above_regime_ma(self, current_price: float) -> bool:
+    """
+    Return True when it is safe to open new put positions under the regime filter.
+
+    Safety rule: BTC must be trading above its N-day simple moving average
+    (where N = cfg.sizing.regime_ma_days, default 50).  During a downtrend
+    the probability of put assignment rises sharply; skipping new entries
+    in that environment preserves capital.
+
+    Returns True (allow trading) when:
+      - regime filter is disabled, OR
+      - we haven't accumulated enough daily history yet (fail-open during warmup), OR
+      - current BTC price >= N-day SMA of daily closing prices
+    """
+    if not self._cfg.sizing.use_regime_filter:
+        return True  # filter disabled — always allow`,
+      },
+      {
+        type: 'note',
+        text: 'Opt-in. Set `sizing.use_regime_filter: true` in config.yaml. The 12-month backtest was mostly bearish — enabling this would have blocked 10 of 11 trades (correct capital-preservation behaviour).',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_2_regime.png',
+        caption: 'Regime filter — BTC vs 50-day SMA with blocked/allowed periods',
+      },
+    ],
+  },
+
+  // ── 15 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Dynamic Delta — Scale Aggression with IV Rank',
+    icon: '🎯',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: 'A static delta target ignores the cost of volatility. When IV is high, options are expensively priced — you can sell closer to ATM and collect more premium without extra risk. When IV is low, selling far OTM avoids overexposure.',
+      },
+      {
+        type: 'heading',
+        text: 'The Formula',
+      },
+      {
+        type: 'prose',
+        text: 'The target delta midpoint is linearly interpolated with IV rank. At IV rank 0 it equals `target_delta_min` (far OTM). At IV rank 1 it equals `target_delta_max` (close to ATM).',
+      },
+      {
+        type: 'code',
+        lang: 'python',
+        label: 'strategy.py → select_strike() — dynamic delta interpolation',
+        text: `elif cfg.strategy.iv_dynamic_delta:
+    # Linearly interpolate: IV rank 0 → target midpoint = d_min,
+    #                        IV rank 1 → target midpoint = d_max.
+    # This biases strike selection toward more aggressive (higher delta)
+    # options when IV is richly priced and premiums are most attractive.
+    target_delta_mid = d_min + (d_max - d_min) * float(np.clip(iv_rank, 0.0, 1.0))
+    logger.debug(
+        f"Dynamic delta: IV rank={iv_rank:.2%} → "
+        f"target mid={target_delta_mid:.4f} "
+        f"(static mid would be {(d_min + d_max)/2:.4f})"
+    )
+else:
+    target_delta_mid = (d_min + d_max) / 2.0`,
+      },
+      {
+        type: 'heading',
+        text: 'Backtest Results',
+      },
+      {
+        type: 'prose',
+        text: 'Enabling dynamic delta improved 12-month total return from +67.64% to +74.40%, raised Sharpe ratio from 1.16 to 1.22, and increased average premium yield from 1.34% to 1.57% per contract.',
+      },
+      {
+        type: 'note',
+        text: 'Always enabled. `strategy.iv_dynamic_delta: true` in config.yaml.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_3_dynamic_delta.png',
+        caption: 'Dynamic delta — equity curve comparison vs static delta target',
+      },
+    ],
+  },
+
+  // ── 16 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Strike Laddering — Spread Risk Across Strikes',
+    icon: '🪜',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: 'A single large put creates a binary outcome: BTC either stays above one specific strike (full win) or crosses it (full loss). This concentrates risk at one price level.',
+      },
+      {
+        type: 'heading',
+        text: 'The Implementation',
+      },
+      {
+        type: 'prose',
+        text: 'With laddering enabled, the bot opens N puts at evenly-spaced delta targets across the configured range. For 2 legs: one conservative (far OTM) and one aggressive (closer ATM). Each leg gets 1/N of the normal equity allocation so total exposure is unchanged.',
+      },
+      {
+        type: 'code',
+        lang: 'python',
+        label: 'strategy.py → select_ladder_strikes()',
+        text: `def select_ladder_strikes(
+    self,
+    instruments: list[Instrument],
+    tickers: dict[str, Ticker],
+    underlying_price: float,
+    n_legs: int,
+    iv_rank: float = 0.5,
+) -> list[StrikeCandidate]:
+    """
+    Select N put strike candidates at evenly-spaced delta targets across
+    the configured delta range.
+
+    For n_legs=2 with delta range [0.15, 0.39]:
+      Leg 1 (conservative): target delta ≈ 0.22  (far OTM, lower risk)
+      Leg 2 (aggressive):   target delta ≈ 0.31  (closer ATM, more premium)
+
+    Each leg targets delta at position (k / (n+1)) along the [min, max] range,
+    ensuring targets stay inside the configured bounds.  Duplicate strikes
+    are excluded so each leg is at a distinct price level.
+    """`,
+      },
+      {
+        type: 'note',
+        text: 'Opt-in. Set `sizing.ladder_enabled: true` and `sizing.ladder_legs: 2` in config.yaml.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_4_ladder.png',
+        caption: 'Strike laddering — two puts at different delta targets',
+      },
+    ],
+  },
+
+  // ── 17 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Position Rolling — Cut and Re-enter on Breaches',
+    icon: '🔄',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: 'When a put is breached (delta exceeds 0.40 or loss exceeds 2% of equity), holding it to expiry risks full assignment with no chance to recover premium.',
+      },
+      {
+        type: 'heading',
+        text: 'How Rolling Works',
+      },
+      {
+        type: 'prose',
+        text: "The bot buys back the breached put and immediately re-opens a new put using the same signal logic. Because BTC has moved lower, the new strike lands below the original — naturally achieving 'roll down and out'. Only rolls when DTE ≥ roll_min_dte (default 3); close-to-expiry positions settle naturally since rolling costs more in slippage.",
+      },
+      {
+        type: 'code',
+        lang: 'python',
+        label: 'bot.py → _tick() — roll check',
+        text: `if self._cfg.risk.roll_enabled:
+    for pos in list(self._positions):   # iterate a copy; we may mutate
+        dte_remaining = max(
+            0,
+            int((pos.expiry_ts / 1000 - now.timestamp()) / 86_400)
+        ) if pos.expiry_ts else 0
+        if dte_remaining < self._cfg.risk.roll_min_dte:
+            # Too close to expiry — let it settle naturally
+            continue
+        should_roll, reason = self._risk.should_roll(pos)
+        if should_roll:
+            logger.warning(
+                f"Rolling {pos.instrument_name} [{reason}]: "
+                f"delta={pos.current_delta:.3f}  "
+                f"DTE remaining={dte_remaining}"
+            )
+            # Close the hedge first so its P&L is captured in the trade log
+            hedge_pnl = 0.0
+            if self._hedge is not None:
+                hedge_pnl = await self._hedge.close_all(
+                    underlying_price, self._client.ws
+                )
+            closed = await self._close_position(
+                pos, f"roll_{reason}", underlying_price, hedge_pnl_usd=hedge_pnl
+            )
+            if closed:
+                self._positions.remove(pos)`,
+      },
+      {
+        type: 'note',
+        text: 'Opt-in. Set `risk.roll_enabled: true`. Tune `risk.roll_min_dte` (default 3) to control how close to expiry rolling is allowed.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_5_roll.png',
+        caption: 'Position rolling — breach detection and re-entry logic',
+      },
+    ],
+  },
+
+  // ── 18 ────────────────────────────────────────────────────────────────────
+  {
+    title: 'Recovery Calls — Capture Full BTC Rebound',
+    icon: '🔁',
+    blocks: [
+      {
+        type: 'heading',
+        text: 'The Problem',
+      },
+      {
+        type: 'prose',
+        text: 'After a put expires ITM (BTC dropped below the put strike), the wheel transitions to selling a covered call. If that call is placed below the put strike, any BTC recovery between the two strikes produces no revenue — the premium opportunity is missed.',
+      },
+      {
+        type: 'heading',
+        text: 'The Fix',
+      },
+      {
+        type: 'prose',
+        text: "When the last put expired ITM, the strategy flags 'recovery mode'. The next call is constrained to strikes ≥ the put strike. If BTC rallies back above the put strike, the entire recovery is captured.",
+      },
+      {
+        type: 'code',
+        lang: 'python',
+        label: 'strategy.py → generate_signal() — recovery_min_strike logic',
+        text: `# Recovery mode: if the previous put expired ITM ("assignment"), target
+# a call strike >= the put strike so BTC recovery is fully captured.
+recovery_min_strike: float | None = None
+if cycle == "call" and self._last_put_was_itm and self._last_put_strike > 0:
+    recovery_min_strike = self._last_put_strike
+    logger.info(
+        f"Recovery call mode: targeting strikes >= \${recovery_min_strike:,.0f} "
+        f"(last put strike — ITM assignment)"
+    )
+
+candidate = self.select_strike(
+    instruments, tickers, cycle, underlying_price,
+    iv_rank=iv_rank,
+    recovery_min_strike=recovery_min_strike,
+)`,
+      },
+      {
+        type: 'heading',
+        text: 'Real Example',
+      },
+      {
+        type: 'prose',
+        text: 'In the 12-month backtest, put 5 expired ITM at $98,793 when BTC was $96,226. Without recovery mode the next call was placed at $96,676 — missing the $2,117 recovery range. With recovery mode, the call was placed at $98,793, capturing the full upside.',
+      },
+      {
+        type: 'note',
+        text: 'Always active automatically. No config flag needed.',
+      },
+      {
+        type: 'image',
+        src: '/charts/chart_improvement_6_recovery.png',
+        caption: 'Recovery calls — call placement before and after the fix',
+      },
+    ],
+  },
 ]
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -797,6 +1154,21 @@ export default function CodeGuide({ onClose }: Props) {
               }
               if (block.type === 'note') {
                 return <NoteBlock key={bi} text={block.text ?? ''} />
+              }
+              if (block.type === 'image') {
+                return (
+                  <div key={bi} className="my-4">
+                    <img
+                      src={block.src}
+                      alt={block.caption ?? ''}
+                      className="w-full rounded-lg border border-gray-700"
+                      style={{ maxHeight: '300px', objectFit: 'contain', background: '#111' }}
+                    />
+                    {block.caption && (
+                      <p className="text-xs text-gray-500 mt-1 text-center">{block.caption}</p>
+                    )}
+                  </div>
+                )
               }
               return null
             })}
