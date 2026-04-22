@@ -587,19 +587,24 @@ function BlackSwanCard({
   let premiumUsd: number
   const isPut = true  // bot only sells puts currently
 
+  // When no equity history exists (bot stopped / fresh start), fall back to the
+  // genome's starting_equity so hypothetical calculations are still meaningful
+  const effectiveEquity = equityUsd > 0
+    ? equityUsd
+    : (configParams.starting_equity ?? 0)
+
   if (position) {
     strike     = position.strike     ?? 0
     contracts  = position.contracts  ?? 0
     premiumUsd = position.premium_collected ?? 0
   } else {
     // Hypothetical: estimate what the bot would open given the active config
-    const otmOffset   = configParams.approx_otm_offset    ?? 0.05
-    const legFrac     = configParams.max_equity_per_leg    ?? 0.10
+    const otmOffset   = configParams.approx_otm_offset       ?? 0.05
+    const legFrac     = configParams.max_equity_per_leg       ?? 0.10
     const premFrac    = configParams.premium_fraction_of_spot ?? 0.02
     strike            = Math.round(btcPrice * (1 - otmOffset) / 1000) * 1000
-    const maxNotional = equityUsd * legFrac
+    const maxNotional = effectiveEquity * legFrac
     contracts         = strike > 0 ? Math.floor((maxNotional / strike) * 10) / 10 : 0
-    // Premium ≈ premium_fraction_of_spot × spot price per contract
     premiumUsd        = btcPrice * premFrac * contracts
   }
 
@@ -607,7 +612,7 @@ function BlackSwanCard({
     ? strike * contracts
     : Math.max(0, btcPrice * 10 - strike) * contracts
 
-  const marginSafety  = maxLossUsd > 0 ? equityUsd / maxLossUsd : Infinity
+  const marginSafety  = maxLossUsd > 0 ? effectiveEquity / maxLossUsd : Infinity
   const marginDisplay = marginSafety === Infinity ? '∞' : `${marginSafety.toFixed(1)}×`
   const marginColor   =
     marginSafety >= 2   ? 'text-green-400' :
@@ -623,8 +628,8 @@ function BlackSwanCard({
     const sPrice    = Math.max(1, btcPrice * (1 + move))
     const intrinsic = Math.max(0, strike - sPrice) * contracts
     const pnlUsd    = premiumUsd - intrinsic
-    const eqAfter   = equityUsd + pnlUsd
-    const lossPct   = equityUsd > 0 ? Math.max(0, (intrinsic - premiumUsd) / equityUsd * 100) : 0
+    const eqAfter   = effectiveEquity + pnlUsd
+    const lossPct   = effectiveEquity > 0 ? Math.max(0, (intrinsic - premiumUsd) / effectiveEquity * 100) : 0
     const status    =
       eqAfter <= 0  ? '❌ Liq.' :
       lossPct > 30  ? '🔴 Critical' :
@@ -664,8 +669,8 @@ function BlackSwanCard({
           {isHypothetical && (
             <div className="mt-3 rounded-xl px-3 py-2 bg-slate-800/60 border border-slate-700/50">
               <p className="text-xs text-slate-400">
-                No open position — showing estimated exposure if the bot opens a put now based on the active config.
-                Strike ≈ {fmt$(strike)} · Contracts ≈ {contracts.toFixed(1)}
+                No open position — estimated exposure if the bot opens a put now.
+                Equity {fmt$(effectiveEquity)} · Strike ≈ {fmt$(strike)} · Contracts ≈ {contracts.toFixed(1)}
               </p>
             </div>
           )}
