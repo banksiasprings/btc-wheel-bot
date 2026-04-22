@@ -4,13 +4,15 @@ import Dashboard from './components/Dashboard'
 import Trades from './components/Trades'
 import Optimizer from './components/Optimizer'
 import Settings from './components/Settings'
+import CodeGuide from './components/CodeGuide'
 
-type Tab = 'dashboard' | 'trades' | 'optimizer' | 'settings'
+type Tab = 'dashboard' | 'trades' | 'optimizer' | 'code' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   dashboard: '⬡',
   trades: '≡',
   optimizer: '⌁',
+  code: '</>',
   settings: '⚙',
 }
 
@@ -18,6 +20,7 @@ const TAB_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
   trades: 'Trades',
   optimizer: 'Optimizer',
+  code: 'Code',
   settings: 'Settings',
 }
 
@@ -41,6 +44,7 @@ export default function App() {
         {activeTab === 'dashboard' && <Dashboard />}
         {activeTab === 'trades' && <Trades />}
         {activeTab === 'optimizer' && <Optimizer />}
+        {activeTab === 'code' && <CodeGuide />}
         {activeTab === 'settings' && <Settings onLogout={() => setIsSetup(false)} />}
       </main>
 
