@@ -455,6 +455,53 @@ def get_evolve_results() -> dict:
     }
 
 
+@app.get("/optimizer/evolve_results_all", dependencies=[Depends(_require_api_key)])
+def get_evolve_results_all() -> dict:
+    """Return per-goal evolution results with version history and delta vs previous run."""
+    result: dict[str, dict] = {}
+    for goal in ("balanced", "max_yield", "safest", "sharpe"):
+        genome = _read_yaml(OPT_DIR / f"best_genome_{goal}.yaml") or _read_yaml(OPT_DIR / "best_genome.yaml")
+        ts = _evolve_goal_ts(goal)
+
+        history_path = OPT_DIR / f"evolve_history_{goal}.json"
+        history: list = []
+        try:
+            if history_path.exists():
+                with open(history_path) as _hf:
+                    history = json.load(_hf)
+        except Exception:
+            pass
+
+        version = len(history)
+        current  = history[-1]  if len(history) >= 1 else None
+        previous = history[-2]  if len(history) >= 2 else None
+
+        delta: dict | None = None
+        if current and previous:
+            delta = {
+                "fitness":    round(
+                    (current.get("fitness", 0) or 0) - (previous.get("fitness", 0) or 0), 4
+                ),
+                "return_pct": round(
+                    (current.get("return_pct", 0) or 0) - (previous.get("return_pct", 0) or 0), 2
+                ),
+                "sharpe": round(
+                    (current.get("sharpe", 0) or 0) - (previous.get("sharpe", 0) or 0), 3
+                ),
+            }
+
+        result[goal] = {
+            "version":   version,
+            "timestamp": ts,
+            "current":   current,
+            "previous":  previous,
+            "delta":     delta,
+            "history":   history[-10:],   # last 10 runs
+            "available": genome is not None,
+        }
+    return result
+
+
 @app.get("/optimizer/walk_forward_results", dependencies=[Depends(_require_api_key)])
 def get_walk_forward_results() -> dict:
     """Return walk-forward validation results."""

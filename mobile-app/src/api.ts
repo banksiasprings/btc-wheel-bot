@@ -104,6 +104,29 @@ export interface EvolveResults {
   timestamp: string | null
 }
 
+export interface EvolveHistoryEntry {
+  version: number
+  timestamp: string
+  goal: string
+  fitness: number
+  return_pct: number
+  sharpe: number
+  win_rate: number
+  drawdown: number
+}
+
+export interface EvolveGoalResult {
+  version: number
+  timestamp: string | null
+  current: EvolveHistoryEntry | null
+  previous: EvolveHistoryEntry | null
+  delta: { fitness: number; return_pct: number; sharpe: number } | null
+  history: EvolveHistoryEntry[]
+  available: boolean
+}
+
+export type EvolveAllResults = Record<EvolveGoal, EvolveGoalResult>
+
 export interface BotConfig {
   iv_rank_threshold: number | null
   delta_target_min: number | null
@@ -208,7 +231,8 @@ export const getTrades = () => request<Trade[]>('/trades')
 export const getOptimizerSummary = () => request<OptimizerSummary>('/optimizer/summary')
 export const getOptimizerRunning = () => request<{ running: boolean }>('/optimizer/running')
 export const getSweepResults  = () => request<SweepResults>('/optimizer/sweep_results')
-export const getEvolveResults = () => request<EvolveResults>('/optimizer/evolve_results')
+export const getEvolveResults    = () => request<EvolveResults>('/optimizer/evolve_results')
+export const getEvolveResultsAll = () => request<EvolveAllResults>('/optimizer/evolve_results_all')
 export const getConfig = () => request<BotConfig>('/config')
 
 export const startBot = () => request<{ ok: boolean; message: string }>('/controls/start', { method: 'POST' })

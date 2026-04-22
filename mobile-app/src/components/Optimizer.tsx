@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   getOptimizerSummary, getOptimizerRunning, runOptimizer,
-  getSweepResults, getEvolveResults, getOptimizerProgress,
-  OptimizerSummary, SweepResults, EvolveResults, SweepEntry, EvolveGoal, EvolutionProgress,
+  getSweepResults, getEvolveResultsAll, getOptimizerProgress,
+  OptimizerSummary, SweepResults, EvolveAllResults, EvolveGoalResult,
+  SweepEntry, EvolveGoal, EvolutionProgress,
 } from '../api'
 import InfoModal from './InfoModal'
 import { GLOSSARY } from '../lib/glossary'
@@ -222,61 +223,206 @@ function SweepSection({ data, onInfo }: { data: SweepResults; onInfo?: (e: InfoE
   )
 }
 
-// ── Evolve results ────────────────────────────────────────────────────────────
+// ── Per-goal evolution panel ──────────────────────────────────────────────────
 
-function EvolveSection({ data, onInfo }: { data: EvolveResults; onInfo?: (e: InfoEntry) => void }) {
+function DeltaChip({ val, suffix = '' }: { val: number; suffix?: string }) {
+  if (Math.abs(val) < 0.001) return <span className="text-xs text-slate-500">±0</span>
+  const pos = val > 0
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        {data.total_evaluated > 0 && (
-          <span className="text-xs text-slate-500">{data.total_evaluated} evaluated</span>
-        )}
-        {data.timestamp && (
-          <span className="text-xs text-slate-500">{fmtTime(data.timestamp)}</span>
-        )}
-      </div>
-      {data.top_genomes.slice(0, 5).map((g, i) => {
-        const isBest = i === 0
-        return (
-          <div
-            key={i}
-            className={`rounded-xl p-3 bg-navy ${isBest ? 'border border-green-700' : ''}`}
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className={`text-xs font-bold ${isBest ? 'text-green-400' : 'text-slate-500'}`}>
-                {isBest ? '★ #1 Best' : `#${i + 1}`}
+    <span className={`text-xs font-medium ${pos ? 'text-green-400' : 'text-red-400'}`}>
+      {pos ? '↑' : '↓'}{pos ? '+' : ''}{val.toFixed(2)}{suffix}
+    </span>
+  )
+}
+
+function HistoryRow({ entry, isCurrent }: { entry: { version: number; timestamp: string; fitness: number; return_pct: number; sharpe: number }; isCurrent: boolean }) {
+  const d = new Date(entry.timestamp)
+  const dateStr = d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+  const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return (
+    <div className={`flex items-center gap-2 px-2 py-1.5 rounded-lg ${isCurrent ? 'bg-green-950 border border-green-800' : 'bg-navy'}`}>
+      <span className={`text-xs font-mono font-bold w-8 shrink-0 ${isCurrent ? 'text-green-400' : 'text-slate-500'}`}>
+        v{entry.version}
+      </span>
+      <span className="text-xs text-slate-500 shrink-0">{dateStr} {timeStr}</span>
+      <div className="flex-1" />
+      <span className={`text-xs font-mono ${entry.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+        {entry.return_pct >= 0 ? '+' : ''}{entry.return_pct.toFixed(1)}%
+      </span>
+      <span className="text-xs font-mono text-slate-400">
+        S{entry.sharpe.toFixed(2)}
+      </span>
+      <span className={`text-xs font-mono font-bold ${isCurrent ? 'text-green-400' : 'text-slate-300'}`}>
+        {entry.fitness.toFixed(3)}
+      </span>
+    </div>
+  )
+}
+
+function EvolveGoalPanel({
+  goalMeta, data, onInfo,
+}: {
+  goalMeta: typeof FITNESS_GOALS[number]
+  data: EvolveGoalResult | undefined
+  onInfo?: (e: InfoEntry) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [histOpen, setHistOpen] = useState(false)
+
+  const cur  = data?.current
+  const prev = data?.previous
+  const delta = data?.delta
+  const version = data?.version ?? 0
+  const ts = data?.timestamp
+
+  // Format date+time for timestamp
+  const fmtDateTime = (iso: string | null | undefined) => {
+    if (!iso) return null
+    try {
+      const d = new Date(iso)
+      return {
+        date: d.toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' }),
+        time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }
+    } catch { return null }
+  }
+  const tsFormatted = fmtDateTime(ts)
+
+  const hasData = version > 0 && cur != null
+
+  return (
+    <div className={`bg-card rounded-2xl border overflow-hidden ${
+      hasData ? 'border-border' : 'border-border opacity-60'
+    }`}>
+      {/* Header — always visible, tap to expand */}
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="text-base leading-none">{goalMeta.icon}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-white">{goalMeta.label}</span>
+            {version > 0 && (
+              <span className="text-xs font-mono px-1.5 py-0.5 rounded-full bg-slate-800 text-slate-400">
+                v{version}
               </span>
-              <div className="flex items-center gap-1">
-                <span className={`text-sm font-bold ${isBest ? 'text-green-400' : 'text-white'}`}>
-                  {g.fitness.toFixed(3)}
-                </span>
-                <InfoBtn onClick={() => onInfo?.(GLOSSARY.fitness_score)} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
-              <span className="text-slate-400 flex items-center gap-1">
-                Return:{' '}
-                <span className={g.return_pct >= 0 ? 'text-green-400 font-medium' : 'text-red-400 font-medium'}>
-                  {g.return_pct >= 0 ? '+' : ''}{g.return_pct.toFixed(1)}%
-                </span>
-                <InfoBtn onClick={() => onInfo?.(GLOSSARY.return_pct)} />
-              </span>
-              <span className="text-slate-400 flex items-center gap-1">
-                Sharpe: <span className="text-white font-medium">{g.sharpe.toFixed(2)}</span>
-                <InfoBtn onClick={() => onInfo?.(GLOSSARY.sharpe_ratio)} />
-              </span>
-              <span className="text-slate-400 flex items-center gap-1">
-                Win Rate: <span className="text-white font-medium">{g.win_rate.toFixed(0)}%</span>
-                <InfoBtn onClick={() => onInfo?.(GLOSSARY.win_rate)} />
-              </span>
-              <span className="text-slate-400 flex items-center gap-1">
-                Max DD: <span className="text-red-400 font-medium">{g.drawdown.toFixed(1)}%</span>
-                <InfoBtn onClick={() => onInfo?.(GLOSSARY.max_drawdown)} />
-              </span>
-            </div>
+            )}
+            {delta && (
+              <DeltaChip val={delta.fitness} />
+            )}
           </div>
-        )
-      })}
+          <div className="flex items-center gap-2 mt-0.5">
+            {hasData ? (
+              <>
+                <span className={`text-xs font-medium ${
+                  cur!.return_pct >= 0 ? 'text-green-400' : 'text-red-400'
+                }`}>
+                  {cur!.return_pct >= 0 ? '+' : ''}{cur!.return_pct.toFixed(1)}%
+                </span>
+                <span className="text-xs text-slate-500">Sharpe {cur!.sharpe.toFixed(2)}</span>
+                <span className="text-xs text-slate-500">Win {cur!.win_rate.toFixed(0)}%</span>
+                {tsFormatted && (
+                  <span className="text-xs text-slate-600 ml-auto">{tsFormatted.date}</span>
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-slate-600">Not yet run</span>
+            )}
+          </div>
+        </div>
+        <span className="text-slate-500 text-xs shrink-0">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          {!hasData ? (
+            <p className="text-xs text-slate-500 text-center py-2">
+              Run "{goalMeta.label}" evolution to see results here.
+            </p>
+          ) : (
+            <>
+              {/* Key metrics grid */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-navy rounded-xl px-3 py-2">
+                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                    Fitness
+                    <InfoBtn onClick={() => onInfo?.(GLOSSARY.fitness_score)} />
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-green-400">{cur!.fitness.toFixed(3)}</span>
+                    {delta && <DeltaChip val={delta.fitness} />}
+                  </div>
+                </div>
+                <div className="bg-navy rounded-xl px-3 py-2">
+                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                    Return
+                    <InfoBtn onClick={() => onInfo?.(GLOSSARY.return_pct)} />
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-bold ${cur!.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      {cur!.return_pct >= 0 ? '+' : ''}{cur!.return_pct.toFixed(1)}%
+                    </span>
+                    {delta && <DeltaChip val={delta.return_pct} suffix="%" />}
+                  </div>
+                </div>
+                <div className="bg-navy rounded-xl px-3 py-2">
+                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                    Sharpe
+                    <InfoBtn onClick={() => onInfo?.(GLOSSARY.sharpe_ratio)} />
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-white">{cur!.sharpe.toFixed(2)}</span>
+                    {delta && <DeltaChip val={delta.sharpe} />}
+                  </div>
+                </div>
+                <div className="bg-navy rounded-xl px-3 py-2">
+                  <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
+                    Win / MaxDD
+                    <InfoBtn onClick={() => onInfo?.(GLOSSARY.win_rate)} />
+                  </p>
+                  <span className="text-sm font-bold text-white">
+                    {cur!.win_rate.toFixed(0)}% / <span className="text-red-400">{cur!.drawdown.toFixed(1)}%</span>
+                  </span>
+                </div>
+              </div>
+
+              {/* Last run timestamp */}
+              {tsFormatted && (
+                <p className="text-xs text-slate-600 text-right">
+                  Last run: {tsFormatted.date} {tsFormatted.time}
+                </p>
+              )}
+
+              {/* Version history — collapsible */}
+              {(data?.history?.length ?? 0) > 1 && (
+                <div className="rounded-xl overflow-hidden bg-navy">
+                  <button
+                    className="w-full flex items-center justify-between px-3 py-2 text-left"
+                    onClick={() => setHistOpen(h => !h)}
+                  >
+                    <span className="text-xs text-slate-400 font-medium">
+                      Version history ({data!.history.length} runs)
+                    </span>
+                    <span className="text-slate-500 text-xs">{histOpen ? '▲' : '▼'}</span>
+                  </button>
+                  {histOpen && (
+                    <div className="px-3 pb-3 space-y-1">
+                      {[...data!.history].reverse().map(h => (
+                        <HistoryRow
+                          key={h.version}
+                          entry={h}
+                          isCurrent={h.version === version}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -443,20 +589,19 @@ function CollapsibleSection({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function Optimizer() {
-  const [summary,    setSummary]    = useState<OptimizerSummary | null>(null)
-  const [sweepData,  setSweepData]  = useState<SweepResults | null>(null)
-  const [evolveData, setEvolveData] = useState<EvolveResults | null>(null)
-  const [running,    setRunning]    = useState(false)
-  const [completed,  setCompleted]  = useState(false)
-  const [loading,    setLoading]    = useState(true)
-  const [error,      setError]      = useState('')
+  const [summary,     setSummary]     = useState<OptimizerSummary | null>(null)
+  const [sweepData,   setSweepData]   = useState<SweepResults | null>(null)
+  const [evolveAll,   setEvolveAll]   = useState<EvolveAllResults | null>(null)
+  const [running,     setRunning]     = useState(false)
+  const [completed,   setCompleted]   = useState(false)
+  const [loading,     setLoading]     = useState(true)
+  const [error,       setError]       = useState('')
   const [mode,        setMode]        = useState<OptMode>('sweep')
   const [fitnessGoal, setFitnessGoal] = useState<EvolveGoal>('balanced')
   const [launching,   setLaunching]   = useState(false)
   const [launchMsg,   setLaunchMsg]   = useState('')
   const [info,        setInfo]        = useState<InfoEntry | null>(null)
   const [sweepOpen,   setSweepOpen]   = useState(false)
-  const [evolveOpen,  setEvolveOpen]  = useState(false)
   const [wfOpen,      setWfOpen]      = useState(false)
   const [mcOpen,      setMcOpen]      = useState(false)
   const [progress,    setProgress]    = useState<EvolutionProgress | null>(null)
@@ -471,7 +616,7 @@ export default function Optimizer() {
         getOptimizerSummary(),
         getOptimizerRunning(),
         getSweepResults(),
-        getEvolveResults(),
+        getEvolveResultsAll(),
       ])
       setSummary(s)
 
@@ -484,7 +629,7 @@ export default function Optimizer() {
       })
 
       setSweepData(sw?.params?.length ? sw : null)
-      setEvolveData(ev?.top_genomes?.length ? ev : null)
+      setEvolveAll(ev ?? null)
       setError('')
     } catch (e) {
       setError(String(e))
@@ -709,20 +854,21 @@ export default function Optimizer() {
         </CollapsibleSection>
       )}
 
-      {/* Evolve results — collapsible */}
-      {evolveData && (
-        <CollapsibleSection
-          title="Evolution Results"
-          badge={evolveData.total_evaluated > 0 ? <span className="text-xs text-slate-500">{evolveData.total_evaluated} evaluated</span> : undefined}
-          open={evolveOpen}
-          onToggle={() => setEvolveOpen(o => !o)}
-        >
-          <EvolveSection data={evolveData} onInfo={setInfo} />
-        </CollapsibleSection>
-      )}
+      {/* Evolution results — one panel per goal */}
+      <div className="space-y-2">
+        <p className="text-xs font-medium text-slate-400 px-1">Evolution Goals</p>
+        {FITNESS_GOALS.map(g => (
+          <EvolveGoalPanel
+            key={g.id}
+            goalMeta={g}
+            data={evolveAll?.[g.id]}
+            onInfo={setInfo}
+          />
+        ))}
+      </div>
 
       {/* No results placeholder */}
-      {!sweepData && !evolveData && !summary?.best_genome && (
+      {!sweepData && !evolveAll && !summary?.best_genome && (
         <div className="bg-card rounded-2xl p-6 border border-border text-center text-slate-500 text-sm">
           No results yet — run Sweep or Evolve to see results here.
         </div>

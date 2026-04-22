@@ -1534,6 +1534,8 @@ Examples:
             fitness_goal=goal,
         )
         import yaml
+        import csv as _csv_hist
+        from datetime import datetime as _dt_hist, timezone as _tz_hist
         genome_dict = asdict(best)
         genome_dict["fitness_goal"] = goal
         # Save to goal-specific file and keep best_genome.yaml for backwards compat
@@ -1545,6 +1547,46 @@ Examples:
             with open(path, "w") as f:
                 yaml.dump(genome_dict, f, default_flow_style=False)
         print(f"\n  Best genome saved to {goal_path} (and {generic_path})")
+
+        # ── Append to per-goal version history ───────────────────────────────
+        # Pull metrics from the leaderboard CSV that was just saved
+        best_metrics: dict = {}
+        lb_path = out_dir / "evolution_leaderboard.csv"
+        try:
+            if lb_path.exists():
+                with open(lb_path, newline="") as _lf:
+                    _reader = _csv_hist.DictReader(_lf)
+                    _top = next(_reader, None)
+                    if _top:
+                        best_metrics = {
+                            "fitness":    round(float(_top.get("fitness", 0)), 4),
+                            "return_pct": round(float(_top.get("total_return_pct", 0)), 2),
+                            "sharpe":     round(float(_top.get("sharpe_ratio", 0)), 3),
+                            "win_rate":   round(float(_top.get("win_rate_pct", 0)), 1),
+                            "drawdown":   round(float(_top.get("max_drawdown_pct", 0)), 2),
+                        }
+        except Exception:
+            pass
+
+        history_path = out_dir / f"evolve_history_{goal}.json"
+        _history: list = []
+        try:
+            if history_path.exists():
+                with open(history_path) as _hf:
+                    _history = json.load(_hf)
+        except Exception:
+            pass
+
+        _entry = {
+            "version":   len(_history) + 1,
+            "timestamp": _dt_hist.now(_tz_hist.utc).isoformat(),
+            "goal":      goal,
+            **best_metrics,
+        }
+        _history.append(_entry)
+        with open(history_path, "w") as _hf:
+            json.dump(_history, _hf, indent=2)
+        print(f"  History saved → {history_path} (v{_entry['version']})")
 
     elif args.mode == "walk_forward":
         run_walk_forward(
