@@ -278,17 +278,33 @@ def get_optimizer_summary() -> dict:
                         if f is not None and (best_fitness is None or f > best_fitness):
                             best_fitness = f
 
-    # Monte Carlo summary
+    # Monte Carlo summary — read from actual results structure (no nested "summary" key)
     mc_summary = None
-    if mc and "summary" in mc:
-        s = mc["summary"]
+    if mc:
+        # Filter zero-cycle windows before computing stats (they produce -inf / sentinel Sharpe)
+        valid_runs = [r for r in mc.get("runs", []) if r.get("num_cycles", 0) > 0]
+        valid_sharpes = sorted([
+            r["sharpe"] for r in valid_runs
+            if r.get("sharpe") is not None and abs(r["sharpe"]) < 1e10
+        ])
+        median_sharpe: float | None = valid_sharpes[len(valid_sharpes) // 2] if valid_sharpes else None
+        p5_idx = max(0, int(len(valid_sharpes) * 0.05))
+        # p5_sharpe available for future use
+        # p5_sharpe = valid_sharpes[p5_idx] if valid_sharpes else None
+
+        dists = mc.get("distributions", {})
+        ret = dists.get("return_pct", {})
+        prob_profit_raw = mc.get("prob_profit_pct", 0)
+
         mc_summary = {
-            "pct_profitable":  s.get("pct_profitable"),
-            "median_return":   s.get("median_return"),
-            "p5_sharpe":       s.get("p5_sharpe"),
-            "verdict":         (
-                "robust" if (s.get("p5_sharpe") or -1) > 0.5
-                else "marginal" if (s.get("p5_sharpe") or -1) >= 0.0
+            "prob_profit":   round(prob_profit_raw / 100.0, 4) if prob_profit_raw is not None else None,
+            "median_sharpe": round(median_sharpe, 3) if median_sharpe is not None else None,
+            "p5":            ret.get("p5"),
+            "p50":           ret.get("p50"),
+            "p95":           ret.get("p95"),
+            "verdict": (
+                "robust" if (median_sharpe or -1) > 1.0
+                else "marginal" if (median_sharpe or -1) >= 0.5
                 else "fails under stress"
             ),
         }
