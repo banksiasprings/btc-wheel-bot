@@ -291,6 +291,15 @@ export default function Dashboard({ onNavigateTo }: Props) {
         </div>
       )}
 
+      {/* Black Swan Calculator — only shown when a position is open */}
+      {position?.open && (
+        <BlackSwanCard
+          position={position}
+          equityUsd={equity?.current_equity ?? 0}
+          btcPrice={btcPrice ?? position.current_spot ?? 0}
+        />
+      )}
+
       {/* Position card */}
       <div className="bg-card rounded-2xl p-4 border border-border">
         <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">
@@ -551,6 +560,145 @@ function Stat({ label, value, accent, onInfo }: { label: string; value: string; 
         )}
       </div>
       <p className="text-sm font-medium text-white truncate">{value}</p>
+    </div>
+  )
+}
+
+function BlackSwanCard({
+  position,
+  equityUsd,
+  btcPrice,
+}: {
+  position: PositionData
+  equityUsd: number
+  btcPrice: number
+}) {
+  const [open, setOpen] = useState(false)
+
+  const strike    = position.strike    ?? 0
+  const contracts = position.contracts ?? 0
+  const premiumUsd = position.premium_collected ?? 0
+  const isPut = (position.type ?? 'put').toLowerCase().includes('put')
+
+  const maxLossUsd = isPut
+    ? strike * contracts
+    : Math.max(0, btcPrice * 10 - strike) * contracts
+
+  const marginSafety = maxLossUsd > 0 ? equityUsd / maxLossUsd : Infinity
+  const marginDisplay = marginSafety === Infinity ? '∞' : `${marginSafety.toFixed(1)}×`
+  const marginColor =
+    marginSafety >= 2 ? 'text-green-400' :
+    marginSafety >= 1.2 ? 'text-amber-400' : 'text-red-400'
+  const marginBorder =
+    marginSafety >= 2 ? 'border-green-900/50' :
+    marginSafety >= 1.2 ? 'border-amber-900/50' : 'border-red-900/50'
+
+  const moves  = isPut
+    ? [-0.05, -0.10, -0.20, -0.30, -0.50, -0.70, -1.00]
+    : [+0.10, +0.20, +0.50, +1.00, +2.00, +5.00]
+  const labels = isPut
+    ? ['-5%', '-10%', '-20%', '-30%', '-50%', '-70%', '→ $0']
+    : ['+10%', '+20%', '+50%', '+100%', '+200%', '+500%']
+
+  const rows = moves.map((move, i) => {
+    const sPrice      = Math.max(1, btcPrice * (1 + move))
+    const intrinsic   = isPut
+      ? Math.max(0, strike - sPrice) * contracts
+      : Math.max(0, sPrice - strike) * contracts
+    const pnlUsd      = premiumUsd - intrinsic
+    const eqAfter     = equityUsd + pnlUsd
+    const lossPct     = Math.max(0, (intrinsic - premiumUsd) / equityUsd * 100)
+    const status      =
+      eqAfter <= 0    ? '❌ Liq.' :
+      lossPct > 30    ? '🔴 Critical' :
+      lossPct > 10    ? '🟡 Warning'  : '🟢 Safe'
+    return { label: labels[i], sPrice, pnlUsd, eqAfter, lossPct, status }
+  })
+
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      {/* Header — always visible */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-amber-400 text-base">⚡</span>
+          <span className="text-sm font-medium text-white">Black Swan Calculator</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Margin safety teaser when collapsed */}
+          {!open && (
+            <span className={`text-sm font-bold ${marginColor}`}>
+              {marginDisplay} cover
+            </span>
+          )}
+          <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3 border-t border-border/40">
+          {/* Margin Safety Banner */}
+          <div className={`mt-3 rounded-xl px-4 py-3 bg-navy border ${marginBorder} flex items-baseline gap-3 flex-wrap`}>
+            <span className="text-xs text-slate-500 whitespace-nowrap">Margin Safety</span>
+            <span className={`text-2xl font-bold ${marginColor}`}>{marginDisplay}</span>
+            <span className="text-xs text-slate-500 leading-snug">
+              {isPut
+                ? `Max loss (BTC → $0): ${fmt$(maxLossUsd)}`
+                : `Practical ceiling (10× spike): ${fmt$(maxLossUsd)}`}
+            </span>
+          </div>
+
+          {/* Scenario label */}
+          <p className="text-xs text-slate-500 uppercase tracking-wide">
+            {isPut ? 'BTC crash scenarios (put risk)' : 'BTC spike scenarios (call risk)'}
+          </p>
+
+          {/* Scenario rows */}
+          <div className="space-y-1.5">
+            {rows.map(({ label, sPrice, pnlUsd, eqAfter, lossPct, status }) => {
+              const rowBg =
+                eqAfter <= 0   ? 'bg-red-950/60 border-red-900/50' :
+                lossPct > 30   ? 'bg-red-950/30 border-red-900/30' :
+                lossPct > 10   ? 'bg-amber-950/30 border-amber-900/30' :
+                                 'bg-navy border-transparent'
+              return (
+                <div key={label} className={`rounded-xl border px-3 py-2 ${rowBg}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    {/* Move label */}
+                    <span className="text-sm font-bold font-mono text-white w-12 flex-shrink-0">
+                      {label}
+                    </span>
+                    {/* BTC price */}
+                    <span className="text-xs text-slate-400 flex-1">
+                      {fmt$(Math.round(sPrice))}
+                    </span>
+                    {/* P&L */}
+                    <span className={`text-xs font-bold ${pnlUsd >= 0 ? 'text-green-400' : 'text-red-400'} flex-shrink-0`}>
+                      {pnlUsd >= 0 ? '+' : ''}{fmt$(pnlUsd)}
+                    </span>
+                    {/* Status */}
+                    <span className="text-xs flex-shrink-0">{status}</span>
+                  </div>
+                  {/* Secondary line: equity after + loss% */}
+                  <div className="flex items-center gap-3 mt-0.5 pl-14">
+                    <span className="text-xs text-slate-500">Eq. {fmt$(eqAfter)}</span>
+                    {lossPct > 0 && (
+                      <span className="text-xs text-slate-500">Loss {lossPct.toFixed(1)}%</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          <p className="text-xs text-slate-600 leading-snug">
+            Estimates use intrinsic value only — real losses at intermediate DTEs will be smaller
+            due to remaining time value. Kill switch + drawdown checks monitor live for automatic halt.
+          </p>
+        </div>
+      )}
     </div>
   )
 }
