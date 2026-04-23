@@ -211,9 +211,23 @@ class BotProcess:
         (self.bot_dir / "data").mkdir(exist_ok=True)
         (self.bot_dir / "logs").mkdir(exist_ok=True)
 
+        # Preserve existing _meta (e.g. config_name set via assign_config API)
+        existing_meta = {}
+        existing_config_path = self.bot_dir / "config.yaml"
+        if existing_config_path.exists():
+            try:
+                existing_raw = _read_yaml(existing_config_path)
+                existing_meta = existing_raw.get("_meta", {})
+            except Exception:
+                pass
+
         merged = _deep_merge(self.base_config, self.overrides)
         # Force paper / testnet mode regardless of base config
         merged.setdefault("deribit", {})["testnet"] = True
+
+        # Restore _meta so config_name is preserved across restarts
+        if existing_meta:
+            merged["_meta"] = existing_meta
 
         with open(self.bot_dir / "config.yaml", "w") as f:
             yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)

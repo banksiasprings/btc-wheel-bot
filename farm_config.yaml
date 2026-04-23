@@ -4,16 +4,11 @@ farm:
 
 bots:
   - id: bot_0
-    name: "Conservative"
-    description: "Low delta, high IV threshold — safest config"
-    base_config: config.yaml
-    overrides:
-      strategy:
-        iv_rank_threshold: 0.60
-        target_delta_min: 0.12
-        target_delta_max: 0.25
-      backtest:
-        starting_equity: 10000.0
+    name: "Balanced Evolved"
+    description: "Evolved config (balanced goal) — fitness 4.96, 22% return, Sharpe 1.44"
+    base_config: configs/balanced_20260423_2346.yaml
+    overrides: {}
+
 
   - id: bot_1
     name: "Balanced"
