@@ -92,7 +92,7 @@ FITNESS_WEIGHTS = {
 # ── Fitness scoring ────────────────────────────────────────────────────────────
 
 
-EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe")
+EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi")
 
 
 def _fitness_for_goal(result: dict, goal: str) -> float:
@@ -108,6 +108,19 @@ def _fitness_for_goal(result: dict, goal: str) -> float:
         return (win * 5) - (dd * 10) + (r * 1)
     elif goal == "sharpe":
         return sharpe * 3 + win * 1
+    elif goal == "capital_roi":
+        # Optimise for return on margin deployed
+        margin_roi = result.get("annualised_margin_roi", 0.0)
+        num_trades = result.get("num_cycles", 0)
+        # Penalise if too few trades (strategy not active enough)
+        activity_penalty = 1.0 if num_trades >= 6 else num_trades / 6.0
+        score = (
+            0.45 * min(margin_roi, 3.0) / 3.0 +    # ROI on margin — capped at 300% annual
+            0.25 * min(sharpe, 3.0) / 3.0 +          # Risk-adjusted
+            0.15 * max(0.0, 1.0 - dd / 0.30) +       # Drawdown penalty
+            0.15 * win                                  # Win rate
+        ) * activity_penalty
+        return round(float(np.clip(score, 0.0, 1.0)), 4)
     else:  # "balanced"
         return (sharpe * 2) + (r * 3) + (win * 2) - (dd * 3)
 
@@ -361,6 +374,10 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
             "win_rate_pct": results.win_rate_pct,
             "num_cycles": results.num_cycles,
             "ending_equity": results.ending_equity,
+            "annualised_margin_roi": results.annualised_margin_roi,
+            "premium_on_margin": results.premium_on_margin,
+            "min_viable_capital": results.min_viable_capital,
+            "avg_margin_utilization": results.avg_margin_utilization,
             "error": None,
         }
     except Exception as exc:
@@ -370,7 +387,9 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
             "fitness": 0.0,
             "error": str(exc),
             **{k: 0.0 for k in ["sharpe_ratio", "total_return_pct", "max_drawdown_pct",
-                                  "win_rate_pct", "num_cycles", "ending_equity"]},
+                                  "win_rate_pct", "num_cycles", "ending_equity",
+                                  "annualised_margin_roi", "premium_on_margin",
+                                  "min_viable_capital", "avg_margin_utilization"]},
         }
 
 

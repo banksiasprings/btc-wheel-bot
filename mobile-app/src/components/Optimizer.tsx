@@ -11,10 +11,11 @@ import { GLOSSARY } from '../lib/glossary'
 type OptMode = 'sweep' | 'evolve' | 'walk_forward' | 'monte_carlo' | 'reconcile'
 
 const FITNESS_GOALS: { id: EvolveGoal; icon: string; label: string; desc: string; activeCls: string }[] = [
-  { id: 'balanced',  icon: '🎯', label: 'Balanced',  desc: 'All-round (default)',           activeCls: 'bg-green-900 border-green-600 text-white' },
-  { id: 'max_yield', icon: '🚀', label: 'Max Yield', desc: 'Highest return. Aggressive.',    activeCls: 'bg-orange-900 border-orange-600 text-white' },
-  { id: 'safest',    icon: '🛡', label: 'Safest',    desc: 'Lowest drawdown. Conservative.', activeCls: 'bg-sky-900 border-sky-600 text-white' },
-  { id: 'sharpe',    icon: '⚖️', label: 'Sharpe',    desc: 'Best risk-adjusted return.',     activeCls: 'bg-purple-900 border-purple-600 text-white' },
+  { id: 'balanced',   icon: '🎯', label: 'Balanced',    desc: 'All-round (default)',                        activeCls: 'bg-green-900 border-green-600 text-white' },
+  { id: 'max_yield',  icon: '🚀', label: 'Max Yield',   desc: 'Highest return. Aggressive.',                activeCls: 'bg-orange-900 border-orange-600 text-white' },
+  { id: 'safest',     icon: '🛡', label: 'Safest',      desc: 'Lowest drawdown. Conservative.',             activeCls: 'bg-sky-900 border-sky-600 text-white' },
+  { id: 'sharpe',     icon: '⚖️', label: 'Sharpe',      desc: 'Best risk-adjusted return.',                 activeCls: 'bg-purple-900 border-purple-600 text-white' },
+  { id: 'capital_roi',icon: '📊', label: 'Capital ROI', desc: 'Best return per dollar of margin deployed.', activeCls: 'bg-amber-900 border-amber-600 text-white' },
 ]
 
 const MODE_LABELS: Record<OptMode, string> = {
@@ -269,7 +270,12 @@ function EvolveGoalPanel({
   const [open, setOpen] = useState(false)
   const [histOpen, setHistOpen] = useState(false)
 
-  const cur  = data?.current
+  type CurWithMargin = EvolveGoalResult['current'] & {
+    premium_on_margin?: number
+    min_viable_capital?: number
+    annualised_margin_roi?: number
+  }
+  const cur  = data?.current as CurWithMargin | undefined
   const prev = data?.previous
   const delta = data?.delta
   const version = data?.version ?? 0
@@ -386,6 +392,36 @@ function EvolveGoalPanel({
                   </span>
                 </div>
               </div>
+
+              {/* Capital ROI extra metrics */}
+              {goalMeta.id === 'capital_roi' && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-navy rounded-xl px-3 py-2 col-span-2">
+                    <p className="text-xs text-slate-400 mb-1">Annualised Margin ROI</p>
+                    <span className="text-sm font-bold text-amber-400">
+                      {cur!.annualised_margin_roi != null
+                        ? `${(cur!.annualised_margin_roi * 100).toFixed(0)}%/yr`
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="bg-navy rounded-xl px-3 py-2">
+                    <p className="text-xs text-slate-400 mb-1">Premium on Margin</p>
+                    <span className="text-sm font-bold text-white">
+                      {cur!.premium_on_margin != null
+                        ? `${cur!.premium_on_margin.toFixed(2)}×`
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="bg-navy rounded-xl px-3 py-2">
+                    <p className="text-xs text-slate-400 mb-1">Min Viable Capital</p>
+                    <span className="text-sm font-bold text-white">
+                      {cur!.min_viable_capital != null && cur!.min_viable_capital > 0
+                        ? `$${cur!.min_viable_capital.toLocaleString('en-US', { maximumFractionDigits: 0 })}`
+                        : '—'}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Last run timestamp */}
               {tsFormatted && (
@@ -801,11 +837,15 @@ export default function Optimizer() {
           <div className="space-y-2">
             <p className="text-xs text-slate-400 font-medium">Fitness Goal</p>
             <div className="grid grid-cols-2 gap-2">
-              {FITNESS_GOALS.map(g => (
+              {FITNESS_GOALS.map((g, idx) => (
                 <div
                   key={g.id}
                   onClick={() => setFitnessGoal(g.id)}
                   className={`rounded-xl p-3 text-left border transition-colors cursor-pointer ${
+                    idx === FITNESS_GOALS.length - 1 && FITNESS_GOALS.length % 2 !== 0
+                      ? 'col-span-2'
+                      : ''
+                  } ${
                     fitnessGoal === g.id
                       ? g.activeCls
                       : 'bg-navy border-border text-slate-400 hover:border-slate-500'

@@ -186,7 +186,7 @@ export interface PresetInfo {
   params: PresetParams
 }
 
-export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe'
+export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe' | 'capital_roi'
 export type ActivePreset = 'sweep' | `evolve_${EvolveGoal}` | 'custom'
 
 export interface PresetsData {
@@ -196,6 +196,7 @@ export interface PresetsData {
   evolve_max_yield: PresetInfo
   evolve_safest: PresetInfo
   evolve_sharpe: PresetInfo
+  evolve_capital_roi: PresetInfo
   current: { params: PresetParams }
 }
 

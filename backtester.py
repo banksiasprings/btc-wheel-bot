@@ -133,6 +133,12 @@ class BacktestResults:
     num_cycles: int
     starting_equity: float
     ending_equity: float
+    # Capital ROI metrics (Deribit margin-based)
+    total_margin_deployed: float = 0.0
+    avg_margin_utilization: float = 0.0
+    premium_on_margin: float = 0.0       # total_premium / total_margin
+    min_viable_capital: float = 0.0      # smallest equity that allowed a trade
+    annualised_margin_roi: float = 0.0   # annualised return scaled by margin efficiency
 
 
 # ── Backtester ─────────────────────────────────────────────────────────────────
@@ -446,6 +452,11 @@ class Backtester:
         trades:       list[BacktestTrade] = []
         # Recovery call tracking: set after an ITM put expires
         _recovery_min_strike: float | None = None
+        # Margin tracking for capital_roi fitness goal
+        _total_margin_deployed: float = 0.0
+        _margin_utilization_samples: list[float] = []
+        _total_premium_collected: float = 0.0
+        _min_viable_capital: float = float("inf")
 
         logger.info("=" * 60)
         logger.info("BACKTEST START")
@@ -632,6 +643,16 @@ class Backtester:
                 # Opening spread cost for the initial hedge trade
                 opening_spread = abs(initial_hedge) * spot * 0.0002
 
+                # Deribit initial margin for short put/call
+                # margin = max(0.15 - OTM_pct, 0.10) × underlying × contracts × 0.1 BTC/contract
+                otm_pct = max(0.0, (spot - strike) / spot) if cycle == "put" else max(0.0, (strike - spot) / spot)
+                margin_rate = max(0.15 - otm_pct, 0.10)
+                margin_required = margin_rate * spot * contracts * 0.1
+                _total_margin_deployed += margin_required
+                _total_premium_collected += premium * contracts
+                _margin_utilization_samples.append(margin_required / equity if equity > 0 else 0.0)
+                _min_viable_capital = min(_min_viable_capital, equity)
+
                 leg = dict(
                     cycle=cycle, entry_date=date, expiry=expiry_dt,
                     strike=strike, premium=premium, contracts=contracts,
@@ -652,7 +673,13 @@ class Backtester:
 
             equity_curve.append(equity)
 
-        return self._metrics(equity, equity_curve, dates, trades)
+        return self._metrics(
+            equity, equity_curve, dates, trades,
+            total_margin_deployed=_total_margin_deployed,
+            margin_utilization_samples=_margin_utilization_samples,
+            total_premium_collected=_total_premium_collected,
+            min_viable_capital=_min_viable_capital if _min_viable_capital < float("inf") else 0.0,
+        )
 
     # ── Metrics ────────────────────────────────────────────────────────────────
 
@@ -662,6 +689,10 @@ class Backtester:
         curve: list[float],
         dates: list[datetime],
         trades: list[BacktestTrade],
+        total_margin_deployed: float = 0.0,
+        margin_utilization_samples: list[float] | None = None,
+        total_premium_collected: float = 0.0,
+        min_viable_capital: float = 0.0,
     ) -> BacktestResults:
         eq     = np.array(curve, dtype=float)
         start  = self._cfg.backtest.starting_equity
@@ -688,6 +719,19 @@ class Backtester:
             for t in trades if t.strike > 0 and t.contracts > 0
         ]
 
+        # Capital ROI metrics
+        _samples = margin_utilization_samples or []
+        avg_margin_util = float(np.mean(_samples)) if _samples else 0.0
+        premium_on_margin = (
+            total_premium_collected / total_margin_deployed
+            if total_margin_deployed > 0 else 0.0
+        )
+        lookback_months = self._cfg.backtest.lookback_months or 12
+        annualised_margin_roi = (
+            (total_ret / (lookback_months / 12.0)) * (1.0 / avg_margin_util)
+            if avg_margin_util > 0 else 0.0
+        )
+
         return BacktestResults(
             trades=trades,
             equity_curve=list(eq),
@@ -702,6 +746,11 @@ class Backtester:
             num_cycles=len(trades),
             starting_equity=start,
             ending_equity=round(final_equity, 2),
+            total_margin_deployed=round(total_margin_deployed, 2),
+            avg_margin_utilization=round(avg_margin_util, 4),
+            premium_on_margin=round(premium_on_margin, 4),
+            min_viable_capital=round(min_viable_capital, 2),
+            annualised_margin_roi=round(annualised_margin_roi, 4),
         )
 
     # ── Output ─────────────────────────────────────────────────────────────────
