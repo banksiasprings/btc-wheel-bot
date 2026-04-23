@@ -279,6 +279,45 @@ class BotProcess:
                 self.proc.kill()
             print(f"[farm] Stopped {self.bot_id}", flush=True)
 
+    def _current_config_name(self) -> str:
+        """Read config_name from _meta in the bot's config.yaml, else 'custom'."""
+        try:
+            raw = _read_yaml(self.bot_dir / "config.yaml")
+            return raw.get("_meta", {}).get("name") or "custom"
+        except Exception:
+            return "custom"
+
+    def check_restart_requested(self) -> bool:
+        """
+        If RESTART_REQUESTED sentinel exists, reload the bot's config summary,
+        remove the sentinel, stop then start the bot, and return True.
+        """
+        sentinel = self.bot_dir / "RESTART_REQUESTED"
+        if not sentinel.exists():
+            return False
+        try:
+            assigned_name = sentinel.read_text().strip()
+            print(f"[farm] {self.bot_id}: restart requested (config={assigned_name!r})", flush=True)
+            sentinel.unlink(missing_ok=True)
+            # Reload config summary from updated config.yaml
+            merged = _read_yaml(self.bot_dir / "config.yaml")
+            strat  = merged.get("strategy", {})
+            sizing = merged.get("sizing", {})
+            self.starting_equity = float(merged.get("backtest", {}).get("starting_equity", self.starting_equity))
+            self.config_summary = {
+                "iv_rank_threshold":  strat.get("iv_rank_threshold"),
+                "target_delta_min":   strat.get("target_delta_min"),
+                "target_delta_max":   strat.get("target_delta_max"),
+                "max_equity_per_leg": sizing.get("max_equity_per_leg"),
+                "starting_equity":    self.starting_equity,
+            }
+            if self.is_running():
+                self.stop()
+            self.start()
+        except Exception as exc:
+            print(f"[farm] {self.bot_id}: restart failed: {exc}", flush=True)
+        return True
+
     def to_status_dict(self) -> dict:
         metrics = _compute_bot_metrics(self.bot_dir, self.starting_equity)
         report  = validate_bot(self.bot_dir, self.thresholds, self.starting_equity)
@@ -292,6 +331,7 @@ class BotProcess:
             "pid":            self.pid(),
             "uptime_hours":   round(uptime, 2),
             "days_running":   round(uptime / 24, 2),
+            "config_name":    self._current_config_name(),
             "config_summary": self.config_summary,
             "metrics":        metrics,
             "readiness":      _readiness_to_dict(report),
@@ -368,6 +408,11 @@ class BotFarm:
         last_status = 0.0
         while not self._shutdown:
             now = time.time()
+
+            # Check for config-assignment restart requests
+            for bot in self._bots:
+                if not self._shutdown:
+                    bot.check_restart_requested()
 
             # Restart crashed bots
             for bot in self._bots:

@@ -33,6 +33,8 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import config_store as _cs
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).parent
@@ -680,6 +682,82 @@ def control_set_mode(body: SetModeRequest) -> dict:
     return {"ok": True}
 
 
+# ── Named Config Store ────────────────────────────────────────────────────────
+
+class SaveConfigRequest(BaseModel):
+    name: str
+    params: dict
+    source: str = "manual"
+    metadata: dict | None = None
+
+
+@app.get("/configs", dependencies=[Depends(_require_api_key)])
+def list_named_configs() -> list:
+    """List all saved named configs with metadata."""
+    return _cs.list_configs()
+
+
+@app.post("/configs", dependencies=[Depends(_require_api_key)])
+def create_named_config(body: SaveConfigRequest) -> dict:
+    """Save a named config. Merges params over master config.yaml."""
+    try:
+        result = _cs.save_config(
+            name=body.name,
+            params=body.params,
+            source=body.source,
+            metadata=body.metadata,
+        )
+        return {"ok": True, "name": body.name, "config": result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/configs/{name}", dependencies=[Depends(_require_api_key)])
+def get_named_config(name: str) -> dict:
+    """Load a named config merged over master config.yaml."""
+    try:
+        return _cs.load_config_by_name(name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+
+
+@app.delete("/configs/{name}", dependencies=[Depends(_require_api_key)])
+def delete_named_config(name: str) -> dict:
+    """Delete a named config."""
+    deleted = _cs.delete_config(name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    return {"ok": True, "deleted": name}
+
+
+@app.post("/configs/{name}/promote", dependencies=[Depends(_require_api_key)])
+def promote_named_config(name: str) -> dict:
+    """
+    Promote a named config to live (overwrites config.yaml).
+    Backs up current config.yaml to config.yaml.bak first.
+    """
+    try:
+        new_live = _cs.promote_to_live(name)
+        return {"ok": True, "promoted": name, "message": "config.yaml updated; restart bot to apply"}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/configs/{name}/download", dependencies=[Depends(_require_api_key)])
+def download_named_config(name: str) -> Response:
+    """Download a named config's YAML file."""
+    path = Path(_cs.get_config_yaml_path(name))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": f'attachment; filename="{name}.yaml"'},
+    )
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 _CONFIG_KEYS: dict[str, list[str]] = {
@@ -923,11 +1001,32 @@ class OptimizerRunRequest(BaseModel):
     mode: str
     param: str | None = None
     fitness_goal: str = "balanced"
+    config_name: str | None = None   # named config to use as starting parameters
 
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
 # Modes not yet implemented in optimizer.py — return a clear error rather than crashing
 _UNIMPLEMENTED_MODES: set[str] = set()  # reconcile is now implemented
+
+
+def _apply_named_config_to_env(config_name: str) -> dict:
+    """
+    Load a named config and write it to a temp YAML file so the optimizer
+    subprocess can read it via WHEEL_BOT_CONFIG.
+    Returns the env dict to pass to the subprocess (or {} on failure).
+    """
+    import tempfile
+    try:
+        cfg_data = _cs.load_config_by_name(config_name)
+        cfg_data.pop("_meta", None)   # strip metadata before writing as config
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".yaml", delete=False, dir=str(BASE_DIR), prefix=f"_named_cfg_{config_name}_"
+        )
+        yaml.dump(cfg_data, tmp, default_flow_style=False, allow_unicode=True)
+        tmp.close()
+        return {"WHEEL_BOT_CONFIG": tmp.name}
+    except Exception:
+        return {}
 
 
 @app.post("/optimizer/run", dependencies=[Depends(_require_api_key)])
@@ -946,15 +1045,24 @@ def optimizer_run(body: OptimizerRunRequest) -> dict:
     if body.mode == "evolve" and body.fitness_goal:
         cmd += ["--fitness-goal", body.fitness_goal]
 
+    env = os.environ.copy()
+    if body.config_name:
+        named_env = _apply_named_config_to_env(body.config_name)
+        env.update(named_env)
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(BASE_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=env,
     )
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "optimizer_pid.txt").write_text(str(proc.pid))
-    return {"ok": True, "pid": proc.pid}
+    result: dict = {"ok": True, "pid": proc.pid}
+    if body.config_name:
+        result["config_name"] = body.config_name
+    return result
 
 
 @app.get("/optimizer/running", dependencies=[Depends(_require_api_key)])
@@ -1446,6 +1554,49 @@ def farm_stop() -> dict:
     except (ValueError, OSError) as exc:
         FARM_PID_FILE.unlink(missing_ok=True)
         return {"status": "not_running", "detail": str(exc)}
+
+
+class AssignConfigRequest(BaseModel):
+    config_name: str
+
+
+@app.post("/farm/bot/{bot_id}/assign-config", dependencies=[Depends(_require_api_key)])
+def farm_bot_assign_config(bot_id: str, body: AssignConfigRequest) -> dict:
+    """
+    Assign a named config to a specific farm bot.
+    Copies the named config's merged params to farm/bot_N/config.yaml.
+    The farm supervisor will detect the change and restart the bot on its next tick.
+    """
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+
+    try:
+        cfg_data = _cs.load_config_by_name(body.config_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{body.config_name}' not found")
+
+    # Strip _meta from the written config
+    meta = cfg_data.pop("_meta", {})
+
+    # Force paper/testnet mode
+    cfg_data.setdefault("deribit", {})["testnet"] = True
+
+    # Write to bot directory
+    bot_config_path = bot_dir / "config.yaml"
+    with open(bot_config_path, "w") as f:
+        yaml.dump(cfg_data, f, default_flow_style=False, allow_unicode=True)
+
+    # Write a restart sentinel the farm supervisor can poll for
+    (bot_dir / "RESTART_REQUESTED").write_text(body.config_name)
+
+    return {
+        "ok": True,
+        "bot_id": bot_id,
+        "config_name": body.config_name,
+        "config_label": meta.get("name", body.config_name),
+        "message": f"Config assigned to {bot_id}; bot will restart on next supervisor tick",
+    }
 
 
 @app.get("/farm/bot/{bot_id}/trades", dependencies=[Depends(_require_api_key)])

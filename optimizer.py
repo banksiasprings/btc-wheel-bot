@@ -1607,6 +1607,31 @@ Examples:
             json.dump(_history, _hf, indent=2)
         print(f"  History saved → {history_path} (v{_entry['version']})")
 
+        # ── Save to named config store ────────────────────────────────────────
+        try:
+            from config_store import save_config as _cs_save, genome_to_params as _g2p
+            _ts_slug = _dt_hist.now(_tz_hist.utc).strftime("%Y%m%d_%H%M")
+            _cfg_name = f"{goal}_{_ts_slug}"
+            _cfg_params = _g2p(genome_dict)
+            _cs_save(
+                name=_cfg_name,
+                params=_cfg_params,
+                source="evolved",
+                metadata={
+                    "fitness":      best_metrics.get("fitness"),
+                    "goal":         goal,
+                    "generations":  args.generations,
+                    "total_return": best_metrics.get("return_pct"),
+                    "sharpe":       best_metrics.get("sharpe"),
+                    "win_rate":     best_metrics.get("win_rate"),
+                    "drawdown":     best_metrics.get("drawdown"),
+                    "version":      _entry["version"],
+                },
+            )
+            print(f"  Config store: saved as '{_cfg_name}'")
+        except Exception as _cs_exc:
+            print(f"  [config_store] Could not save named config: {_cs_exc}")
+
     elif args.mode == "walk_forward":
         run_walk_forward(
             results_dir=Path("data/optimizer"),
