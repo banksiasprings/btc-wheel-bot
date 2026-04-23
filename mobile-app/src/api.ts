@@ -200,12 +200,15 @@ export interface PresetsData {
   current: { params: PresetParams }
 }
 
+const DEFAULT_API_URL = 'https://bot.banksiaspringsfarm.com'
+const DEFAULT_API_KEY = '3f985cae37cbfb18da4acb92219ba077'
+
 function getBase(): string {
-  return (localStorage.getItem('api_url') || '').replace(/\/$/, '')
+  return (localStorage.getItem('api_url') || DEFAULT_API_URL).replace(/\/$/, '')
 }
 
 function getKey(): string {
-  return localStorage.getItem('api_key') || ''
+  return localStorage.getItem('api_key') || DEFAULT_API_KEY
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
