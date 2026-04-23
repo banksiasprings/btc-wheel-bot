@@ -330,6 +330,81 @@ export interface ChartData {
 export const getChartData = (days: number) =>
   request<ChartData>(`/chart/btc_history?days=${days}`)
 
+// ── Farm API ──────────────────────────────────────────────────────────────────
+
+export interface BotReadinessChecks {
+  min_trades: boolean
+  min_days: boolean
+  sharpe: boolean
+  drawdown: boolean
+  win_rate: boolean
+  walk_forward: boolean
+  reconcile: boolean
+  no_kill_switch: boolean
+}
+
+export interface BotReadiness {
+  score: number
+  total: number
+  ready: boolean
+  checks: BotReadinessChecks
+}
+
+export interface BotMetrics {
+  num_trades: number
+  win_rate: number
+  total_return_pct: number
+  sharpe: number
+  max_drawdown: number
+  current_equity: number
+  starting_equity: number
+  days_running: number
+}
+
+export interface BotFarmEntry {
+  id: string
+  name: string
+  description: string
+  status: 'running' | 'stopped' | 'error'
+  pid: number | null
+  uptime_hours: number
+  days_running: number
+  config_summary: Record<string, number | null>
+  metrics: BotMetrics
+  readiness: BotReadiness
+}
+
+export interface FarmStatus {
+  updated_at: string
+  farm_running: boolean
+  bots: BotFarmEntry[]
+}
+
+export interface ReadinessReport {
+  bot_id: string
+  ready: boolean
+  checks_passed: number
+  total_checks: number
+  checks: BotReadinessChecks
+  metrics: BotMetrics
+  recommendation: 'READY FOR LIVE' | 'KEEP TESTING' | 'FAILED — REVIEW CONFIG'
+  blocking_issues: string[]
+}
+
+export const getFarmStatus = () => request<FarmStatus>('/farm/status')
+
+export const getBotReadiness = (botId: string) =>
+  request<ReadinessReport>(`/farm/bot/${botId}/readiness`)
+
+export const startFarm = () =>
+  request<{ status: string; pid: number }>('/farm/start', { method: 'POST' })
+
+export const stopFarm = () =>
+  request<{ status: string }>('/farm/stop', { method: 'POST' })
+
+export const getFarmBotTrades = (botId: string) =>
+  request<Trade[]>(`/farm/bot/${botId}/trades`)
+
 export async function testConnection(): Promise<boolean> {
   try {
     await getStatus()

@@ -1335,6 +1335,153 @@ async def proxy_sl_ws(client_ws: WebSocket):
             pass
 
 
+# ── Bot Farm endpoints ────────────────────────────────────────────────────────
+
+FARM_DIR    = BASE_DIR / "farm"
+FARM_PID_FILE = DATA_DIR / "farm_pid.txt"
+FARM_STATUS = FARM_DIR / "status.json"
+
+
+def _farm_is_running() -> bool:
+    if not FARM_PID_FILE.exists():
+        return False
+    try:
+        pid = int(FARM_PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+        stat = subprocess.run(["ps", "-p", str(pid), "-o", "stat="],
+                              capture_output=True, text=True)
+        if "Z" in stat.stdout:
+            FARM_PID_FILE.unlink(missing_ok=True)
+            return False
+        return True
+    except (ValueError, OSError):
+        FARM_PID_FILE.unlink(missing_ok=True)
+        return False
+
+
+@app.get("/farm/status", dependencies=[Depends(_require_api_key)])
+def get_farm_status() -> dict:
+    """Return farm/status.json content, or generate on-demand if stale."""
+    if not FARM_STATUS.exists():
+        raise HTTPException(status_code=404, detail="Farm has not been started")
+    data = _read_json(FARM_STATUS)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Farm status file unreadable")
+    data["farm_running"] = _farm_is_running()
+    return data
+
+
+@app.get("/farm/bot/{bot_id}/readiness", dependencies=[Depends(_require_api_key)])
+def get_bot_readiness(bot_id: str) -> dict:
+    """Return the ReadinessReport for a specific bot as JSON."""
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+    try:
+        from readiness_validator import validate_bot
+        import yaml as _yaml
+        # Load thresholds from farm_config.yaml if available
+        farm_cfg_path = BASE_DIR / "farm_config.yaml"
+        thresholds: dict = {}
+        starting_equity: float = 10_000.0
+        if farm_cfg_path.exists():
+            fc = _read_yaml(farm_cfg_path) or {}
+            thresholds = fc.get("readiness_thresholds", {})
+            # Find starting equity for this bot
+            for spec in fc.get("bots", []):
+                if spec.get("id") == bot_id:
+                    starting_equity = float(
+                        spec.get("overrides", {}).get("backtest", {}).get("starting_equity", 10_000.0)
+                    )
+                    break
+        report = validate_bot(bot_dir, thresholds=thresholds, starting_equity=starting_equity)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Validation error: {exc}")
+
+    return {
+        "bot_id":         report.bot_id,
+        "ready":          report.ready,
+        "checks_passed":  report.checks_passed,
+        "total_checks":   report.total_checks,
+        "checks":         report.checks,
+        "metrics":        report.metrics,
+        "recommendation": report.recommendation,
+        "blocking_issues": report.blocking_issues,
+    }
+
+
+@app.post("/farm/start", dependencies=[Depends(_require_api_key)])
+def farm_start() -> dict:
+    """Start the bot farm supervisor (bot_farm.py) as a subprocess."""
+    if _farm_is_running():
+        pid = int(FARM_PID_FILE.read_text().strip())
+        return {"status": "already_running", "pid": pid}
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    FARM_DIR.mkdir(parents=True, exist_ok=True)
+
+    log_path = BASE_DIR / "logs" / "farm.log"
+    log_path.parent.mkdir(exist_ok=True)
+
+    proc = subprocess.Popen(
+        [sys.executable, str(BASE_DIR / "bot_farm.py")],
+        cwd=str(BASE_DIR),
+        stdout=open(log_path, "a"),
+        stderr=subprocess.STDOUT,
+    )
+    FARM_PID_FILE.write_text(str(proc.pid))
+    return {"status": "started", "pid": proc.pid}
+
+
+@app.post("/farm/stop", dependencies=[Depends(_require_api_key)])
+def farm_stop() -> dict:
+    """Send SIGTERM to the bot_farm.py process."""
+    if not FARM_PID_FILE.exists():
+        return {"status": "not_running"}
+    try:
+        pid = int(FARM_PID_FILE.read_text().strip())
+        os.kill(pid, signal.SIGTERM)
+        FARM_PID_FILE.unlink(missing_ok=True)
+        return {"status": "stopped", "pid": pid}
+    except (ValueError, OSError) as exc:
+        FARM_PID_FILE.unlink(missing_ok=True)
+        return {"status": "not_running", "detail": str(exc)}
+
+
+@app.get("/farm/bot/{bot_id}/trades", dependencies=[Depends(_require_api_key)])
+def get_farm_bot_trades(bot_id: str) -> list:
+    """Return trades.csv content for a specific farm bot as a JSON array."""
+    import csv as _csv
+    bot_dir = FARM_DIR / bot_id
+    trades_path = bot_dir / "data" / "trades.csv"
+    if not trades_path.exists():
+        return []
+    try:
+        with open(trades_path, newline="") as f:
+            rows = list(_csv.DictReader(f))
+        # Convert numeric-looking fields
+        numeric_fields = {
+            "pnl_usd", "pnl_btc", "equity_before", "equity_after",
+            "entry_price", "exit_price", "contracts", "strike",
+            "btc_price", "dte_at_entry", "dte_at_close",
+        }
+        result = []
+        for row in rows:
+            clean: dict = {}
+            for k, v in row.items():
+                if k in numeric_fields:
+                    try:
+                        clean[k] = float(v)
+                    except (ValueError, TypeError):
+                        clean[k] = v
+                else:
+                    clean[k] = v
+            result.append(clean)
+        return sorted(result, key=lambda t: t.get("timestamp", ""), reverse=True)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error reading trades: {exc}")
+
+
 # ── PWA static file serving ────────────────────────────────────────────────────
 _STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
 
