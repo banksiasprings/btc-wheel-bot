@@ -8,7 +8,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['*.svg'],
+      includeAssets: ['*.svg', '*.png', '*.ico', 'icons/*.png'],
       manifest: {
         name: 'Wheel Bot',
         short_name: 'Wheel Bot',
@@ -20,15 +20,20 @@ export default defineConfig({
         scope: '/btc-wheel-bot/',
         icons: [
           {
-            src: 'icon-192.png',
+            src: '/btc-wheel-bot/icons/icon-192.png',
             sizes: '192x192',
             type: 'image/png',
           },
           {
-            src: 'icon-512.png',
+            src: '/btc-wheel-bot/icons/icon-512.png',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any maskable',
+          },
+          {
+            src: '/btc-wheel-bot/icons/apple-touch-icon.png',
+            sizes: '180x180',
+            type: 'image/png',
           },
         ],
       },
