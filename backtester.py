@@ -781,10 +781,6 @@ class Backtester:
             ["Max drawdown",       f"{results.max_drawdown_pct:.2f}%"],
             ["Win rate",           f"{results.win_rate_pct:.1f}%"],
             ["Avg premium yield",  f"{results.avg_premium_yield_pct:.2f}% / contract"],
-            ["Total margin deployed", f"${results.total_margin_deployed:,.2f}"],
-            ["Premium on margin",  f"{results.premium_on_margin:.4f}"],
-            ["Min viable capital", f"${results.min_viable_capital:,.2f}"],
-            ["Annualised margin ROI", f"{results.annualised_margin_roi:.4f}"],
         ]
 
         if _tab:
