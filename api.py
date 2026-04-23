@@ -480,7 +480,7 @@ def get_evolve_results() -> dict:
 def get_evolve_results_all() -> dict:
     """Return per-goal evolution results with version history and delta vs previous run."""
     result: dict[str, dict] = {}
-    for goal in ("balanced", "max_yield", "safest", "sharpe"):
+    for goal in ("balanced", "max_yield", "safest", "sharpe", "capital_roi"):
         genome = _read_yaml(OPT_DIR / f"best_genome_{goal}.yaml") or _read_yaml(OPT_DIR / "best_genome.yaml")
         ts = _evolve_goal_ts(goal)
 
@@ -686,9 +686,16 @@ def control_set_mode(body: SetModeRequest) -> dict:
 
 class SaveConfigRequest(BaseModel):
     name: str
-    params: dict
+    params: dict = {}
     source: str = "manual"
+    # Legacy nested metadata dict OR flat fields (frontend sends flat)
     metadata: dict | None = None
+    # Flat metadata fields accepted from frontend
+    notes: str | None = None
+    fitness: float | None = None
+    total_return_pct: float | None = None
+    sharpe: float | None = None
+    goal: str | None = None
 
 
 @app.get("/configs", dependencies=[Depends(_require_api_key)])
@@ -699,13 +706,27 @@ def list_named_configs() -> list:
 
 @app.post("/configs", dependencies=[Depends(_require_api_key)])
 def create_named_config(body: SaveConfigRequest) -> dict:
-    """Save a named config. Merges params over master config.yaml."""
+    """Save a named config. Merges params over master config.yaml.
+    Accepts either a nested 'metadata' dict or flat fields (notes, fitness, etc.).
+    """
     try:
+        # Merge flat fields into metadata dict
+        metadata = dict(body.metadata or {})
+        if body.notes is not None:
+            metadata.setdefault("notes", body.notes)
+        if body.fitness is not None:
+            metadata.setdefault("fitness", body.fitness)
+        if body.total_return_pct is not None:
+            metadata.setdefault("total_return_pct", body.total_return_pct)
+        if body.sharpe is not None:
+            metadata.setdefault("sharpe", body.sharpe)
+        if body.goal is not None:
+            metadata.setdefault("goal", body.goal)
         result = _cs.save_config(
             name=body.name,
             params=body.params,
             source=body.source,
-            metadata=body.metadata,
+            metadata=metadata or None,
         )
         return {"ok": True, "name": body.name, "config": result}
     except Exception as exc:
@@ -838,7 +859,7 @@ def _sweep_best_fitness() -> float | None:
     return best
 
 
-_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe")
+_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi")
 
 
 def _evolve_preset_for_goal(goal: str) -> tuple[dict | None, float | None]:
@@ -1576,11 +1597,18 @@ def farm_bot_assign_config(bot_id: str, body: AssignConfigRequest) -> dict:
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Config '{body.config_name}' not found")
 
-    # Strip _meta from the written config
+    # Extract _meta, preserve a minimal version so bot_farm can read config_name
     meta = cfg_data.pop("_meta", {})
 
     # Force paper/testnet mode
     cfg_data.setdefault("deribit", {})["testnet"] = True
+
+    # Write back a minimal _meta so _current_config_name() works
+    cfg_data["_meta"] = {
+        "name":       meta.get("name", body.config_name),
+        "source":     meta.get("source", "assigned"),
+        "assigned_at": datetime.utcnow().isoformat(),
+    }
 
     # Write to bot directory
     bot_config_path = bot_dir / "config.yaml"

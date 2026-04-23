@@ -285,7 +285,7 @@ function StepValidate({
     setRunning(r => ({ ...r, [key]: true }))
     setResults(r => ({ ...r, [key]: '🔄 Running…' }))
     try {
-      await runOptimizer(mode)
+      await runOptimizer(mode, undefined, undefined, selectedConfig)
       setResults(r => ({ ...r, [key]: '✅ Done' }))
     } catch (e) {
       setResults(r => ({ ...r, [key]: `❌ ${String(e)}` }))
@@ -389,7 +389,7 @@ function StepPaperTrade({
   const bot = bots.find(b => b.id === selectedBot) ?? null
   const readinessScore  = bot?.readiness.score  ?? 0
   const readinessTotal  = bot?.readiness.total  ?? 8
-  const configName      = (bot?.config_summary as Record<string, unknown> | undefined)?.['_meta_name'] as string | undefined
+  const configName      = bot?.config_name ?? null
 
   const status: StepStatus = bots.length === 0 ? 'not_started'
     : bots.some(b => b.readiness.ready) ? 'complete'

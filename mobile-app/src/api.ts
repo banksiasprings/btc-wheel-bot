@@ -266,10 +266,10 @@ export const updateConfig = (config: Partial<BotConfig>) =>
     method: 'POST',
     body: JSON.stringify(config),
   })
-export const runOptimizer = (mode: string, param?: string, fitness_goal?: string) =>
+export const runOptimizer = (mode: string, param?: string, fitness_goal?: string, config_name?: string | null) =>
   request<{ ok: boolean; pid: number; mode: string }>('/optimizer/run', {
     method: 'POST',
-    body: JSON.stringify({ mode, param, fitness_goal }),
+    body: JSON.stringify({ mode, param, fitness_goal, config_name: config_name ?? undefined }),
   })
 
 export const getBtcPrice = () => request<{ price: number; cached: boolean; age_sec: number }>('/market/btc_price')
@@ -372,6 +372,7 @@ export interface BotFarmEntry {
   pid: number | null
   uptime_hours: number
   days_running: number
+  config_name: string | null     // named config currently assigned, if any
   config_summary: Record<string, number | null>
   metrics: BotMetrics
   readiness: BotReadiness

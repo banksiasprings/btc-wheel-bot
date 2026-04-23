@@ -13,14 +13,15 @@ const EVOLVE_PRESET_CONFIGS: {
   key: Exclude<ActivePreset, 'sweep' | 'custom'>
   label: string
   icon: string
-  accent: 'green' | 'orange' | 'sky' | 'purple'
+  accent: 'green' | 'orange' | 'sky' | 'purple' | 'amber'
   unavailableMsg: string
   glossaryKey: string
 }[] = [
-  { key: 'evolve_balanced',  label: 'Evolved: Balanced',  icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',  glossaryKey: 'strategy_balanced'  },
-  { key: 'evolve_max_yield', label: 'Evolved: Max Yield', icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first', glossaryKey: 'strategy_max_yield' },
-  { key: 'evolve_safest',    label: 'Evolved: Safest',    icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',    glossaryKey: 'strategy_safest'    },
-  { key: 'evolve_sharpe',    label: 'Evolved: Sharpe',    icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',    glossaryKey: 'strategy_sharpe'    },
+  { key: 'evolve_balanced',    label: 'Evolved: Balanced',    icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',    glossaryKey: 'strategy_balanced'  },
+  { key: 'evolve_max_yield',   label: 'Evolved: Max Yield',   icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first',   glossaryKey: 'strategy_max_yield' },
+  { key: 'evolve_safest',      label: 'Evolved: Safest',      icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',      glossaryKey: 'strategy_safest'    },
+  { key: 'evolve_sharpe',      label: 'Evolved: Sharpe',      icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',      glossaryKey: 'strategy_sharpe'    },
+  { key: 'evolve_capital_roi', label: 'Evolved: Capital ROI', icon: '📊', accent: 'amber',  unavailableMsg: 'Run Evolve with Capital ROI goal first', glossaryKey: 'strategy_balanced'  },
 ]
 
 interface Props {

@@ -747,7 +747,7 @@ export default function Optimizer() {
     setLaunchMsg('')
     setCompleted(false)
     try {
-      const r = await runOptimizer(mode, undefined, mode === 'evolve' ? fitnessGoal : undefined)
+      const r = await runOptimizer(mode, undefined, mode === 'evolve' ? fitnessGoal : undefined, testingConfig)
       setLaunchMsg(`Started (PID ${r.pid})`)
       setRunning(true)
     } catch (e) {

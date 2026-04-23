@@ -60,21 +60,42 @@ def get_config_yaml_path(name: str) -> str:
 
 
 def list_configs() -> list[dict]:
-    """Return all saved configs with metadata: name, created_at, source, fitness, notes."""
+    """Return all saved configs with metadata: name, created_at, source, fitness, notes, etc."""
     _ensure_configs_dir()
     configs: list[dict] = []
     for yaml_file in sorted(CONFIGS_DIR.glob("*.yaml")):
         try:
             data = yaml.safe_load(yaml_file.read_text()) or {}
             meta = data.get("_meta", {})
+            # Extract a minimal params subset for display / Settings load
+            strategy = data.get("strategy", {})
+            sizing    = data.get("sizing", {})
+            backtest  = data.get("backtest", {})
+            params = {
+                k: v for k, v in {
+                    "iv_rank_threshold":        strategy.get("iv_rank_threshold"),
+                    "target_delta_min":         strategy.get("target_delta_min"),
+                    "target_delta_max":         strategy.get("target_delta_max"),
+                    "min_dte":                  strategy.get("min_dte"),
+                    "max_dte":                  strategy.get("max_dte"),
+                    "max_equity_per_leg":       sizing.get("max_equity_per_leg"),
+                    "min_free_equity_fraction": sizing.get("min_free_equity_fraction"),
+                    "premium_fraction_of_spot": backtest.get("premium_fraction_of_spot"),
+                    "approx_otm_offset":        backtest.get("approx_otm_offset"),
+                    "starting_equity":          backtest.get("starting_equity"),
+                }.items() if v is not None
+            }
             configs.append({
-                "name":       meta.get("name", yaml_file.stem),
-                "slug":       yaml_file.stem,
-                "created_at": meta.get("created_at"),
-                "source":     meta.get("source", "manual"),
-                "fitness":    meta.get("fitness"),
-                "goal":       meta.get("goal"),
-                "notes":      meta.get("notes", ""),
+                "name":            meta.get("name", yaml_file.stem),
+                "slug":            yaml_file.stem,
+                "created_at":      meta.get("created_at"),
+                "source":          meta.get("source", "manual"),
+                "fitness":         meta.get("fitness"),
+                "goal":            meta.get("goal"),
+                "notes":           meta.get("notes", ""),
+                "total_return_pct": meta.get("total_return_pct"),
+                "sharpe":          meta.get("sharpe"),
+                "params":          params,
             })
         except Exception:
             continue

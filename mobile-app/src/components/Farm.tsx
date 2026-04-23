@@ -97,11 +97,8 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
   const r = bot.readiness
   const daysToReady = r.ready ? 0 : Math.max(0, 30 - (m.days_running ?? 0))
 
-  // Config name from _meta or config_summary
-  const configName: string =
-    (bot.config_summary as Record<string, unknown>)?.['_meta_name'] as string
-    ?? (bot.config_summary as Record<string, unknown>)?.['name'] as string
-    ?? 'Unassigned'
+  // Config name from dedicated field (set by assign-config endpoint)
+  const configName: string = bot.config_name ?? 'Unassigned'
 
   async function handleAssign() {
     if (!assignConfig) return
