@@ -4,8 +4,10 @@ import {
   getSweepResults, getEvolveResultsAll, getOptimizerProgress,
   OptimizerSummary, SweepResults, EvolveAllResults, EvolveGoalResult,
   SweepEntry, EvolveGoal, EvolutionProgress,
+  saveConfig as apiSaveConfig,
 } from '../api'
 import InfoModal from './InfoModal'
+import ConfigSelector from './ConfigSelector'
 import { GLOSSARY } from '../lib/glossary'
 
 type OptMode = 'sweep' | 'evolve' | 'walk_forward' | 'monte_carlo' | 'reconcile'
@@ -641,6 +643,14 @@ export default function Optimizer() {
   const [wfOpen,      setWfOpen]      = useState(false)
   const [mcOpen,      setMcOpen]      = useState(false)
   const [progress,    setProgress]    = useState<EvolutionProgress | null>(null)
+  const [testingConfig, setTestingConfig] = useState<string | null>(null)
+
+  // Save-as-named-config dialog state
+  const [showSaveDialog, setShowSaveDialog] = useState(false)
+  const [saveName,       setSaveName]       = useState('')
+  const [saveNotes,      setSaveNotes]      = useState('')
+  const [savingConfig,   setSavingConfig]   = useState(false)
+  const [saveConfigMsg,  setSaveConfigMsg]  = useState('')
 
   const fastPollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
   const slowPollRef     = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -707,6 +717,30 @@ export default function Optimizer() {
       setProgress(null)
     }
   }, [running, mode])
+
+  async function handleSaveConfig() {
+    if (!saveName.trim()) return
+    setSavingConfig(true)
+    setSaveConfigMsg('')
+    try {
+      const cur = mode === 'evolve' && evolveAll?.[fitnessGoal]?.current
+      await apiSaveConfig({
+        name: saveName.trim(),
+        source: 'evolved',
+        notes: saveNotes.trim() || undefined,
+        fitness: cur ? cur.fitness : summary?.best_fitness ?? undefined,
+        total_return_pct: cur ? cur.return_pct : undefined,
+        sharpe: cur ? cur.sharpe : undefined,
+        params: {},
+      })
+      setSaveConfigMsg(`✅ Saved as '${saveName.trim()}' — go to Pipeline to validate it →`)
+      setShowSaveDialog(false)
+    } catch (e) {
+      setSaveConfigMsg(String(e))
+    } finally {
+      setSavingConfig(false)
+    }
+  }
 
   async function handleRun() {
     setLaunching(true)
@@ -777,6 +811,27 @@ export default function Optimizer() {
           sub={rec ? `RMSE $${(rec.premium_rmse as number)?.toFixed(0) ?? '—'}` : 'No results yet'}
         />
       </div>
+
+      {/* Config context — what is this testing? */}
+      <div className="bg-card rounded-2xl p-4 border border-border">
+        <ConfigSelector
+          value={testingConfig}
+          onChange={setTestingConfig}
+          label="Testing config"
+          showStats
+        />
+      </div>
+
+      {/* Save-as-named-config message */}
+      {saveConfigMsg && (
+        <div className={`rounded-xl px-4 py-3 text-sm border ${
+          saveConfigMsg.startsWith('✅')
+            ? 'bg-green-950 border-green-800 text-green-300'
+            : 'bg-red-950 border-red-800 text-red-300'
+        }`}>
+          {saveConfigMsg}
+        </div>
+      )}
 
       {/* Run section */}
       <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
@@ -878,6 +933,60 @@ export default function Optimizer() {
         >
           {launching ? 'Launching…' : running ? 'Already Running' : `Run ${MODE_LABELS[mode]}`}
         </button>
+
+        {/* Save as named config — available after a completed run */}
+        {(completed || summary?.best_fitness != null) && (
+          <button
+            onClick={() => {
+              const autoName = mode === 'evolve'
+                ? `${fitnessGoal}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
+                : `sweep_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`
+              setSaveName(autoName)
+              setSaveNotes('')
+              setSaveConfigMsg('')
+              setShowSaveDialog(true)
+            }}
+            className="w-full py-2.5 rounded-xl border border-amber-700 text-amber-300 text-sm hover:bg-amber-900/30"
+          >
+            Save as named config…
+          </button>
+        )}
+
+        {/* Save dialog */}
+        {showSaveDialog && (
+          <div className="space-y-2 pt-1 border-t border-border">
+            <p className="text-xs text-slate-400 font-medium">Save config as</p>
+            <input
+              type="text"
+              value={saveName}
+              onChange={e => setSaveName(e.target.value)}
+              placeholder="Config name"
+              className="w-full bg-navy border border-amber-700 rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400"
+            />
+            <input
+              type="text"
+              value={saveNotes}
+              onChange={e => setSaveNotes(e.target.value)}
+              placeholder="Notes (optional)"
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-400"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveConfig}
+                disabled={savingConfig || !saveName.trim()}
+                className="flex-1 py-2 rounded-xl bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-semibold"
+              >
+                {savingConfig ? 'Saving…' : 'Save Config'}
+              </button>
+              <button
+                onClick={() => setShowSaveDialog(false)}
+                className="px-3 py-2 rounded-xl bg-slate-700 text-slate-300 text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Walk-Forward detail */}

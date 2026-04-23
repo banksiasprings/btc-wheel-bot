@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import {
   getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset,
   getConfigHistory, getNotifierConfig, setupNotifier, testNotifier,
-  BotConfig, PresetsData, ActivePreset, ConfigHistoryEntry, NotifierConfig,
+  listConfigs, saveConfig as apiSaveConfig,
+  BotConfig, PresetsData, ActivePreset, ConfigHistoryEntry, NotifierConfig, NamedConfig,
 } from '../api'
 import InfoModal from './InfoModal'
 import SystemGuide from './SystemGuide'
@@ -44,6 +45,10 @@ export default function Settings({ onLogout }: Props) {
   const [tgToken, setTgToken] = useState('')
   const [tgChatId, setTgChatId] = useState('')
   const [tgStatus, setTgStatus] = useState('')
+  const [namedConfigs, setNamedConfigs] = useState<NamedConfig[]>([])
+  const [savingAsConfig, setSavingAsConfig] = useState(false)
+  const [saveAsConfigMsg, setSaveAsConfigMsg] = useState('')
+  const [saveAsConfigName, setSaveAsConfigName] = useState('')
 
   function showStatus(msg: string, ms = 3000) {
     setSaveStatus(msg)
@@ -56,11 +61,13 @@ export default function Settings({ onLogout }: Props) {
       getPresets().catch(() => null),
       getConfigHistory().catch(() => []),
       getNotifierConfig().catch(() => null),
-    ]).then(([cfg, pr, hist, ntf]) => {
+      listConfigs().catch(() => [] as NamedConfig[]),
+    ]).then(([cfg, pr, hist, ntf, cfgs]) => {
       if (cfg) setConfig(cfg)
       setPresets(pr)
       setConfigHistory(hist ?? [])
       setNotifierCfg(ntf)
+      setNamedConfigs(cfgs ?? [])
     }).finally(() => setLoading(false))
   }, [])
 
@@ -109,6 +116,62 @@ export default function Settings({ onLogout }: Props) {
       showStatus(`${label} loaded — restart bot to apply ✓`, 5000)
     } catch (e) {
       showStatus(String(e))
+    }
+  }
+
+  async function handleLoadNamedConfig(cfg: NamedConfig) {
+    if (!cfg.params || Object.keys(cfg.params).length === 0) {
+      showStatus('This config has no saved parameters to load', 3000)
+      return
+    }
+    // Map NamedConfig.params → BotConfig fields and apply
+    setConfig(c => {
+      if (!c) return c
+      const p = cfg.params
+      return {
+        ...c,
+        delta_target_min:           p.target_delta_min       ?? c.delta_target_min,
+        delta_target_max:           p.target_delta_max       ?? c.delta_target_max,
+        min_dte:                    p.min_dte                ?? c.min_dte,
+        max_dte:                    p.max_dte                ?? c.max_dte,
+        premium_fraction_of_spot:   p.premium_fraction_of_spot ?? c.premium_fraction_of_spot,
+        max_equity_per_leg:         p.max_equity_per_leg     ?? c.max_equity_per_leg,
+        min_free_equity_fraction:   p.min_free_equity_fraction ?? c.min_free_equity_fraction,
+        iv_rank_threshold:          p.iv_rank_threshold      ?? c.iv_rank_threshold,
+        starting_equity:            p.starting_equity        ?? c.starting_equity,
+      }
+    })
+    showStatus(`Loaded '${cfg.name}' into Settings fields — review and Save Config ✓`, 5000)
+  }
+
+  async function handleSaveCurrentAsConfig() {
+    if (!config || !saveAsConfigName.trim()) return
+    setSavingAsConfig(true)
+    setSaveAsConfigMsg('')
+    try {
+      await apiSaveConfig({
+        name: saveAsConfigName.trim(),
+        source: 'manual',
+        params: {
+          iv_rank_threshold:        config.iv_rank_threshold        ?? undefined,
+          target_delta_min:         config.delta_target_min         ?? undefined,
+          target_delta_max:         config.delta_target_max         ?? undefined,
+          min_dte:                  config.min_dte                  ?? undefined,
+          max_dte:                  config.max_dte                  ?? undefined,
+          max_equity_per_leg:       config.max_equity_per_leg       ?? undefined,
+          min_free_equity_fraction: config.min_free_equity_fraction ?? undefined,
+          premium_fraction_of_spot: config.premium_fraction_of_spot ?? undefined,
+          starting_equity:          config.starting_equity          ?? undefined,
+        },
+      })
+      setSaveAsConfigMsg(`✅ Saved as '${saveAsConfigName.trim()}'`)
+      setSaveAsConfigName('')
+      const cfgs = await listConfigs().catch(() => [] as NamedConfig[])
+      setNamedConfigs(cfgs)
+    } catch (e) {
+      setSaveAsConfigMsg(String(e))
+    } finally {
+      setSavingAsConfig(false)
     }
   }
 
@@ -236,6 +299,81 @@ export default function Settings({ onLogout }: Props) {
                 />
               )
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Named configs */}
+      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
+        <p className="text-sm font-semibold text-white">Named Configs</p>
+        <p className="text-xs text-slate-400">
+          Tap a config to load its values into the fields below.
+        </p>
+
+        {namedConfigs.length === 0 && (
+          <p className="text-xs text-slate-500">
+            No named configs yet — save your current settings or evolve a config via the Pipeline tab.
+          </p>
+        )}
+
+        <div className="space-y-2">
+          {namedConfigs.map(cfg => (
+            <button
+              key={cfg.name}
+              onClick={() => handleLoadNamedConfig(cfg)}
+              className="w-full text-left rounded-xl bg-navy border border-border hover:border-amber-600 px-3 py-2.5 transition-colors"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-white">{cfg.name}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${
+                  cfg.source === 'evolved'  ? 'bg-green-900 text-green-300 border-green-700' :
+                  cfg.source === 'promoted' ? 'bg-amber-900 text-amber-300 border-amber-700' :
+                  'bg-slate-800 text-slate-400 border-slate-600'
+                }`}>
+                  {cfg.source.charAt(0).toUpperCase() + cfg.source.slice(1)}
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
+                {cfg.fitness != null && <span>Fitness {cfg.fitness.toFixed(2)}</span>}
+                {cfg.total_return_pct != null && (
+                  <span className={cfg.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {cfg.total_return_pct >= 0 ? '+' : ''}{cfg.total_return_pct.toFixed(1)}%
+                  </span>
+                )}
+                {cfg.sharpe != null && <span>Sharpe {cfg.sharpe.toFixed(2)}</span>}
+                {cfg.notes && <span className="italic">{cfg.notes}</span>}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* Save current settings as named config */}
+        {config && (
+          <div className="pt-2 border-t border-border space-y-2">
+            <p className="text-xs text-slate-400 font-medium">Save current settings as config</p>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={saveAsConfigName}
+                onChange={e => setSaveAsConfigName(e.target.value)}
+                placeholder="Config name"
+                className="flex-1 bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 placeholder-slate-600"
+              />
+              <button
+                onClick={handleSaveCurrentAsConfig}
+                disabled={savingAsConfig || !saveAsConfigName.trim()}
+                className="px-4 py-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm rounded-xl font-medium"
+              >
+                {savingAsConfig ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+            {saveAsConfigMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${
+                saveAsConfigMsg.startsWith('✅')
+                  ? 'bg-green-950 border-green-800 text-green-300'
+                  : 'bg-red-950 border-red-800 text-red-300'
+              }`}>{saveAsConfigMsg}</p>
+            )}
           </div>
         )}
       </div>

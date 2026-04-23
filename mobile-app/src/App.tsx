@@ -3,29 +3,32 @@ import SetupScreen from './components/SetupScreen'
 import Dashboard from './components/Dashboard'
 import Trades from './components/Trades'
 import Optimizer from './components/Optimizer'
+import Pipeline from './components/Pipeline'
 import Settings from './components/Settings'
 import CodeGuide from './components/CodeGuide'
 import GraphTab from './components/GraphTab'
 import Farm from './components/Farm'
 
-type Tab = 'dashboard' | 'graph' | 'trades' | 'optimizer' | 'farm' | 'code' | 'settings'
+type Tab = 'dashboard' | 'pipeline' | 'farm' | 'optimizer' | 'graph' | 'trades' | 'code' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   dashboard: '⬡',
+  pipeline:  '🗺',
+  farm:      '🤖',
+  optimizer: '⌁',
   graph:     '📈',
   trades:    '≡',
-  optimizer: '⌁',
-  farm:      '🤖',
   code:      '</>',
   settings:  '⚙',
 }
 
 const TAB_LABELS: Record<Tab, string> = {
   dashboard: 'Dashboard',
+  pipeline:  'Pipeline',
+  farm:      'Farm',
+  optimizer: 'Optimizer',
   graph:     'Graph',
   trades:    'Trades',
-  optimizer: 'Optimizer',
-  farm:      'Farm',
   code:      'Code',
   settings:  'Settings',
 }
@@ -48,10 +51,11 @@ export default function App() {
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'dashboard' && <Dashboard />}
+        {activeTab === 'pipeline'  && <Pipeline />}
+        {activeTab === 'farm'      && <Farm />}
+        {activeTab === 'optimizer' && <Optimizer />}
         {activeTab === 'graph'     && <GraphTab />}
         {activeTab === 'trades'    && <Trades />}
-        {activeTab === 'optimizer' && <Optimizer />}
-        {activeTab === 'farm'      && <Farm />}
         {activeTab === 'code'      && <CodeGuide />}
         {activeTab === 'settings'  && <Settings onLogout={() => setIsSetup(false)} />}
       </main>

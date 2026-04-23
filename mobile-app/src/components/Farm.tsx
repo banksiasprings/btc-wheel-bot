@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getFarmStatus, startFarm, stopFarm, FarmStatus, BotFarmEntry } from '../api'
+import { getFarmStatus, startFarm, stopFarm, FarmStatus, BotFarmEntry, assignBotConfig, promoteConfig } from '../api'
+import ConfigSelector from './ConfigSelector'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
@@ -54,14 +55,14 @@ function ReadinessBar({ score, total }: { score: number; total: number }) {
   }
 
   return (
-    <div className="mt-2">
-      <div className="flex items-center justify-between mb-1">
-        <span className={`text-xs font-medium ${labelCls}`}>
+    <div className="mt-2 space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={`text-xs font-semibold ${labelCls}`}>
           {score === total ? '✅ ' : ''}{label}
         </span>
-        <span className="text-xs text-slate-400">{score}/{total}</span>
+        <span className="text-xs font-mono font-bold text-white">{score}/{total} checks</span>
       </div>
-      <div className="h-1.5 rounded-full bg-slate-700 overflow-hidden">
+      <div className="h-3 rounded-full bg-slate-700 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${barColor}`}
           style={{ width: `${pct * 100}%` }}
@@ -83,11 +84,54 @@ function StatusDot({ status }: { status: string }) {
 
 // ── Bot card ─────────────────────────────────────────────────────────────────
 
-function BotCard({ bot }: { bot: BotFarmEntry }) {
-  const [expanded, setExpanded] = useState(false)
+function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void }) {
+  const [expanded, setExpanded]         = useState(false)
+  const [assignConfig, setAssignConfig] = useState<string | null>(null)
+  const [assigning, setAssigning]       = useState(false)
+  const [assignMsg, setAssignMsg]       = useState('')
+  const [confirmPromote, setConfirmPromote] = useState(false)
+  const [promoting, setPromoting]           = useState(false)
+  const [promoteMsg, setPromoteMsg]         = useState('')
+
   const m = bot.metrics
   const r = bot.readiness
   const daysToReady = r.ready ? 0 : Math.max(0, 30 - (m.days_running ?? 0))
+
+  // Config name from _meta or config_summary
+  const configName: string =
+    (bot.config_summary as Record<string, unknown>)?.['_meta_name'] as string
+    ?? (bot.config_summary as Record<string, unknown>)?.['name'] as string
+    ?? 'Unassigned'
+
+  async function handleAssign() {
+    if (!assignConfig) return
+    setAssigning(true)
+    setAssignMsg('')
+    try {
+      await assignBotConfig(bot.id, assignConfig)
+      setAssignMsg(`✅ Assigned '${assignConfig}'`)
+      onRefresh()
+    } catch (e) {
+      setAssignMsg(`❌ ${String(e)}`)
+    } finally {
+      setAssigning(false)
+    }
+  }
+
+  async function handlePromote() {
+    if (!assignConfig) return
+    setPromoting(true)
+    try {
+      const res = await promoteConfig(assignConfig)
+      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'}`)
+      setConfirmPromote(false)
+      onRefresh()
+    } catch (e) {
+      setPromoteMsg(`❌ ${String(e)}`)
+    } finally {
+      setPromoting(false)
+    }
+  }
 
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
@@ -99,7 +143,16 @@ function BotCard({ bot }: { bot: BotFarmEntry }) {
         <div className="flex items-center gap-2.5 min-w-0">
           <StatusDot status={bot.status} />
           <div className="min-w-0">
-            <p className="font-semibold text-white text-sm truncate">{bot.name}</p>
+            <div className="flex items-center gap-2">
+              <p className="font-semibold text-white text-sm truncate">{bot.name}</p>
+              <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${
+                configName === 'Unassigned'
+                  ? 'bg-slate-800 text-slate-500 border-slate-600'
+                  : 'bg-amber-900 text-amber-300 border-amber-700'
+              }`}>
+                {configName}
+              </span>
+            </div>
             <p className="text-xs text-slate-500 truncate">{bot.description}</p>
           </div>
         </div>
@@ -183,6 +236,84 @@ function BotCard({ bot }: { bot: BotFarmEntry }) {
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+
+          {/* Assign config */}
+          <div className="mt-3 pt-2 border-t border-border/30 space-y-2">
+            <p className="text-xs text-slate-500 uppercase tracking-wide">Assign Config</p>
+            <ConfigSelector
+              value={assignConfig}
+              onChange={setAssignConfig}
+              label="Config to assign"
+              showStats={false}
+            />
+            {assignMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${
+                assignMsg.startsWith('✅')
+                  ? 'bg-green-950 border-green-800 text-green-300'
+                  : 'bg-red-950 border-red-800 text-red-300'
+              }`}>{assignMsg}</p>
+            )}
+            <button
+              onClick={handleAssign}
+              disabled={assigning || !assignConfig}
+              className="w-full py-2 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-xs font-semibold"
+            >
+              {assigning ? 'Assigning…' : 'Assign Config'}
+            </button>
+          </div>
+
+          {/* Promote to Live — only if 8/8 ready */}
+          {r.ready && (
+            <div className="mt-3 pt-2 border-t border-green-900/50 space-y-2">
+              {promoteMsg && (
+                <p className={`text-xs px-3 py-2 rounded-lg border ${
+                  promoteMsg.startsWith('✅')
+                    ? 'bg-green-950 border-green-800 text-green-300'
+                    : 'bg-red-950 border-red-800 text-red-300'
+                }`}>{promoteMsg}</p>
+              )}
+              <button
+                onClick={() => setConfirmPromote(true)}
+                disabled={!assignConfig}
+                className="w-full py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                Promote to Live
+              </button>
+              {!assignConfig && (
+                <p className="text-xs text-slate-500 text-center">Select a config above to promote</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Promote confirm dialog */}
+      {confirmPromote && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-green-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="text-3xl">⬆️</div>
+            <h3 className="font-bold text-white text-lg">Promote to Live?</h3>
+            <p className="text-slate-400 text-sm">
+              This will overwrite the live config with{' '}
+              <span className="text-green-400 font-medium">{assignConfig}</span>.{' '}
+              The live bot will restart. Are you sure?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmPromote(false)}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePromote}
+                disabled={promoting}
+                className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                {promoting ? 'Promoting…' : 'Promote'}
+              </button>
             </div>
           </div>
         </div>
@@ -436,7 +567,7 @@ export default function Farm() {
       {bots.length > 0 && (
         <div className="space-y-3">
           {bots.map(bot => (
-            <BotCard key={bot.id} bot={bot} />
+            <BotCard key={bot.id} bot={bot} onRefresh={fetchStatus} />
           ))}
         </div>
       )}

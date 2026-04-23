@@ -408,6 +408,52 @@ export const stopFarm = () =>
 export const getFarmBotTrades = (botId: string) =>
   request<Trade[]>(`/farm/bot/${botId}/trades`)
 
+// ── Named config API ──────────────────────────────────────────────────────────
+
+export type ConfigSource = 'evolved' | 'manual' | 'promoted'
+
+export interface NamedConfig {
+  name: string
+  source: ConfigSource
+  created_at: string
+  notes?: string | null
+  fitness?: number | null
+  total_return_pct?: number | null
+  sharpe?: number | null
+  params: PresetParams
+  _meta?: {
+    name?: string
+    [key: string]: unknown
+  }
+}
+
+export const listConfigs = () => request<NamedConfig[]>('/configs')
+
+export const saveConfig = (payload: {
+  name: string
+  source?: ConfigSource
+  notes?: string
+  fitness?: number | null
+  total_return_pct?: number | null
+  sharpe?: number | null
+  params: PresetParams
+}) =>
+  request<{ ok: boolean; name: string }>('/configs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+
+export const assignBotConfig = (botId: string, configName: string) =>
+  request<{ ok: boolean }>(`/farm/bot/${botId}/assign-config`, {
+    method: 'POST',
+    body: JSON.stringify({ config_name: configName }),
+  })
+
+export const promoteConfig = (configName: string) =>
+  request<{ ok: boolean; message: string }>(`/configs/${encodeURIComponent(configName)}/promote`, {
+    method: 'POST',
+  })
+
 export async function testConnection(): Promise<boolean> {
   try {
     await getStatus()
