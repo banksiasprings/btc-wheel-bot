@@ -39,6 +39,16 @@ from order_tracker import OrderTracker, OrderStatus
 from risk_manager import Position, RiskManager
 from strategy import OpenSignal, WheelStrategy
 
+# ── Farm isolation: data directory resolved from env var ──────────────────────
+_DATA_DIR = os.environ.get("WHEEL_BOT_DATA_DIR", str(Path(__file__).parent / "data"))
+os.makedirs(_DATA_DIR, exist_ok=True)
+
+
+def _data_path(filename: str) -> Path:
+    """Return the absolute path for a file inside the bot's data directory."""
+    return Path(_DATA_DIR) / filename
+
+
 # ── BTC price ring-buffer (7 days × 24h × 1 sample/min ≈ 10 080 entries max) ──
 # We just need the oldest and newest values, so we keep a lightweight deque.
 _BTC_PRICE_HISTORY_MAX = 10_080  # 7 days at 1-per-minute
@@ -97,7 +107,7 @@ class WheelBot:
         # Mobile API state tracking
         self._started_at: datetime = datetime.now(timezone.utc)
         self._force_close_position: bool = False
-        self._state_path = Path(__file__).parent / "data" / "bot_state.json"
+        self._state_path = _data_path("bot_state.json")
 
         # Delta-hedging manager
         self._hedge = HedgeManager(
@@ -912,7 +922,7 @@ class WheelBot:
         self._trades_log.append(trade_record)
 
         # ── Write to CSV ─────────────────────────────────────────────────────────
-        csv_path = Path(__file__).parent / "data" / "trades.csv"
+        csv_path = _data_path("trades.csv")
         _os.makedirs(str(csv_path.parent), exist_ok=True)
         file_exists = csv_path.exists()
         fieldnames = [
@@ -944,7 +954,7 @@ class WheelBot:
         # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
         try:
             import json as _json
-            _exp_path = Path(__file__).parent / "data" / "experience.jsonl"
+            _exp_path = _data_path("experience.jsonl")
             _exp_record = {
                 "timestamp": time.time(),
                 "mode": mode_str,
@@ -1074,7 +1084,7 @@ class WheelBot:
     def _write_current_position(self, spot: float) -> None:
         """Write data/current_position.json for the mobile API."""
         try:
-            data_dir = Path(__file__).parent / "data"
+            data_dir = Path(_DATA_DIR)
             data_dir.mkdir(exist_ok=True)
             if not self._positions:
                 payload: dict = {"open": False}
@@ -1120,7 +1130,7 @@ class WheelBot:
     def _update_equity_curve(self, now: datetime, equity: float) -> None:
         """Append a data point to data/equity_curve.json on each position close."""
         try:
-            curve_path = Path(__file__).parent / "data" / "equity_curve.json"
+            curve_path = _data_path("equity_curve.json")
             if curve_path.exists():
                 existing = json.loads(curve_path.read_text())
             else:
@@ -1137,7 +1147,7 @@ class WheelBot:
 
     async def _process_commands(self) -> None:
         """Poll data/bot_commands.json for pending commands and execute them."""
-        cmd_path = Path(__file__).parent / "data" / "bot_commands.json"
+        cmd_path = _data_path("bot_commands.json")
         if not cmd_path.exists():
             return
         try:
@@ -1209,7 +1219,7 @@ class WheelBot:
 
         # ── Write tick_log.csv (one row per tick for charting / analysis) ─────
         try:
-            tick_log_path = Path(__file__).parent / "data" / "tick_log.csv"
+            tick_log_path = _data_path("tick_log.csv")
             tick_log_path.parent.mkdir(exist_ok=True)
             file_exists = tick_log_path.exists()
             tick_row = {
@@ -1269,7 +1279,7 @@ class WheelBot:
                 "started_at": self._started_at.isoformat(),
                 "last_heartbeat": now.isoformat(),
             }
-            state_path = Path(__file__).parent / "data" / "bot_state.json"
+            state_path = _data_path("bot_state.json")
             state_path.parent.mkdir(exist_ok=True)
             state_path.write_text(json.dumps(state))
         except Exception:

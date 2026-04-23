@@ -176,7 +176,11 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         LOG_LEVEL — logging level override
     """
     if yaml_path is None:
-        yaml_path = Path(__file__).parent / "config.yaml"
+        config_path = os.environ.get("WHEEL_BOT_CONFIG", None)
+        if config_path:
+            yaml_path = Path(config_path)
+        else:
+            yaml_path = Path(__file__).parent / "config.yaml"
 
     raw = _load_yaml(Path(yaml_path))
 
@@ -273,7 +277,7 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         rebalance_threshold=float(hg.get("rebalance_threshold", 0.05)),
     )
 
-    return Config(
+    cfg_obj = Config(
         deribit=deribit_cfg,
         strategy=strategy_cfg,
         sizing=sizing_cfg,
@@ -284,6 +288,30 @@ def load_config(yaml_path: str | Path | None = None) -> Config:
         logging=logging_cfg,
         hedge=hedge_cfg,
     )
+
+    # Override data paths when running inside the bot farm
+    data_dir = os.environ.get("WHEEL_BOT_DATA_DIR", None)
+    if data_dir:
+        if hasattr(cfg_obj.logging, "trade_log_csv"):
+            cfg_obj.logging.trade_log_csv = os.path.join(
+                data_dir, os.path.basename(cfg_obj.logging.trade_log_csv)
+            )
+        if hasattr(cfg_obj.logging, "log_dir"):
+            cfg_obj.logging.log_dir = os.path.join(data_dir, "logs")
+        if hasattr(cfg_obj.backtest, "results_csv"):
+            cfg_obj.backtest.results_csv = os.path.join(
+                data_dir, os.path.basename(cfg_obj.backtest.results_csv)
+            )
+        if hasattr(cfg_obj.backtest, "results_image"):
+            cfg_obj.backtest.results_image = os.path.join(
+                data_dir, os.path.basename(cfg_obj.backtest.results_image)
+            )
+        if hasattr(cfg_obj.risk, "kill_switch_file"):
+            cfg_obj.risk.kill_switch_file = os.path.join(
+                data_dir, os.path.basename(cfg_obj.risk.kill_switch_file)
+            )
+
+    return cfg_obj
 
 
 # Module-level singleton — import this everywhere
