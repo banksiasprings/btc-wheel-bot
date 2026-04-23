@@ -5,6 +5,7 @@ import {
   listConfigs, NamedConfig,
   runOptimizer, saveConfig as apiSaveConfig,
   assignBotConfig, promoteConfig,
+  startFarm, stopFarm,
 } from '../api'
 import ConfigSelector from './ConfigSelector'
 
@@ -371,39 +372,43 @@ function StepValidate({
   )
 }
 
-// ── Step 3 — Paper Trade ──────────────────────────────────────────────────────
+// ── Farm bot card (inline in Step 3) ─────────────────────────────────────────
 
-function StepPaperTrade({
-  open, onToggle, bots, onAssigned,
-}: {
-  open: boolean
-  onToggle: () => void
-  bots: BotFarmEntry[]
-  onAssigned: () => void
-}) {
-  const [selectedBot, setSelectedBot]       = useState<string | null>(bots[0]?.id ?? null)
-  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
-  const [assigning, setAssigning]           = useState(false)
-  const [assignMsg, setAssignMsg]           = useState('')
+const CHECK_LABELS: Record<string, string> = {
+  min_trades:     'Min Trades',
+  min_days:       'Min Days',
+  sharpe:         'Sharpe ≥ 0.8',
+  drawdown:       'Drawdown < 15%',
+  win_rate:       'Win Rate ≥ 55%',
+  walk_forward:   'Walk-Forward',
+  reconcile:      'Reconcile',
+  no_kill_switch: 'No Kill Switch',
+}
 
-  const bot = bots.find(b => b.id === selectedBot) ?? null
-  const readinessScore  = bot?.readiness.score  ?? 0
-  const readinessTotal  = bot?.readiness.total  ?? 8
-  const configName      = bot?.config_name ?? null
+function FarmBotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void }) {
+  const [expanded, setExpanded]         = useState(false)
+  const [assignConfig, setAssignConfig] = useState<string | null>(null)
+  const [assigning, setAssigning]       = useState(false)
+  const [assignMsg, setAssignMsg]       = useState('')
+  const [confirmPromote, setConfirmPromote] = useState(false)
+  const [promoting, setPromoting]           = useState(false)
+  const [promoteMsg, setPromoteMsg]         = useState('')
 
-  const status: StepStatus = bots.length === 0 ? 'not_started'
-    : bots.some(b => b.readiness.ready) ? 'complete'
-    : bots.some(b => b.readiness.score > 0) ? 'in_progress'
-    : 'not_started'
+  const m = bot.metrics
+  const r = bot.readiness
+  const configName = bot.config_name ?? 'Unassigned'
+  const statusDot =
+    bot.status === 'running' ? 'bg-green-400 shadow-[0_0_6px_#22c55e]' :
+    bot.status === 'error'   ? 'bg-red-500' : 'bg-yellow-400'
 
   async function handleAssign() {
-    if (!selectedBot || !selectedConfig) return
+    if (!assignConfig) return
     setAssigning(true)
     setAssignMsg('')
     try {
-      await assignBotConfig(selectedBot, selectedConfig)
-      setAssignMsg(`✅ Assigned '${selectedConfig}' to ${bot?.name ?? selectedBot}`)
-      onAssigned()
+      await assignBotConfig(bot.id, assignConfig)
+      setAssignMsg(`✅ Assigned '${assignConfig}'`)
+      onRefresh()
     } catch (e) {
       setAssignMsg(`❌ ${String(e)}`)
     } finally {
@@ -411,23 +416,198 @@ function StepPaperTrade({
     }
   }
 
+  async function handlePromote() {
+    if (!assignConfig) return
+    setPromoting(true)
+    try {
+      const res = await promoteConfig(assignConfig)
+      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'}`)
+      setConfirmPromote(false)
+      onRefresh()
+    } catch (e) {
+      setPromoteMsg(`❌ ${String(e)}`)
+    } finally {
+      setPromoting(false)
+    }
+  }
+
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      <button className="w-full flex items-center justify-between px-4 py-3 text-left" onClick={() => setExpanded(e => !e)}>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${statusDot}`} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="font-semibold text-white text-sm truncate">{bot.name}</p>
+              <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${
+                configName === 'Unassigned'
+                  ? 'bg-slate-800 text-slate-500 border-slate-600'
+                  : 'bg-amber-900 text-amber-300 border-amber-700'
+              }`}>
+                {configName}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 truncate">{bot.description}</p>
+          </div>
+        </div>
+        <span className="text-slate-500 text-xs ml-2">{expanded ? '▲' : '▼'}</span>
+      </button>
+
+      {/* Readiness bar — always visible */}
+      <div className="px-4 pb-2">
+        <ReadinessProgressBar score={r.score} total={r.total} />
+      </div>
+
+      {/* Metrics strip */}
+      <div className="grid grid-cols-5 border-t border-border/40 text-center">
+        {[
+          { label: 'Trades',  value: String(m.num_trades ?? 0) },
+          { label: 'Win',     value: m.win_rate != null ? `${(m.win_rate * 100).toFixed(0)}%` : '—' },
+          { label: 'Sharpe',  value: m.sharpe != null ? m.sharpe.toFixed(2) : '—' },
+          { label: 'DD',      value: m.max_drawdown != null ? `-${(m.max_drawdown * 100).toFixed(0)}%` : '—' },
+          { label: 'Return',  value: m.total_return_pct != null ? `${m.total_return_pct >= 0 ? '+' : ''}${m.total_return_pct.toFixed(1)}%` : '—' },
+        ].map(({ label, value }) => (
+          <div key={label} className="py-2 border-r border-border/30 last:border-r-0">
+            <p className="text-xs text-slate-500">{label}</p>
+            <p className="text-xs font-medium text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Expandable section: checklist + assign */}
+      {expanded && (
+        <div className="border-t border-border/40 px-4 py-3 space-y-3">
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Readiness Checklist</p>
+          <div className="space-y-1">
+            {Object.entries(r.checks).map(([key, passed]) => (
+              <div key={key} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{passed ? '✅' : '❌'}</span>
+                  <span className={`text-xs ${passed ? 'text-slate-300' : 'text-slate-500'}`}>{CHECK_LABELS[key] ?? key}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Assign config */}
+          <div className="pt-2 border-t border-border/30 space-y-2">
+            <p className="text-xs text-slate-500 uppercase tracking-wide">Assign Config</p>
+            <ConfigSelector value={assignConfig} onChange={setAssignConfig} label="Config to assign" showStats={false} />
+            {assignMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${assignMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{assignMsg}</p>
+            )}
+            <button
+              onClick={handleAssign}
+              disabled={assigning || !assignConfig}
+              className="w-full py-2 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-xs font-semibold"
+            >
+              {assigning ? 'Assigning…' : 'Assign Config'}
+            </button>
+          </div>
+
+          {/* Promote — only if 8/8 ready */}
+          {r.ready && (
+            <div className="pt-2 border-t border-green-900/50 space-y-2">
+              {promoteMsg && (
+                <p className={`text-xs px-3 py-2 rounded-lg border ${promoteMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{promoteMsg}</p>
+              )}
+              <button
+                onClick={() => setConfirmPromote(true)}
+                disabled={!assignConfig}
+                className="w-full py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                Promote to Live
+              </button>
+              {!assignConfig && <p className="text-xs text-slate-500 text-center">Select a config above to promote</p>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Promote confirm dialog */}
+      {confirmPromote && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-green-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="text-3xl">⬆️</div>
+            <h3 className="font-bold text-white text-lg">Promote to Live?</h3>
+            <p className="text-slate-400 text-sm">
+              This will overwrite the live config with <span className="text-green-400 font-medium">{assignConfig}</span>. The live bot will restart.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmPromote(false)} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
+              <button onClick={handlePromote} disabled={promoting} className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold">
+                {promoting ? 'Promoting…' : 'Promote'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Step 3 — Paper Trade (with full farm grid) ────────────────────────────────
+
+function StepPaperTrade({
+  open, onToggle, bots, farmRunning, onRefresh,
+}: {
+  open: boolean
+  onToggle: () => void
+  bots: BotFarmEntry[]
+  farmRunning: boolean
+  onRefresh: () => void
+}) {
+  const [farmBusy, setFarmBusy]   = useState(false)
+  const [farmMsg, setFarmMsg]     = useState('')
+
+  const readyCount = bots.filter(b => b.readiness.ready).length
+  const status: StepStatus = bots.length === 0 ? 'not_started'
+    : readyCount > 0 ? 'complete'
+    : bots.some(b => b.readiness.score > 0) ? 'in_progress'
+    : 'not_started'
+
+  async function handleStartFarm() {
+    setFarmBusy(true)
+    setFarmMsg('')
+    try {
+      const r = await startFarm()
+      setFarmMsg(`Farm started (PID ${r.pid})`)
+      setTimeout(() => { setFarmMsg(''); onRefresh() }, 1500)
+    } catch (e) {
+      setFarmMsg(String(e))
+    } finally {
+      setFarmBusy(false)
+    }
+  }
+
+  async function handleStopFarm() {
+    setFarmBusy(true)
+    setFarmMsg('')
+    try {
+      await stopFarm()
+      setFarmMsg('Farm stopped')
+      setTimeout(() => { setFarmMsg(''); onRefresh() }, 1500)
+    } catch (e) {
+      setFarmMsg(String(e))
+    } finally {
+      setFarmBusy(false)
+    }
+  }
+
   return (
     <div className={`bg-card rounded-2xl border overflow-hidden ${
       status === 'complete' ? 'border-green-800' : status === 'in_progress' ? 'border-amber-800' : 'border-border'
     }`}>
-      <button
-        className="w-full flex items-center gap-3 px-4 py-3 text-left"
-        onClick={onToggle}
-      >
+      <button className="w-full flex items-center gap-3 px-4 py-3 text-left" onClick={onToggle}>
         <StatusIcon status={status} />
         <div className="flex-1 min-w-0">
           <span className="text-sm font-bold text-white uppercase tracking-wide">Step 3 · Paper Trade</span>
           <p className="text-xs text-slate-400 mt-0.5">
-            {status === 'complete'
-              ? `${bots.filter(b => b.readiness.ready).length} bot(s) ready for live`
+            {readyCount > 0
+              ? `${readyCount} bot(s) ready for live`
               : bots.length > 0
-              ? `Best: ${Math.max(...bots.map(b => b.readiness.score))}/${readinessTotal} checks`
-              : 'Run in bot farm to verify live readiness'}
+              ? `Best: ${Math.max(...bots.map(b => b.readiness.score))}/8 checks passed`
+              : 'Run bot farm to verify live readiness'}
           </p>
         </div>
         <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
@@ -435,80 +615,42 @@ function StepPaperTrade({
 
       {open && (
         <div className="px-4 pb-4 space-y-3">
-          {bots.length === 0 ? (
-            <p className="text-xs text-slate-500 text-center py-2">
-              No bots running. Start the farm first.
-            </p>
-          ) : (
-            <>
-              {/* Bot selector */}
-              <div className="space-y-1.5">
-                <span className="text-xs text-slate-400 font-medium">Assign to bot</span>
-                <select
-                  value={selectedBot ?? ''}
-                  onChange={e => setSelectedBot(e.target.value)}
-                  className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-amber-500"
-                >
-                  {bots.map(b => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} · {b.readiness.score}/{b.readiness.total} checks
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Config selector */}
-              <ConfigSelector
-                value={selectedConfig}
-                onChange={setSelectedConfig}
-                label="Config to assign"
-                showStats
-              />
-
-              {/* Current config badge */}
-              {configName && (
-                <p className="text-xs text-slate-500">
-                  Currently running: <span className="text-amber-400 font-medium">{configName}</span>
-                </p>
-              )}
-
-              {/* Readiness bar for selected bot */}
-              {bot && (
-                <ReadinessProgressBar
-                  score={bot.readiness.score}
-                  total={bot.readiness.total}
-                />
-              )}
-
-              {/* Bot quick stats */}
-              {bot && (
-                <div className="flex flex-wrap gap-3 text-xs text-slate-400 px-1">
-                  <span>Trades <span className="text-white font-mono">{bot.metrics.num_trades}</span></span>
-                  <span>Sharpe <span className="text-white font-mono">
-                    {bot.metrics.sharpe != null ? bot.metrics.sharpe.toFixed(2) : '—'}
-                  </span></span>
-                  <span>Return <span className={`font-mono ${(bot.metrics.total_return_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {(bot.metrics.total_return_pct ?? 0) >= 0 ? '+' : ''}{(bot.metrics.total_return_pct ?? 0).toFixed(1)}%
-                  </span></span>
-                </div>
-              )}
-
-              {assignMsg && (
-                <p className={`text-xs px-3 py-2 rounded-lg border ${
-                  assignMsg.startsWith('✅')
-                    ? 'bg-green-950 border-green-800 text-green-300'
-                    : 'bg-red-950 border-red-800 text-red-300'
-                }`}>{assignMsg}</p>
-              )}
-
-              <button
-                onClick={handleAssign}
-                disabled={assigning || !selectedBot || !selectedConfig}
-                className="w-full py-3 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-sm font-semibold"
-              >
-                {assigning ? 'Assigning…' : 'Assign Config'}
+          {/* Farm control */}
+          <div className="flex items-center justify-between py-2 border-b border-border/40">
+            <div className="flex items-center gap-2">
+              <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${farmRunning ? 'bg-green-400 shadow-[0_0_6px_#22c55e]' : 'bg-slate-600'}`} />
+              <span className="text-sm text-white">
+                {farmRunning ? `Running ${bots.filter(b => b.status === 'running').length} bots` : 'Farm stopped'}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleStartFarm} disabled={farmRunning || farmBusy}
+                className="px-3 py-1.5 rounded-xl bg-green-800 hover:bg-green-700 text-green-200 text-xs font-medium disabled:opacity-40">
+                Start
               </button>
-            </>
+              <button onClick={handleStopFarm} disabled={!farmRunning || farmBusy}
+                className="px-3 py-1.5 rounded-xl bg-red-900 hover:bg-red-800 text-red-200 text-xs font-medium disabled:opacity-40">
+                Stop
+              </button>
+            </div>
+          </div>
+
+          {farmMsg && (
+            <p className={`text-xs px-3 py-2 rounded-lg border ${farmMsg.startsWith('Farm started') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-slate-800 border-border text-slate-300'}`}>{farmMsg}</p>
+          )}
+
+          {/* Bot cards */}
+          {bots.length === 0 ? (
+            <div className="py-4 text-center">
+              <p className="text-slate-400 text-sm">No bots running yet.</p>
+              <p className="text-slate-600 text-xs mt-1">4 bots will run simultaneously: Conservative, Balanced, Aggressive, Capital ROI.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {bots.map(bot => (
+                <FarmBotCard key={bot.id} bot={bot} onRefresh={onRefresh} />
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -746,7 +888,8 @@ export default function Pipeline() {
         open={openStep === 3}
         onToggle={() => toggle(3)}
         bots={bots}
-        onAssigned={refresh}
+        farmRunning={farmStatus?.farm_running ?? false}
+        onRefresh={refresh}
       />
 
       <StepConnector />

@@ -1,76 +1,78 @@
 import { useState, useEffect } from 'react'
 import {
-  getConfig, updateConfig, setMode, testConnection, getPresets, loadPreset,
-  getConfigHistory, getNotifierConfig, setupNotifier, testNotifier,
-  listConfigs, saveConfig as apiSaveConfig,
-  BotConfig, PresetsData, ActivePreset, ConfigHistoryEntry, NotifierConfig, NamedConfig,
+  testConnection, setMode,
+  getNotifierConfig, setupNotifier, testNotifier,
+  listConfigs, promoteConfig,
+  saveConfig as apiSaveConfig,
+  NotifierConfig, NamedConfig, ConfigSource,
 } from '../api'
 import InfoModal from './InfoModal'
 import SystemGuide from './SystemGuide'
-import { GLOSSARY } from '../lib/glossary'
-
-const EVOLVE_PRESET_CONFIGS: {
-  key: Exclude<ActivePreset, 'sweep' | 'custom'>
-  label: string
-  icon: string
-  accent: 'green' | 'orange' | 'sky' | 'purple' | 'amber'
-  unavailableMsg: string
-  glossaryKey: string
-}[] = [
-  { key: 'evolve_balanced',    label: 'Evolved: Balanced',    icon: '🎯', accent: 'green',  unavailableMsg: 'Run Evolve with Balanced goal first',    glossaryKey: 'strategy_balanced'  },
-  { key: 'evolve_max_yield',   label: 'Evolved: Max Yield',   icon: '🚀', accent: 'orange', unavailableMsg: 'Run Evolve with Max Yield goal first',   glossaryKey: 'strategy_max_yield' },
-  { key: 'evolve_safest',      label: 'Evolved: Safest',      icon: '🛡', accent: 'sky',    unavailableMsg: 'Run Evolve with Safest goal first',      glossaryKey: 'strategy_safest'    },
-  { key: 'evolve_sharpe',      label: 'Evolved: Sharpe',      icon: '⚖️', accent: 'purple', unavailableMsg: 'Run Evolve with Sharpe goal first',      glossaryKey: 'strategy_sharpe'    },
-  { key: 'evolve_capital_roi', label: 'Evolved: Capital ROI', icon: '📊', accent: 'amber',  unavailableMsg: 'Run Evolve with Capital ROI goal first', glossaryKey: 'strategy_balanced'  },
-]
 
 interface Props {
   onLogout: () => void
 }
 
+// ── Source badge ───────────────────────────────────────────────────────────────
+
+const SOURCE_BADGE: Record<ConfigSource, { label: string; cls: string }> = {
+  evolved:  { label: 'Evolved',  cls: 'bg-green-900 text-green-300 border-green-700'  },
+  manual:   { label: 'Manual',   cls: 'bg-slate-800 text-slate-400 border-slate-600'  },
+  promoted: { label: 'Promoted', cls: 'bg-amber-900 text-amber-300 border-amber-700'  },
+}
+
+function SourceBadge({ source }: { source: ConfigSource }) {
+  const b = SOURCE_BADGE[source] ?? SOURCE_BADGE.manual
+  return (
+    <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${b.cls}`}>{b.label}</span>
+  )
+}
+
 export default function Settings({ onLogout }: Props) {
-  const [apiUrl, setApiUrl] = useState(localStorage.getItem('api_url') ?? '')
-  const [apiKey, setApiKey] = useState(localStorage.getItem('api_key') ?? '')
-  const [config, setConfig] = useState<BotConfig | null>(null)
-  const [presets, setPresets] = useState<PresetsData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [saveStatus, setSaveStatus] = useState('')
-  const [info, setInfo] = useState<{ title: string; body: string } | null>(null)
-  const [showGuide, setShowGuide] = useState(false)
-  const [modeConfirm, setModeConfirm] = useState(false)
-  const [pendingMode, setPendingMode] = useState<'paper' | 'live' | null>(null)
+  const [apiUrl, setApiUrl]               = useState(localStorage.getItem('api_url') ?? '')
+  const [apiKey, setApiKey]               = useState(localStorage.getItem('api_key') ?? '')
+  const [loading, setLoading]             = useState(true)
+  const [saveStatus, setSaveStatus]       = useState('')
+  const [info, setInfo]                   = useState<{ title: string; body: string } | null>(null)
+  const [showGuide, setShowGuide]         = useState(false)
+  const [modeConfirm, setModeConfirm]     = useState(false)
+  const [pendingMode, setPendingMode]     = useState<'paper' | 'live' | null>(null)
   const [modeConfirmText, setModeConfirmText] = useState('')
-  const [configHistory, setConfigHistory] = useState<ConfigHistoryEntry[]>([])
-  const [historyOpen, setHistoryOpen] = useState(false)
-  const [notifierCfg, setNotifierCfg] = useState<NotifierConfig | null>(null)
-  const [tgToken, setTgToken] = useState('')
-  const [tgChatId, setTgChatId] = useState('')
-  const [tgStatus, setTgStatus] = useState('')
-  const [namedConfigs, setNamedConfigs] = useState<NamedConfig[]>([])
-  const [savingAsConfig, setSavingAsConfig] = useState(false)
-  const [saveAsConfigMsg, setSaveAsConfigMsg] = useState('')
-  const [saveAsConfigName, setSaveAsConfigName] = useState('')
+
+  // Telegram
+  const [notifierCfg, setNotifierCfg]     = useState<NotifierConfig | null>(null)
+  const [tgToken, setTgToken]             = useState('')
+  const [tgChatId, setTgChatId]           = useState('')
+  const [tgStatus, setTgStatus]           = useState('')
+
+  // Named configs
+  const [namedConfigs, setNamedConfigs]   = useState<NamedConfig[]>([])
+  const [newConfigName, setNewConfigName] = useState('')
+  const [creatingConfig, setCreatingConfig] = useState(false)
+  const [createMsg, setCreateMsg]         = useState('')
+  const [promotingConfig, setPromotingConfig] = useState<string | null>(null)
+  const [promoteConfirm, setPromoteConfirm]   = useState<NamedConfig | null>(null)
+  const [promoteMsg, setPromoteMsg]           = useState('')
 
   function showStatus(msg: string, ms = 3000) {
     setSaveStatus(msg)
     setTimeout(() => setSaveStatus(''), ms)
   }
 
-  useEffect(() => {
-    Promise.all([
-      getConfig().catch(() => null),
-      getPresets().catch(() => null),
-      getConfigHistory().catch(() => []),
-      getNotifierConfig().catch(() => null),
-      listConfigs().catch(() => [] as NamedConfig[]),
-    ]).then(([cfg, pr, hist, ntf, cfgs]) => {
-      if (cfg) setConfig(cfg)
-      setPresets(pr)
-      setConfigHistory(hist ?? [])
+  async function loadData() {
+    try {
+      const [ntf, cfgs] = await Promise.all([
+        getNotifierConfig().catch(() => null),
+        listConfigs().catch(() => [] as NamedConfig[]),
+      ])
       setNotifierCfg(ntf)
       setNamedConfigs(cfgs ?? [])
-    }).finally(() => setLoading(false))
-  }, [])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadData() }, [])
 
   async function saveApiSettings() {
     const clean = apiUrl.replace(/\/$/, '')
@@ -79,101 +81,6 @@ export default function Settings({ onLogout }: Props) {
     showStatus('Testing connection…', 10000)
     const ok = await testConnection()
     showStatus(ok ? 'Connected ✓' : 'Connection failed — check URL and key')
-  }
-
-  async function saveConfig() {
-    if (!config) return
-    try {
-      showStatus('Saving…', 10000)
-      await updateConfig({
-        delta_target_min: config.delta_target_min ?? undefined,
-        delta_target_max: config.delta_target_max ?? undefined,
-        min_dte: config.min_dte ?? undefined,
-        max_dte: config.max_dte ?? undefined,
-        premium_fraction_of_spot: config.premium_fraction_of_spot ?? undefined,
-        starting_equity: config.starting_equity ?? undefined,
-        use_regime_filter: config.use_regime_filter,
-      })
-      showStatus('Config saved ✓')
-      getConfigHistory().then(setConfigHistory).catch(() => null)
-    } catch (e) {
-      showStatus(String(e))
-    }
-  }
-
-  async function handleLoadPreset(preset: Exclude<ActivePreset, 'custom'>) {
-    try {
-      showStatus('Loading…', 10000)
-      await loadPreset(preset)
-      const [cfg, pr, hist] = await Promise.all([
-        getConfig().catch(() => null),
-        getPresets().catch(() => null),
-        getConfigHistory().catch(() => []),
-      ])
-      if (cfg) setConfig(cfg)
-      setPresets(pr)
-      setConfigHistory(hist ?? [])
-      const label = preset === 'sweep' ? 'Sweep Best' : 'Evolved Best'
-      showStatus(`${label} loaded — restart bot to apply ✓`, 5000)
-    } catch (e) {
-      showStatus(String(e))
-    }
-  }
-
-  async function handleLoadNamedConfig(cfg: NamedConfig) {
-    if (!cfg.params || Object.keys(cfg.params).length === 0) {
-      showStatus('This config has no saved parameters to load', 3000)
-      return
-    }
-    // Map NamedConfig.params → BotConfig fields and apply
-    setConfig(c => {
-      if (!c) return c
-      const p = cfg.params
-      return {
-        ...c,
-        delta_target_min:           p.target_delta_min       ?? c.delta_target_min,
-        delta_target_max:           p.target_delta_max       ?? c.delta_target_max,
-        min_dte:                    p.min_dte                ?? c.min_dte,
-        max_dte:                    p.max_dte                ?? c.max_dte,
-        premium_fraction_of_spot:   p.premium_fraction_of_spot ?? c.premium_fraction_of_spot,
-        max_equity_per_leg:         p.max_equity_per_leg     ?? c.max_equity_per_leg,
-        min_free_equity_fraction:   p.min_free_equity_fraction ?? c.min_free_equity_fraction,
-        iv_rank_threshold:          p.iv_rank_threshold      ?? c.iv_rank_threshold,
-        starting_equity:            p.starting_equity        ?? c.starting_equity,
-      }
-    })
-    showStatus(`Loaded '${cfg.name}' into Settings fields — review and Save Config ✓`, 5000)
-  }
-
-  async function handleSaveCurrentAsConfig() {
-    if (!config || !saveAsConfigName.trim()) return
-    setSavingAsConfig(true)
-    setSaveAsConfigMsg('')
-    try {
-      await apiSaveConfig({
-        name: saveAsConfigName.trim(),
-        source: 'manual',
-        params: {
-          iv_rank_threshold:        config.iv_rank_threshold        ?? undefined,
-          target_delta_min:         config.delta_target_min         ?? undefined,
-          target_delta_max:         config.delta_target_max         ?? undefined,
-          min_dte:                  config.min_dte                  ?? undefined,
-          max_dte:                  config.max_dte                  ?? undefined,
-          max_equity_per_leg:       config.max_equity_per_leg       ?? undefined,
-          min_free_equity_fraction: config.min_free_equity_fraction ?? undefined,
-          premium_fraction_of_spot: config.premium_fraction_of_spot ?? undefined,
-          starting_equity:          config.starting_equity          ?? undefined,
-        },
-      })
-      setSaveAsConfigMsg(`✅ Saved as '${saveAsConfigName.trim()}'`)
-      setSaveAsConfigName('')
-      const cfgs = await listConfigs().catch(() => [] as NamedConfig[])
-      setNamedConfigs(cfgs)
-    } catch (e) {
-      setSaveAsConfigMsg(String(e))
-    } finally {
-      setSavingAsConfig(false)
-    }
   }
 
   async function saveTelegram() {
@@ -186,9 +93,7 @@ export default function Settings({ onLogout }: Props) {
       setTgChatId('')
       setTgStatus('Saved ✓')
       setTimeout(() => setTgStatus(''), 3000)
-    } catch (e) {
-      setTgStatus(String(e))
-    }
+    } catch (e) { setTgStatus(String(e)) }
   }
 
   async function sendTestNotification() {
@@ -197,9 +102,7 @@ export default function Settings({ onLogout }: Props) {
       await testNotifier()
       setTgStatus('Test message sent ✓')
       setTimeout(() => setTgStatus(''), 3000)
-    } catch (e) {
-      setTgStatus(String(e))
-    }
+    } catch (e) { setTgStatus(String(e)) }
   }
 
   function requestModeSwitch(m: 'paper' | 'live') {
@@ -214,15 +117,46 @@ export default function Settings({ onLogout }: Props) {
       const confirmStr = pendingMode === 'live' ? 'SWITCH_TO_LIVE' : undefined
       await setMode(pendingMode, confirmStr)
       showStatus(`Mode switch to ${pendingMode} sent (takes effect on restart)`, 4000)
-    } catch (e) {
-      showStatus(String(e))
-    }
+    } catch (e) { showStatus(String(e)) }
     setModeConfirm(false)
     setPendingMode(null)
   }
 
-  function updateField<K extends keyof BotConfig>(k: K, v: BotConfig[K]) {
-    setConfig((c) => (c ? { ...c, [k]: v } : c))
+  async function handleCreateBlankConfig() {
+    if (!newConfigName.trim()) return
+    setCreatingConfig(true)
+    setCreateMsg('')
+    try {
+      await apiSaveConfig({
+        name: newConfigName.trim(),
+        source: 'manual',
+        params: {},
+      })
+      setCreateMsg(`✅ Created '${newConfigName.trim()}'`)
+      setNewConfigName('')
+      const cfgs = await listConfigs().catch(() => [] as NamedConfig[])
+      setNamedConfigs(cfgs)
+    } catch (e) {
+      setCreateMsg(String(e))
+    } finally {
+      setCreatingConfig(false)
+    }
+  }
+
+  async function handlePromote(cfg: NamedConfig) {
+    setPromotingConfig(cfg.name)
+    setPromoteMsg('')
+    try {
+      const r = await promoteConfig(cfg.name)
+      setPromoteMsg(`✅ ${r.message ?? `'${cfg.name}' promoted — live bot will restart`}`)
+      setPromoteConfirm(null)
+      const cfgs = await listConfigs().catch(() => [] as NamedConfig[])
+      setNamedConfigs(cfgs)
+    } catch (e) {
+      setPromoteMsg(`❌ ${String(e)}`)
+    } finally {
+      setPromotingConfig(null)
+    }
   }
 
   return (
@@ -231,155 +165,21 @@ export default function Settings({ onLogout }: Props) {
 
       {showGuide && <SystemGuide onClose={() => setShowGuide(false)} />}
 
-      <button
-        onClick={() => setShowGuide(true)}
-        className="w-full flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3 text-left hover:border-slate-600 transition-colors"
-      >
-        <span className="text-xl">📖</span>
-        <div>
-          <p className="text-white text-sm font-medium">How This System Works</p>
-          <p className="text-slate-400 text-xs">Plain-English guide to the full strategy</p>
-        </div>
-        <span className="ml-auto text-slate-500 text-sm">→</span>
-      </button>
+      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
 
       {saveStatus && (
-        <div
-          className={`rounded-xl px-4 py-3 text-sm border ${
-            saveStatus.includes('✓') || saveStatus.includes('sent')
-              ? 'bg-green-950 border-green-800 text-green-300'
-              : saveStatus.includes('fail') || saveStatus.includes('Error') || saveStatus.includes('400') || saveStatus.includes('404')
-              ? 'bg-red-950 border-red-800 text-red-300'
-              : 'bg-slate-800 border-border text-slate-300'
-          }`}
-        >
+        <div className={`rounded-xl px-4 py-3 text-sm border ${
+          saveStatus.includes('✓') || saveStatus.includes('sent')
+            ? 'bg-green-950 border-green-800 text-green-300'
+            : saveStatus.includes('fail') || saveStatus.includes('Error') || saveStatus.includes('400') || saveStatus.includes('404')
+            ? 'bg-red-950 border-red-800 text-red-300'
+            : 'bg-slate-800 border-border text-slate-300'
+        }`}>
           {saveStatus}
         </div>
       )}
 
-      {/* Parameter Presets */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">Parameter Presets</p>
-        <p className="text-xs text-slate-400">
-          Loading a preset updates config.yaml — restart the bot to apply changes.
-        </p>
-
-        {!loading && !presets && (
-          <p className="text-xs text-slate-500">Could not load preset data.</p>
-        )}
-
-        {presets && (
-          <div className="space-y-3">
-            <PresetCard
-              title="📊 Sweep Best"
-              icon=""
-              accent="amber"
-              available={presets.sweep.available}
-              fitness={presets.sweep.fitness}
-              params={presets.sweep.params}
-              isActive={presets.active === 'sweep'}
-              onLoad={() => handleLoadPreset('sweep')}
-              unavailableMsg="Run Parameter Sweep first"
-              onInfo={() => setInfo(GLOSSARY.strategy_sweep)}
-            />
-            {EVOLVE_PRESET_CONFIGS.map(cfg => {
-              const presetInfo = presets[cfg.key]
-              return (
-                <PresetCard
-                  key={cfg.key}
-                  title={`${cfg.icon} ${cfg.label}`}
-                  icon=""
-                  accent={cfg.accent}
-                  available={presetInfo.available}
-                  fitness={presetInfo.fitness}
-                  params={presetInfo.params}
-                  isActive={presets.active === cfg.key}
-                  onLoad={() => handleLoadPreset(cfg.key)}
-                  unavailableMsg={cfg.unavailableMsg}
-                  onInfo={() => setInfo(GLOSSARY[cfg.glossaryKey])}
-                />
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Named configs */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">Named Configs</p>
-        <p className="text-xs text-slate-400">
-          Tap a config to load its values into the fields below.
-        </p>
-
-        {namedConfigs.length === 0 && (
-          <p className="text-xs text-slate-500">
-            No named configs yet — save your current settings or evolve a config via the Pipeline tab.
-          </p>
-        )}
-
-        <div className="space-y-2">
-          {namedConfigs.map(cfg => (
-            <button
-              key={cfg.name}
-              onClick={() => handleLoadNamedConfig(cfg)}
-              className="w-full text-left rounded-xl bg-navy border border-border hover:border-amber-600 px-3 py-2.5 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-white">{cfg.name}</span>
-                <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${
-                  cfg.source === 'evolved'  ? 'bg-green-900 text-green-300 border-green-700' :
-                  cfg.source === 'promoted' ? 'bg-amber-900 text-amber-300 border-amber-700' :
-                  'bg-slate-800 text-slate-400 border-slate-600'
-                }`}>
-                  {cfg.source.charAt(0).toUpperCase() + cfg.source.slice(1)}
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-500">
-                {cfg.fitness != null && <span>Fitness {cfg.fitness.toFixed(2)}</span>}
-                {cfg.total_return_pct != null && (
-                  <span className={cfg.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}>
-                    {cfg.total_return_pct >= 0 ? '+' : ''}{cfg.total_return_pct.toFixed(1)}%
-                  </span>
-                )}
-                {cfg.sharpe != null && <span>Sharpe {cfg.sharpe.toFixed(2)}</span>}
-                {cfg.notes && <span className="italic">{cfg.notes}</span>}
-              </div>
-            </button>
-          ))}
-        </div>
-
-        {/* Save current settings as named config */}
-        {config && (
-          <div className="pt-2 border-t border-border space-y-2">
-            <p className="text-xs text-slate-400 font-medium">Save current settings as config</p>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={saveAsConfigName}
-                onChange={e => setSaveAsConfigName(e.target.value)}
-                placeholder="Config name"
-                className="flex-1 bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 placeholder-slate-600"
-              />
-              <button
-                onClick={handleSaveCurrentAsConfig}
-                disabled={savingAsConfig || !saveAsConfigName.trim()}
-                className="px-4 py-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm rounded-xl font-medium"
-              >
-                {savingAsConfig ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-            {saveAsConfigMsg && (
-              <p className={`text-xs px-3 py-2 rounded-lg border ${
-                saveAsConfigMsg.startsWith('✅')
-                  ? 'bg-green-950 border-green-800 text-green-300'
-                  : 'bg-red-950 border-red-800 text-red-300'
-              }`}>{saveAsConfigMsg}</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* API connection */}
+      {/* ── API Connection ───────────────────────────────────────────────── */}
       <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
         <p className="text-sm font-semibold text-white">API Connection</p>
         <div>
@@ -387,8 +187,8 @@ export default function Settings({ onLogout }: Props) {
           <input
             type="url"
             value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-            placeholder="https://your-tunnel.trycloudflare.com"
+            onChange={e => setApiUrl(e.target.value)}
+            placeholder="https://bot.banksiaspringsfarm.com"
             className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-green-500 text-sm"
           />
         </div>
@@ -397,7 +197,7 @@ export default function Settings({ onLogout }: Props) {
           <input
             type="password"
             value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
+            onChange={e => setApiKey(e.target.value)}
             className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-green-500 text-sm font-mono"
           />
         </div>
@@ -409,179 +209,7 @@ export default function Settings({ onLogout }: Props) {
         </button>
       </div>
 
-      {/* Trading config */}
-      {!loading && config && (
-        <div className="bg-card rounded-2xl p-4 border border-border space-y-4">
-          <p className="text-sm font-semibold text-white">Trading Parameters</p>
-
-          <NumberField
-            label="IV Rank Threshold"
-            value={config.iv_rank_threshold}
-            min={0} max={1} step={0.05}
-            onChange={(v) => updateField('iv_rank_threshold', v)}
-            onInfo={() => setInfo(GLOSSARY.iv_threshold)}
-          />
-          <NumberField
-            label="Delta Target Min"
-            value={config.delta_target_min}
-            min={0.05} max={0.5} step={0.01}
-            onChange={(v) => updateField('delta_target_min', v)}
-            onInfo={() => setInfo(GLOSSARY.delta_range)}
-          />
-          <NumberField
-            label="Delta Target Max"
-            value={config.delta_target_max}
-            min={0.05} max={0.5} step={0.01}
-            onChange={(v) => updateField('delta_target_max', v)}
-            onInfo={() => setInfo(GLOSSARY.delta_range)}
-          />
-          <NumberField
-            label="Min DTE (days)"
-            value={config.min_dte}
-            min={1} max={60} step={1}
-            onChange={(v) => updateField('min_dte', v)}
-            onInfo={() => setInfo(GLOSSARY.dte_range)}
-          />
-          <NumberField
-            label="Max DTE (days)"
-            value={config.max_dte}
-            min={1} max={90} step={1}
-            onChange={(v) => updateField('max_dte', v)}
-            onInfo={() => setInfo(GLOSSARY.dte_range)}
-          />
-          <NumberField
-            label="Premium Fraction of Spot"
-            value={config.premium_fraction_of_spot}
-            min={0.001} max={0.1} step={0.001}
-            onChange={(v) => updateField('premium_fraction_of_spot', v)}
-            onInfo={() => setInfo(GLOSSARY.premium_fraction)}
-          />
-          <NumberField
-            label="Max Leg Size (%)"
-            value={config.max_equity_per_leg != null ? config.max_equity_per_leg * 100 : null}
-            min={1} max={50} step={1}
-            onChange={(v) => updateField('max_equity_per_leg', v / 100)}
-            onInfo={() => setInfo(GLOSSARY.max_leg_size)}
-          />
-          <NumberField
-            label="Min Free Equity (%)"
-            value={config.min_free_equity_fraction != null ? config.min_free_equity_fraction * 100 : null}
-            min={0} max={50} step={1}
-            onChange={(v) => updateField('min_free_equity_fraction', v / 100)}
-            onInfo={() => setInfo(GLOSSARY.free_equity)}
-          />
-          <NumberField
-            label="Starting Equity ($)"
-            value={config.starting_equity}
-            min={1000} max={1000000} step={1000}
-            onChange={(v) => updateField('starting_equity', v)}
-            onInfo={() => setInfo(GLOSSARY.starting_equity)}
-          />
-
-          {/* Regime filter toggle */}
-          <div>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1">
-                <label className="text-xs text-slate-400">Regime Filter</label>
-                <button onClick={() => setInfo(GLOSSARY.regime_filter)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
-              </div>
-              <button
-                onClick={() => updateField('use_regime_filter', !config.use_regime_filter)}
-                className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 ${
-                  config.use_regime_filter ? 'bg-green-600' : 'bg-slate-700'
-                }`}
-              >
-                <span className={`w-5 h-5 rounded-full bg-white shadow transition-transform ${
-                  config.use_regime_filter ? 'translate-x-5' : 'translate-x-0'
-                }`} />
-              </button>
-            </div>
-            <p className="text-xs text-slate-600 mt-0.5">
-              {config.use_regime_filter ? 'Skips trades when BTC is in a downtrend' : 'Trades regardless of BTC trend'}
-            </p>
-          </div>
-          {config.use_regime_filter && (
-            <NumberField
-              label="Regime MA Days"
-              value={config.regime_ma_days}
-              min={10} max={200} step={5}
-              onChange={(v) => updateField('regime_ma_days', v)}
-              onInfo={() => setInfo(GLOSSARY.regime_filter)}
-            />
-          )}
-
-          <button
-            onClick={saveConfig}
-            className="w-full bg-green-700 hover:bg-green-600 text-white font-medium py-2.5 rounded-xl text-sm"
-          >
-            Save Config
-          </button>
-        </div>
-      )}
-
-      {/* Mode switch */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">Trading Mode</p>
-        <p className="text-xs text-slate-400">
-          Switching modes takes effect on next bot restart.
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            onClick={() => requestModeSwitch('paper')}
-            className="py-3 rounded-xl bg-amber-900 border border-amber-700 text-amber-300 text-sm font-semibold"
-          >
-            PAPER
-          </button>
-          <button
-            onClick={() => requestModeSwitch('live')}
-            className="py-3 rounded-xl bg-red-950 border border-red-800 text-red-300 text-sm font-semibold"
-          >
-            ⚠ LIVE
-          </button>
-        </div>
-      </div>
-
-      {/* Config change history */}
-      {configHistory.length > 0 && (
-        <div className="bg-card rounded-2xl border border-border overflow-hidden">
-          <button
-            className="w-full flex items-center justify-between px-4 py-3 text-left"
-            onClick={() => setHistoryOpen(o => !o)}
-          >
-            <p className="text-sm font-medium text-white">Recent Config Changes</p>
-            <span className="text-slate-500 text-xs">{historyOpen ? '▲' : '▼'}</span>
-          </button>
-          {historyOpen && (
-            <div className="px-4 pb-4 space-y-2">
-              {configHistory.slice(0, 10).map((entry, i) => (
-                <div key={i} className="flex items-start gap-3 text-xs">
-                  <div className="w-1 h-1 rounded-full bg-green-500 mt-1.5 flex-shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-white font-medium truncate">
-                      {entry.preset === 'custom' ? 'Manual save' : `Preset: ${entry.preset}`}
-                    </p>
-                    <p className="text-slate-500">
-                      {new Date(entry.timestamp).toLocaleString('en-US', {
-                        month: 'short', day: 'numeric',
-                        hour: '2-digit', minute: '2-digit',
-                      })}
-                    </p>
-                    <p className="text-slate-600 truncate">
-                      {Object.entries(entry.params)
-                        .filter(([, v]) => v != null)
-                        .map(([k, v]) => `${k.replace(/_/g, ' ')}=${v}`)
-                        .join(' · ')
-                        .slice(0, 80)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Telegram notifications */}
+      {/* ── Telegram Notifications ───────────────────────────────────────── */}
       <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
         <p className="text-sm font-semibold text-white">Telegram Notifications</p>
         {notifierCfg?.configured ? (
@@ -602,7 +230,7 @@ export default function Settings({ onLogout }: Props) {
             type="password"
             value={tgToken}
             onChange={e => setTgToken(e.target.value)}
-            placeholder={notifierCfg?.configured ? '(unchanged)' : '1234567890:AAF...'}
+            placeholder={notifierCfg?.configured ? '(unchanged)' : '1234567890:AAF…'}
             className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-green-500 text-sm font-mono"
           />
         </div>
@@ -617,9 +245,9 @@ export default function Settings({ onLogout }: Props) {
           />
         </div>
         {tgStatus && (
-          <p className={`text-xs px-3 py-2 rounded-lg border ${
-            tgStatus.includes('✓') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-slate-800 border-border text-slate-300'
-          }`}>{tgStatus}</p>
+          <p className={`text-xs px-3 py-2 rounded-lg border ${tgStatus.includes('✓') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-slate-800 border-border text-slate-300'}`}>
+            {tgStatus}
+          </p>
         )}
         <div className="flex gap-2">
           <button
@@ -640,7 +268,133 @@ export default function Settings({ onLogout }: Props) {
         </div>
       </div>
 
-      {/* Logout */}
+      {/* ── Named Config Manager ─────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-semibold text-white">Named Config Manager</p>
+          <span className="text-xs text-slate-500">{namedConfigs.length} configs</span>
+        </div>
+        <p className="text-xs text-slate-400">
+          Manage your saved configurations. "Set as Live" promotes a config to the active bot.
+        </p>
+
+        {promoteMsg && (
+          <p className={`text-xs px-3 py-2 rounded-lg border ${promoteMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{promoteMsg}</p>
+        )}
+
+        {!loading && namedConfigs.length === 0 && (
+          <p className="text-xs text-slate-500">
+            No named configs yet — save evolved configs from the Pipeline tab.
+          </p>
+        )}
+
+        <div className="space-y-2">
+          {namedConfigs.map(cfg => (
+            <div key={cfg.name} className="rounded-xl bg-navy border border-border px-3 py-3">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium text-white truncate">{cfg.name}</span>
+                  <SourceBadge source={cfg.source} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 mb-2 text-xs text-slate-500">
+                {cfg.fitness != null && <span>Fitness {cfg.fitness.toFixed(2)}</span>}
+                {cfg.total_return_pct != null && (
+                  <span className={cfg.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}>
+                    {cfg.total_return_pct >= 0 ? '+' : ''}{cfg.total_return_pct.toFixed(1)}%
+                  </span>
+                )}
+                {cfg.sharpe != null && <span>Sharpe {cfg.sharpe.toFixed(2)}</span>}
+                <span>{new Date(cfg.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                {cfg.notes && <span className="italic text-slate-600">{cfg.notes}</span>}
+              </div>
+              <button
+                onClick={() => { setPromoteConfirm(cfg); setPromoteMsg('') }}
+                disabled={promotingConfig === cfg.name}
+                className="w-full py-2 rounded-xl bg-green-800 hover:bg-green-700 disabled:opacity-40 text-green-200 text-xs font-semibold"
+              >
+                {promotingConfig === cfg.name ? 'Promoting…' : 'Set as Live'}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Create new blank config */}
+        <div className="pt-2 border-t border-border space-y-2">
+          <p className="text-xs text-slate-400 font-medium">Create blank manual config</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newConfigName}
+              onChange={e => setNewConfigName(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleCreateBlankConfig()}
+              placeholder="e.g. my_manual_v1"
+              className="flex-1 bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500 placeholder-slate-600"
+            />
+            <button
+              onClick={handleCreateBlankConfig}
+              disabled={creatingConfig || !newConfigName.trim()}
+              className="px-4 py-2 bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-sm rounded-xl font-medium"
+            >
+              {creatingConfig ? 'Creating…' : '+'}
+            </button>
+          </div>
+          {createMsg && (
+            <p className={`text-xs px-3 py-2 rounded-lg border ${createMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{createMsg}</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Trading Mode ─────────────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
+        <p className="text-sm font-semibold text-white">Trading Mode</p>
+        <p className="text-xs text-slate-400">Switching modes takes effect on next bot restart.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            onClick={() => requestModeSwitch('paper')}
+            className="py-3 rounded-xl bg-amber-900 border border-amber-700 text-amber-300 text-sm font-semibold"
+          >
+            PAPER
+          </button>
+          <button
+            onClick={() => requestModeSwitch('live')}
+            className="py-3 rounded-xl bg-red-950 border border-red-800 text-red-300 text-sm font-semibold"
+          >
+            ⚠ LIVE
+          </button>
+        </div>
+      </div>
+
+      {/* ── Strategy Reference ───────────────────────────────────────────── */}
+      <button
+        onClick={() => setShowGuide(true)}
+        className="w-full flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3 text-left hover:border-slate-600 transition-colors"
+      >
+        <span className="text-xl">📖</span>
+        <div>
+          <p className="text-white text-sm font-medium">View Strategy Guide</p>
+          <p className="text-slate-400 text-xs">How the bot executes trades — code + plain English</p>
+        </div>
+        <span className="ml-auto text-slate-500 text-sm">→</span>
+      </button>
+
+      {/* ── App Info ─────────────────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl p-4 border border-border space-y-2">
+        <p className="text-sm font-semibold text-white">App Info</p>
+        <div className="space-y-1 text-xs text-slate-500">
+          <p>BTC Wheel Bot Mobile · 5-tab restructure</p>
+          <a
+            href="https://github.com/banksiasprings/btc-wheel-bot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300"
+          >
+            GitHub →
+          </a>
+        </div>
+      </div>
+
+      {/* ── Logout ───────────────────────────────────────────────────────── */}
       <button
         onClick={() => {
           localStorage.removeItem('api_url')
@@ -652,33 +406,25 @@ export default function Settings({ onLogout }: Props) {
         Reset & Re-configure
       </button>
 
-      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
-
-      {/* Mode switch confirm dialog */}
+      {/* ── Mode switch confirm dialogs ───────────────────────────────────── */}
       {modeConfirm && pendingMode === 'live' && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
           <div className="bg-card border border-red-800 rounded-2xl p-6 w-full max-w-sm">
             <div className="text-red-400 text-2xl mb-3">⚠️</div>
             <h3 className="font-bold text-white text-lg mb-2">Switch to LIVE Trading?</h3>
             <p className="text-slate-400 text-sm mb-4">
-              This will switch the bot to <strong className="text-red-400">LIVE mode</strong> with
-              real money on Deribit. Type <code className="text-red-300">SWITCH_TO_LIVE</code> to
-              confirm.
+              This will switch the bot to <strong className="text-red-400">LIVE mode</strong> with real money on Deribit.
+              Type <code className="text-red-300">SWITCH_TO_LIVE</code> to confirm.
             </p>
             <input
               type="text"
               value={modeConfirmText}
-              onChange={(e) => setModeConfirmText(e.target.value)}
+              onChange={e => setModeConfirmText(e.target.value)}
               placeholder="SWITCH_TO_LIVE"
               className="w-full bg-navy border border-red-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none text-sm font-mono mb-4"
             />
             <div className="flex gap-3">
-              <button
-                onClick={() => { setModeConfirm(false); setPendingMode(null) }}
-                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
-              >
-                Cancel
-              </button>
+              <button onClick={() => { setModeConfirm(false); setPendingMode(null) }} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
               <button
                 onClick={confirmModeSwitch}
                 disabled={modeConfirmText !== 'SWITCH_TO_LIVE'}
@@ -694,154 +440,39 @@ export default function Settings({ onLogout }: Props) {
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6 z-50">
           <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm">
             <h3 className="font-bold text-white text-lg mb-2">Switch to Paper Trading?</h3>
-            <p className="text-slate-400 text-sm mb-6">
-              This will switch to paper (simulated) trading on next restart.
+            <p className="text-slate-400 text-sm mb-6">This will switch to paper (simulated) trading on next restart.</p>
+            <div className="flex gap-3">
+              <button onClick={() => { setModeConfirm(false); setPendingMode(null) }} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
+              <button onClick={confirmModeSwitch} className="flex-1 py-3 rounded-xl bg-amber-700 text-white text-sm font-semibold">Switch to Paper</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Promote confirm dialog ────────────────────────────────────────── */}
+      {promoteConfirm && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-green-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="text-3xl">⬆️</div>
+            <h3 className="font-bold text-white text-lg">Set as Live Config?</h3>
+            <p className="text-slate-400 text-sm">
+              This will overwrite the live config with{' '}
+              <span className="text-green-400 font-medium">{promoteConfirm.name}</span>.{' '}
+              The live bot will restart with these parameters.
             </p>
             <div className="flex gap-3">
+              <button onClick={() => setPromoteConfirm(null)} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
               <button
-                onClick={() => { setModeConfirm(false); setPendingMode(null) }}
-                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
+                onClick={() => handlePromote(promoteConfirm)}
+                disabled={!!promotingConfig}
+                className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
               >
-                Cancel
-              </button>
-              <button
-                onClick={confirmModeSwitch}
-                className="flex-1 py-3 rounded-xl bg-amber-700 text-white text-sm font-semibold"
-              >
-                Switch to Paper
+                {promotingConfig ? 'Promoting…' : 'Confirm'}
               </button>
             </div>
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-interface PresetCardProps {
-  title: string
-  icon: string
-  accent: 'amber' | 'green' | 'orange' | 'sky' | 'purple'
-  available: boolean
-  fitness: number | null
-  params: import('../api').PresetParams
-  isActive: boolean
-  onLoad: () => void
-  unavailableMsg: string
-  onInfo?: () => void
-}
-
-function PresetCard({ title, icon, accent, available, fitness, params, isActive, onLoad, unavailableMsg, onInfo }: PresetCardProps) {
-  const accentCls = {
-    amber:  { border: 'border-amber-800',  btn: 'bg-amber-800  hover:bg-amber-700  text-amber-200',  activeBadge: 'bg-amber-900  text-amber-300  border border-amber-700'  },
-    green:  { border: 'border-green-900',  btn: 'bg-green-800  hover:bg-green-700  text-green-200',  activeBadge: 'bg-green-900  text-green-300  border border-green-700'  },
-    orange: { border: 'border-orange-900', btn: 'bg-orange-800 hover:bg-orange-700 text-orange-200', activeBadge: 'bg-orange-900 text-orange-300 border border-orange-700' },
-    sky:    { border: 'border-sky-900',    btn: 'bg-sky-800    hover:bg-sky-700    text-sky-200',    activeBadge: 'bg-sky-900    text-sky-300    border border-sky-700'    },
-    purple: { border: 'border-purple-900', btn: 'bg-purple-800 hover:bg-purple-700 text-purple-200', activeBadge: 'bg-purple-900 text-purple-300 border border-purple-700' },
-  }[accent]
-
-  const iv = params.iv_rank_threshold
-  const dMin = params.target_delta_min
-  const dMax = params.target_delta_max
-  const dteMin = params.min_dte
-  const dteMax = params.max_dte
-  const leg = params.max_equity_per_leg
-  const free = params.min_free_equity_fraction
-
-  return (
-    <div className={`rounded-xl p-3 bg-slate-900 border ${available ? accentCls.border : 'border-slate-700'}`}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-white">{title}</span>
-          {isActive && (
-            <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${accentCls.activeBadge}`}>
-              ACTIVE
-            </span>
-          )}
-          {onInfo && (
-            <button onClick={onInfo} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
-          )}
-        </div>
-        {fitness != null && (
-          <span className="text-xs text-slate-400 font-mono">fitness {fitness.toFixed(2)}</span>
-        )}
-      </div>
-
-      {!available ? (
-        <p className="text-xs text-slate-500">{unavailableMsg}</p>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 mb-3 text-xs">
-            {iv != null && (
-              <span className="text-slate-400">IV: <span className="text-slate-200">{(iv * 100).toFixed(1)}%</span></span>
-            )}
-            {dMin != null && dMax != null && (
-              <span className="text-slate-400">Delta: <span className="text-slate-200">{dMin.toFixed(2)}–{dMax.toFixed(2)}</span></span>
-            )}
-            {dteMin != null && dteMax != null && (
-              <span className="text-slate-400">DTE: <span className="text-slate-200">{dteMin}–{dteMax}d</span></span>
-            )}
-            {leg != null && (
-              <span className="text-slate-400">Max Leg: <span className="text-slate-200">{(leg * 100).toFixed(1)}%</span></span>
-            )}
-            {free != null && (
-              <span className="text-slate-400">Free Reserve: <span className="text-slate-200">{(free * 100).toFixed(0)}%</span></span>
-            )}
-          </div>
-          <button
-            onClick={onLoad}
-            disabled={isActive}
-            className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${accentCls.btn}`}
-          >
-            {isActive ? 'Currently Loaded' : 'Load'}
-          </button>
-        </>
-      )}
-    </div>
-  )
-}
-
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange,
-  onInfo,
-}: {
-  label: string
-  value: number | null | undefined
-  min: number
-  max: number
-  step: number
-  onChange: (v: number) => void
-  onInfo?: () => void
-}) {
-  return (
-    <div>
-      <div className="flex justify-between mb-1">
-        <div className="flex items-center gap-1">
-          <label className="text-xs text-slate-400">{label}</label>
-          {onInfo && (
-            <button onClick={onInfo} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
-          )}
-        </div>
-        <span className="text-xs text-white font-mono">{value ?? '—'}</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value ?? min}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-full accent-green-400"
-      />
-      <div className="flex justify-between text-xs text-slate-600 mt-0.5">
-        <span>{min}</span>
-        <span>{max}</span>
-      </div>
     </div>
   )
 }

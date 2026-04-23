@@ -2,27 +2,24 @@ import { useState, useEffect, useCallback } from 'react'
 import InfoModal from './InfoModal'
 import { GLOSSARY } from '../lib/glossary'
 import {
-  AreaChart,
-  Area,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-} from 'recharts'
-import {
   getStatus,
   getPosition,
   getEquity,
-  getPresets,
   getBtcPrice,
+  getFarmStatus,
+  listConfigs,
   startBot,
   stopBot,
   closePosition,
   StatusData,
   PositionData,
   EquityData,
-  PresetsData,
+  FarmStatus,
+  NamedConfig,
   PresetParams,
 } from '../api'
+
+// ── Formatting helpers ─────────────────────────────────────────────────────────
 
 function fmt$(n: number | undefined | null) {
   if (n == null) return '—'
@@ -50,516 +47,7 @@ interface Props {
   onNavigateTo?: (tab: string) => void
 }
 
-export default function Dashboard({ onNavigateTo }: Props) {
-  const [status, setStatus] = useState<StatusData | null>(null)
-  const [position, setPosition] = useState<PositionData | null>(null)
-  const [equity, setEquity] = useState<EquityData | null>(null)
-  const [presets, setPresets] = useState<PresetsData | null>(null)
-  const [btcPrice, setBtcPrice] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [confirm, setConfirm] = useState<ConfirmAction>(null)
-  const [actionMsg, setActionMsg] = useState('')
-  const [info, setInfo] = useState<{ title: string; body: string } | null>(null)
-
-  const fetchAll = useCallback(async () => {
-    try {
-      const [s, p, e, pr, btc] = await Promise.all([
-        getStatus(),
-        getPosition(),
-        getEquity(),
-        getPresets().catch(() => null),
-        getBtcPrice().catch(() => null),
-      ])
-      setStatus(s)
-      setPosition(p)
-      setEquity(e)
-      setPresets(pr)
-      if (btc) setBtcPrice(btc.price)
-      setError('')
-    } catch (err) {
-      setError(String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchAll()
-    const id = setInterval(fetchAll, 5_000)
-    return () => clearInterval(id)
-  }, [fetchAll])
-
-  async function handleStart() {
-    try {
-      const r = await startBot()
-      setActionMsg(r.message)
-      setTimeout(() => setActionMsg(''), 3000)
-      fetchAll()
-    } catch (e) {
-      setActionMsg(String(e))
-    }
-  }
-
-  async function handleStop() {
-    setConfirm(null)
-    try {
-      const r = await stopBot()
-      setActionMsg(r.message)
-      setTimeout(() => setActionMsg(''), 3000)
-      fetchAll()
-    } catch (e) {
-      setActionMsg(String(e))
-    }
-  }
-
-  async function handleClose() {
-    setConfirm(null)
-    try {
-      const r = await closePosition()
-      setActionMsg(r.message)
-      setTimeout(() => setActionMsg(''), 3000)
-      fetchAll()
-    } catch (e) {
-      setActionMsg(String(e))
-    }
-  }
-
-  // Equity chart data (last 30 points)
-  const chartData = (() => {
-    if (!equity || equity.dates.length === 0) return []
-    const n = Math.min(30, equity.dates.length)
-    return equity.dates.slice(-n).map((d, i) => ({
-      date: d.slice(5),
-      equity: equity.equity[equity.equity.length - n + i],
-    }))
-  })()
-
-  const pnlPositive = (position?.unrealized_pnl_usd ?? 0) >= 0
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64 text-slate-400">
-        Loading…
-      </div>
-    )
-  }
-
-  const cp = presets?.current?.params
-
-  return (
-    <div className="p-4 space-y-4 pb-4">
-      <div className="flex items-center justify-between pt-2">
-        <h1 className="text-lg font-bold text-white">Dashboard</h1>
-        {btcPrice != null && (
-          <span className="text-sm font-mono text-slate-300">
-            ₿ {btcPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
-          </span>
-        )}
-      </div>
-
-      {error && (
-        <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
-          {error}
-        </div>
-      )}
-
-      {actionMsg && (
-        <div className="bg-green-950 border border-green-800 rounded-xl px-4 py-3 text-green-300 text-sm">
-          {actionMsg}
-        </div>
-      )}
-
-      {/* Status card */}
-      <div className="bg-card rounded-2xl p-4 border border-border">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span
-              className={`w-3 h-3 rounded-full flex-shrink-0 ${
-                !status?.bot_running
-                  ? 'bg-red-500'
-                  : status.paused
-                  ? 'bg-yellow-400 shadow-[0_0_8px_#facc15]'
-                  : 'bg-green-400 shadow-[0_0_8px_#22c55e]'
-              }`}
-            />
-            <div>
-              <div className="flex items-center gap-1">
-                <p className="font-semibold text-white">
-                  {!status?.bot_running
-                    ? 'Stopped'
-                    : status.paused
-                    ? 'Paused'
-                    : 'Running'}
-                </p>
-                <button onClick={() => setInfo(GLOSSARY.bot_status)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
-              </div>
-              {status?.bot_running && (
-                <p className="text-xs text-slate-400">
-                  {status.paused
-                    ? 'Kill switch active — press Start Bot to resume'
-                    : fmtUptime(status.uptime_seconds)
-                    ? `Up ${fmtUptime(status.uptime_seconds)}`
-                    : status.last_heartbeat
-                    ? `Heartbeat ${new Date(status.last_heartbeat).toLocaleTimeString()}`
-                    : 'Running'}
-                </p>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <button onClick={() => setInfo(GLOSSARY.paper_mode)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
-            <span
-              className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
-                status?.mode === 'live'
-                  ? 'bg-red-900 text-red-300 border border-red-700'
-                  : 'bg-amber-900 text-amber-300 border border-amber-700'
-              }`}
-            >
-              {status?.mode ?? '—'}
-            </span>
-          </div>
-        </div>
-        {status?.last_heartbeat && (
-          <div className="flex items-center gap-1 mt-2">
-            <p className="text-xs text-slate-500">
-              Last heartbeat: {new Date(status.last_heartbeat).toLocaleTimeString()}
-            </p>
-            <button onClick={() => setInfo(GLOSSARY.heartbeat)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
-            <button
-              onClick={fetchAll}
-              title="Refresh status"
-              className="text-slate-600 hover:text-slate-400 text-xs leading-none ml-1"
-            >
-              ↻
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Quick actions */}
-      <div className="bg-card rounded-2xl p-4 border border-border">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">
-          Quick Actions
-        </p>
-        <div className="grid grid-cols-3 gap-2">
-          <ActionBtn
-            label="Start Bot"
-            color="green"
-            onClick={handleStart}
-            disabled={status?.bot_running}
-          />
-          <ActionBtn
-            label="Stop Bot"
-            color="red"
-            onClick={() => setConfirm('stop')}
-            disabled={!status?.bot_running}
-          />
-          <ActionBtn
-            label="Close Position"
-            color="amber"
-            onClick={() => setConfirm('close')}
-            disabled={!position?.open}
-          />
-        </div>
-      </div>
-
-      {/* Capital overview strip */}
-      {equity && (
-        <CapitalStrip
-          equity={equity}
-          position={position}
-          onInfo={(t, b) => setInfo({ title: t, body: b })}
-        />
-      )}
-
-      {/* Active Config card */}
-      {cp && (
-        <div className="bg-card rounded-2xl p-4 border border-border">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">
-              Active Config
-            </p>
-            {onNavigateTo && (
-              <button
-                onClick={() => onNavigateTo('settings')}
-                className="text-xs text-green-400 hover:text-green-300 transition-colors"
-              >
-                Change →
-              </button>
-            )}
-          </div>
-          <div className="flex items-center gap-2 mb-3">
-            <PresetBadge active={presets!.active} />
-            <button
-              onClick={() => setInfo({
-                title: "How Parameters Were Chosen",
-                body: "EVOLVED — parameters were found by a genetic algorithm that tested hundreds of combinations and selected the best-performing set for a specific goal (Balanced, Max Yield, Safest, or Sharpe).\n\nSWEEP — parameters were found by a parameter sweep that tested each setting individually and picked the single best value for each.\n\nCUSTOM — parameters were set manually in the Trading Parameters section of Settings. No automated optimisation was used.",
-              })}
-              className="text-slate-500 hover:text-slate-300 text-xs leading-none"
-            >ⓘ</button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <Stat
-              label="IV Threshold"
-              value={cp.iv_rank_threshold != null
-                ? `${(cp.iv_rank_threshold * 100).toFixed(1)}%`
-                : '—'}
-            />
-            <Stat
-              label="Delta Range"
-              value={cp.target_delta_min != null && cp.target_delta_max != null
-                ? `${cp.target_delta_min.toFixed(2)}–${cp.target_delta_max.toFixed(2)}`
-                : '—'}
-            />
-            <Stat
-              label="DTE Range"
-              value={cp.min_dte != null && cp.max_dte != null
-                ? `${cp.min_dte}–${cp.max_dte}d`
-                : '—'}
-            />
-            <Stat
-              label="Max Leg Size"
-              value={cp.max_equity_per_leg != null
-                ? `${(cp.max_equity_per_leg * 100).toFixed(1)}%`
-                : '—'}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* Black Swan Calculator — always shown when config is loaded */}
-      {cp && (btcPrice ?? 0) > 0 && (
-        <BlackSwanCard
-          position={position?.open ? position : null}
-          equityUsd={equity?.current_equity ?? 0}
-          btcPrice={btcPrice ?? 0}
-          configParams={cp}
-        />
-      )}
-
-      {/* Position card */}
-      <div className="bg-card rounded-2xl p-4 border border-border">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">
-          Current Position
-        </p>
-        {position?.open ? (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-semibold text-white">
-                  {position.type?.replace('_', ' ').toUpperCase()}
-                </p>
-                <p className="text-slate-400 text-sm">
-                  Strike {position.strike?.toLocaleString()} · {position.days_to_expiry}d to expiry
-                </p>
-              </div>
-              <div className="text-right">
-                <p
-                  className={`font-bold text-lg ${
-                    pnlPositive ? 'text-green-400' : 'text-red-400'
-                  }`}
-                >
-                  {fmt$(position.unrealized_pnl_usd)}
-                </p>
-                <p
-                  className={`text-sm ${
-                    pnlPositive ? 'text-green-500' : 'text-red-500'
-                  }`}
-                >
-                  {fmtPct(position.unrealized_pnl_pct)}
-                </p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <Stat label="Premium" value={fmt$(position.premium_collected)} />
-              <Stat label="Spot" value={fmt$(position.current_spot)} />
-              <Stat label="Contracts" value={String(position.contracts ?? '—')} />
-              <Stat label="Option Δ" value={position.current_delta != null ? position.current_delta.toFixed(3) : '—'} />
-              {(() => {
-                const committed = (position.strike ?? 0) * (position.contracts ?? 0)
-                const free = equity?.current_equity != null ? equity.current_equity - committed : null
-                return (
-                  <>
-                    <Stat label="Capital Committed" value={fmt$(committed || null)} accent onInfo={() => setInfo(GLOSSARY.capital_committed)} />
-                    <Stat label="Free Reserve" value={fmt$(free)} accent onInfo={() => setInfo(GLOSSARY.free_reserve)} />
-                  </>
-                )
-              })()}
-              {/* Hedge stats */}
-              {position.hedge && (
-                <>
-                  <div className="col-span-2 border-t border-border/40 mt-1 pt-2">
-                    <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Delta Hedge (BTC-PERP)</p>
-                  </div>
-                  <Stat
-                    label="Net Δ"
-                    value={position.net_delta != null ? `${position.net_delta >= 0 ? '+' : ''}${position.net_delta.toFixed(3)} BTC` : '—'}
-                    accent={position.net_delta != null && Math.abs(position.net_delta) > 0.05}
-                  />
-                  <Stat
-                    label="Perp Position"
-                    value={position.hedge.perp_position_btc !== 0
-                      ? `${position.hedge.perp_position_btc > 0 ? '+' : ''}${position.hedge.perp_position_btc.toFixed(3)} BTC`
-                      : 'Flat'}
-                  />
-                  <Stat
-                    label="Hedge P&L"
-                    value={position.hedge.unrealised_pnl_usd != null
-                      ? fmt$(position.hedge.unrealised_pnl_usd)
-                      : '—'}
-                  />
-                  <Stat
-                    label="Realised (hedge)"
-                    value={fmt$(position.hedge.realised_pnl_usd)}
-                  />
-                </>
-              )}
-              {(() => {
-                const { premium_collected, strike, contracts, days_to_expiry } = position
-                if (
-                  premium_collected != null && strike != null &&
-                  contracts != null && days_to_expiry != null && days_to_expiry > 0
-                ) {
-                  const yield_pa = (premium_collected / (strike * contracts)) * (365 / days_to_expiry) * 100
-                  return (
-                    <div className="col-span-2 rounded-xl px-3 py-2 bg-green-950/40 border border-green-900/50">
-                      <div className="flex items-center gap-1">
-                        <p className="text-xs text-green-500/80">Est. Annual Yield</p>
-                        <button onClick={() => setInfo(GLOSSARY.est_annual_yield)} className="text-green-700 hover:text-green-500 text-xs leading-none">ⓘ</button>
-                      </div>
-                      <p className="text-sm font-medium text-white">{yield_pa.toFixed(1)}% p.a.</p>
-                      <p className="text-xs text-green-600/70 mt-0.5">If premium fully collected at expiry</p>
-                    </div>
-                  )
-                }
-                return null
-              })()}
-            </div>
-          </div>
-        ) : (
-          <p className="text-slate-400 text-sm">No open position</p>
-        )}
-      </div>
-
-      {/* Equity chart */}
-      {chartData.length > 1 && (
-        <div className="bg-card rounded-2xl p-4 border border-border">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">
-              Equity (last {chartData.length}d)
-            </p>
-            <div className="text-right">
-              <p className="font-semibold text-white text-sm">
-                {fmt$(equity?.current_equity)}
-              </p>
-              <p
-                className={`text-xs ${
-                  (equity?.total_return_pct ?? 0) >= 0
-                    ? 'text-green-400'
-                    : 'text-red-400'
-                }`}
-              >
-                {fmtPct(equity?.total_return_pct)}
-              </p>
-            </div>
-          </div>
-          <ResponsiveContainer width="100%" height={80}>
-            <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="date" hide />
-              <Tooltip
-                contentStyle={{
-                  background: '#1e293b',
-                  border: '1px solid #334155',
-                  borderRadius: 8,
-                  color: '#fff',
-                  fontSize: 12,
-                }}
-                formatter={(v: number) => [fmt$(v), 'Equity']}
-              />
-              <Area
-                type="monotone"
-                dataKey="equity"
-                stroke="#22c55e"
-                strokeWidth={2}
-                fill="url(#equityGrad)"
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      )}
-
-      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
-
-      {/* Confirm dialog */}
-      {confirm && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6 z-50">
-          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm">
-            <h3 className="font-bold text-white text-lg mb-2">
-              {confirm === 'stop' ? 'Stop Bot?' : 'Close Position?'}
-            </h3>
-            <div className="bg-amber-950 border border-amber-700 rounded-xl px-3 py-3 mb-5 flex gap-2.5">
-              <span className="text-amber-400 text-base leading-snug flex-shrink-0">⚠️</span>
-              {confirm === 'stop' ? (
-                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
-                  <li>The bot will stop scanning for opportunities and halt all automated trading.</li>
-                  <li className="font-semibold">Any open position will NOT be closed — it stays open and exposed until you manually close it or restart the bot.</li>
-                  <li>You can restart at any time from this screen.</li>
-                </ul>
-              ) : (
-                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
-                  <li>Your open position will be force-closed immediately at the current market price.</li>
-                  <li className="font-semibold">You'll receive whatever premium the market offers now, which may be less than what you originally collected.</li>
-                  <li>Use this to exit early or cut a loss — this cannot be undone.</li>
-                </ul>
-              )}
-            </div>
-            <div className="flex gap-3">
-              <button
-                onClick={() => setConfirm(null)}
-                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm font-medium"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirm === 'stop' ? handleStop : handleClose}
-                className={`flex-1 py-3 rounded-xl text-white text-sm font-semibold ${
-                  confirm === 'stop' ? 'bg-red-600' : 'bg-amber-600'
-                }`}
-              >
-                {confirm === 'stop' ? 'Stop' : 'Close'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PresetBadge({ active }: { active: string }) {
-  const configs: Record<string, { label: string; cls: string }> = {
-    sweep:            { label: 'SWEEP BEST',   cls: 'bg-amber-900  text-amber-300  border-amber-700'  },
-    evolve_balanced:  { label: '🎯 BALANCED',  cls: 'bg-green-900  text-green-300  border-green-700'  },
-    evolve_max_yield: { label: '🚀 MAX YIELD', cls: 'bg-orange-900 text-orange-300 border-orange-700' },
-    evolve_safest:    { label: '🛡 SAFEST',    cls: 'bg-sky-900    text-sky-300    border-sky-700'    },
-    evolve_sharpe:    { label: '⚖️ SHARPE',    cls: 'bg-purple-900 text-purple-300 border-purple-700' },
-    custom:           { label: 'CUSTOM',        cls: 'bg-slate-800  text-slate-400  border-slate-600'  },
-  }
-  const { label, cls } = configs[active] ?? configs.custom
-  return (
-    <span className={`px-3 py-1 rounded-full text-xs font-bold border ${cls}`}>
-      {label}
-    </span>
-  )
-}
+// ── Stat chip ─────────────────────────────────────────────────────────────────
 
 function Stat({ label, value, accent, onInfo }: { label: string; value: string; accent?: boolean; onInfo?: () => void }) {
   return (
@@ -575,6 +63,42 @@ function Stat({ label, value, accent, onInfo }: { label: string; value: string; 
   )
 }
 
+// ── Action button ─────────────────────────────────────────────────────────────
+
+function ActionBtn({ label, color, onClick, disabled }: { label: string; color: 'green' | 'red' | 'amber'; onClick: () => void; disabled?: boolean }) {
+  const colors = {
+    green: 'bg-green-800 hover:bg-green-700 text-green-200 disabled:opacity-40',
+    red: 'bg-red-900 hover:bg-red-800 text-red-200 disabled:opacity-40',
+    amber: 'bg-amber-900 hover:bg-amber-800 text-amber-200 disabled:opacity-40',
+  }
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${colors[color]} disabled:cursor-not-allowed rounded-xl py-3 px-2 text-xs font-medium transition-colors text-center leading-tight`}
+    >
+      {label}
+    </button>
+  )
+}
+
+// ── Source badge for named config ──────────────────────────────────────────────
+
+function ConfigSourceBadge({ source }: { source: string }) {
+  const map: Record<string, string> = {
+    evolved:  'bg-green-900 text-green-300 border-green-700',
+    manual:   'bg-slate-800 text-slate-400 border-slate-600',
+    promoted: 'bg-amber-900 text-amber-300 border-amber-700',
+  }
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${map[source] ?? map.manual}`}>
+      {source.charAt(0).toUpperCase() + source.slice(1)}
+    </span>
+  )
+}
+
+// ── Black Swan Calculator (unchanged logic, slimmed) ──────────────────────────
+
 function BlackSwanCard({
   position,
   equityUsd,
@@ -588,123 +112,81 @@ function BlackSwanCard({
 }) {
   const [open, setOpen] = useState(false)
 
-  // ── Derive inputs: real position if open, otherwise hypothetical from config ──
   const isHypothetical = !position
+  const isPut = true
+  const effectiveEquity = equityUsd > 0 ? equityUsd : (configParams.starting_equity ?? 0)
 
   let strike: number
   let contracts: number
   let premiumUsd: number
-  const isPut = true  // bot only sells puts currently
-
-  // When no equity history exists (bot stopped / fresh start), fall back to the
-  // genome's starting_equity so hypothetical calculations are still meaningful
-  const effectiveEquity = equityUsd > 0
-    ? equityUsd
-    : (configParams.starting_equity ?? 0)
 
   if (position) {
-    strike     = position.strike     ?? 0
-    contracts  = position.contracts  ?? 0
+    strike = position.strike ?? 0
+    contracts = position.contracts ?? 0
     premiumUsd = position.premium_collected ?? 0
   } else {
-    // Hypothetical: estimate what the bot would open given the active config
-    const otmOffset   = configParams.approx_otm_offset       ?? 0.05
-    const legFrac     = configParams.max_equity_per_leg       ?? 0.10
-    const premFrac    = configParams.premium_fraction_of_spot ?? 0.02
-    strike            = Math.round(btcPrice * (1 - otmOffset) / 1000) * 1000
+    const otmOffset = configParams.approx_otm_offset ?? 0.05
+    const legFrac = configParams.max_equity_per_leg ?? 0.10
+    const premFrac = configParams.premium_fraction_of_spot ?? 0.02
+    strike = Math.round(btcPrice * (1 - otmOffset) / 1000) * 1000
     const maxNotional = effectiveEquity * legFrac
-    // No lot-size floor in hypothetical mode — this is a calculator, not an order
-    contracts         = strike > 0 ? maxNotional / strike : 0
-    premiumUsd        = btcPrice * premFrac * contracts
+    contracts = strike > 0 ? maxNotional / strike : 0
+    premiumUsd = btcPrice * premFrac * contracts
   }
 
-  const maxLossUsd = isPut
-    ? strike * contracts
-    : Math.max(0, btcPrice * 10 - strike) * contracts
-
-  const marginSafety  = maxLossUsd > 0 ? effectiveEquity / maxLossUsd : Infinity
+  const maxLossUsd = isPut ? strike * contracts : Math.max(0, btcPrice * 10 - strike) * contracts
+  const marginSafety = maxLossUsd > 0 ? effectiveEquity / maxLossUsd : Infinity
   const marginDisplay = marginSafety === Infinity ? '∞' : `${marginSafety.toFixed(1)}×`
-  const marginColor   =
-    marginSafety >= 2   ? 'text-green-400' :
-    marginSafety >= 1.2 ? 'text-amber-400' : 'text-red-400'
-  const marginBorder  =
-    marginSafety >= 2   ? 'border-green-900/50' :
-    marginSafety >= 1.2 ? 'border-amber-900/50' : 'border-red-900/50'
+  const marginColor = marginSafety >= 2 ? 'text-green-400' : marginSafety >= 1.2 ? 'text-amber-400' : 'text-red-400'
+  const marginBorder = marginSafety >= 2 ? 'border-green-900/50' : marginSafety >= 1.2 ? 'border-amber-900/50' : 'border-red-900/50'
 
-  // Delta of the option leg — used to estimate hedge P&L
-  // Real position: use live delta; hypothetical: midpoint of configured delta range
   const optionDelta = position?.current_delta
     ?? (((configParams.target_delta_min ?? 0.15) + (configParams.target_delta_max ?? 0.35)) / 2)
-
-  // Short perp hedge size in BTC (negative = short)
-  // Real: use actual perp position; hypothetical: estimate from delta × contracts
   const perpBtc = position?.hedge?.perp_position_btc ?? -(optionDelta * contracts)
 
-  // Full scenario range: crash → flat → rise
-  // For a short put + delta hedge, flat/slight rise is the WIN zone
   type Scenario = { label: string; move: number; zone: 'crash' | 'flat' | 'rise' }
-  // Order: mild → extreme crash, then flat win zone, then rise zone
-  // → $0 at the bottom of crash so severity reads top-to-bottom naturally
   const scenarios: Scenario[] = [
-    { label: '+30%',  move: +0.30, zone: 'rise'  },
-    { label: '+10%',  move: +0.10, zone: 'rise'  },
-    { label: 'Flat',  move:  0.00, zone: 'flat'  },
-    { label: '-10%',  move: -0.10, zone: 'crash' },
-    { label: '-20%',  move: -0.20, zone: 'crash' },
-    { label: '-30%',  move: -0.30, zone: 'crash' },
-    { label: '-50%',  move: -0.50, zone: 'crash' },
-    { label: '-70%',  move: -0.70, zone: 'crash' },
-    { label: '→ $0',  move: -1.00, zone: 'crash' },
+    { label: '+30%', move: +0.30, zone: 'rise' },
+    { label: '+10%', move: +0.10, zone: 'rise' },
+    { label: 'Flat', move: 0.00, zone: 'flat' },
+    { label: '-10%', move: -0.10, zone: 'crash' },
+    { label: '-20%', move: -0.20, zone: 'crash' },
+    { label: '-30%', move: -0.30, zone: 'crash' },
+    { label: '-50%', move: -0.50, zone: 'crash' },
+    { label: '-70%', move: -0.70, zone: 'crash' },
+    { label: '→ $0', move: -1.00, zone: 'crash' },
   ]
 
   const rows = scenarios.map(({ label, move, zone }) => {
-    const sPrice      = Math.max(1, btcPrice * (1 + move))
-    // Put option P&L: premium collected minus intrinsic loss
-    const intrinsic   = Math.max(0, strike - sPrice) * contracts
-    const putPnl      = premiumUsd - intrinsic
-    // Hedge P&L: short perp gains when price falls, loses when price rises
-    // perpBtc is negative (short), so: short × (new - old) = gain on fall
-    const hedgePnl    = perpBtc * (sPrice - btcPrice)
-    const netPnl      = putPnl + hedgePnl
-    const eqAfter     = effectiveEquity + netPnl
-    const lossPct     = effectiveEquity > 0 ? Math.max(0, -netPnl / effectiveEquity * 100) : 0
-    const status      =
-      eqAfter <= 0  ? '❌ Liq.'    :
-      lossPct > 30  ? '🔴 Critical' :
-      lossPct > 10  ? '🟡 Warning'  :
-      zone === 'flat' || netPnl > 0 ? '🟢 Win'  : '🟢 Safe'
+    const sPrice = Math.max(1, btcPrice * (1 + move))
+    const intrinsic = Math.max(0, strike - sPrice) * contracts
+    const putPnl = premiumUsd - intrinsic
+    const hedgePnl = perpBtc * (sPrice - btcPrice)
+    const netPnl = putPnl + hedgePnl
+    const eqAfter = effectiveEquity + netPnl
+    const lossPct = effectiveEquity > 0 ? Math.max(0, -netPnl / effectiveEquity * 100) : 0
+    const status = eqAfter <= 0 ? '❌ Liq.' : lossPct > 30 ? '🔴 Critical' : lossPct > 10 ? '🟡 Warning' : zone === 'flat' || netPnl > 0 ? '🟢 Win' : '🟢 Safe'
     return { label, zone, sPrice, putPnl, hedgePnl, netPnl, eqAfter, lossPct, status }
   })
 
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
-      {/* Header — always visible */}
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center justify-between px-4 py-3"
-      >
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="text-amber-400 text-base">⚡</span>
           <div className="text-left">
             <span className="text-sm font-medium text-white">Black Swan Calculator</span>
-            {isHypothetical && (
-              <span className="ml-2 text-xs text-slate-500">· hypothetical</span>
-            )}
+            {isHypothetical && <span className="ml-2 text-xs text-slate-500">· hypothetical</span>}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {!open && (
-            <span className={`text-sm font-bold ${marginColor}`}>
-              {marginDisplay} cover
-            </span>
-          )}
+          {!open && <span className={`text-sm font-bold ${marginColor}`}>{marginDisplay} cover</span>}
           <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
         </div>
       </button>
 
       {open && (
         <div className="px-4 pb-4 space-y-3 border-t border-border/40">
-          {/* Hypothetical notice */}
           {isHypothetical && (
             <div className="mt-3 rounded-xl px-3 py-2 bg-slate-800/60 border border-slate-700/50">
               <p className="text-xs text-slate-400">
@@ -713,36 +195,17 @@ function BlackSwanCard({
               </p>
             </div>
           )}
-
-          {/* Margin Safety Banner */}
           <div className={`${isHypothetical ? '' : 'mt-3'} rounded-xl px-4 py-3 bg-navy border ${marginBorder} flex items-baseline gap-3 flex-wrap`}>
             <span className="text-xs text-slate-500 whitespace-nowrap">Margin Safety</span>
             <span className={`text-2xl font-bold ${marginColor}`}>{marginDisplay}</span>
-            <span className="text-xs text-slate-500 leading-snug">
-              Max loss (BTC → $0): {fmt$(maxLossUsd)}
-            </span>
+            <span className="text-xs text-slate-500 leading-snug">Max loss (BTC → $0): {fmt$(maxLossUsd)}</span>
           </div>
-
-          {/* Scenario rows */}
           <div className="space-y-1">
-            {rows.map(({ label, zone, sPrice, putPnl, hedgePnl, netPnl, eqAfter, lossPct, status }, idx) => {
-              // Zone divider: show label above first row of each new zone
+            {rows.map(({ label, zone, sPrice, hedgePnl, netPnl, eqAfter, lossPct, status }, idx) => {
               const prevZone = idx > 0 ? rows[idx - 1].zone : zone
               const showDivider = zone !== prevZone
-
-              const rowBg =
-                eqAfter <= 0  ? 'bg-red-950/60 border-red-900/60' :
-                lossPct > 30  ? 'bg-red-950/30 border-red-900/30' :
-                lossPct > 10  ? 'bg-amber-950/30 border-amber-900/30' :
-                zone === 'flat' ? 'bg-green-950/40 border-green-900/40' :
-                zone === 'rise' ? 'bg-sky-950/20 border-sky-900/20' :
-                                  'bg-navy border-transparent'
-
-              const zoneLabel: Record<string, string> = {
-                flat: '── Flat · your ideal outcome ──',
-                crash: '── BTC falls · crash risk ──',
-              }
-
+              const rowBg = eqAfter <= 0 ? 'bg-red-950/60 border-red-900/60' : lossPct > 30 ? 'bg-red-950/30 border-red-900/30' : lossPct > 10 ? 'bg-amber-950/30 border-amber-900/30' : zone === 'flat' ? 'bg-green-950/40 border-green-900/40' : zone === 'rise' ? 'bg-sky-950/20 border-sky-900/20' : 'bg-navy border-transparent'
+              const zoneLabel: Record<string, string> = { flat: '── Flat · your ideal outcome ──', crash: '── BTC falls · crash risk ──' }
               return (
                 <div key={label}>
                   {showDivider && zone in zoneLabel && (
@@ -764,18 +227,15 @@ function BlackSwanCard({
                           hedge {hedgePnl >= 0 ? '+' : ''}{fmt$(hedgePnl)}
                         </span>
                       )}
-                      {lossPct > 0 && (
-                        <span className="text-xs text-slate-500">loss {lossPct.toFixed(1)}%</span>
-                      )}
+                      {lossPct > 0 && <span className="text-xs text-slate-500">loss {lossPct.toFixed(1)}%</span>}
                     </div>
                   </div>
                 </div>
               )
             })}
           </div>
-
           <p className="text-xs text-slate-600 leading-snug">
-            Net = put P&L + delta hedge P&L. Hedge estimate assumes static position — real daily rebalancing reduces crash losses further. Intrinsic value only; DTEs with remaining theta will show smaller real losses.
+            Net = put P&L + delta hedge P&L. Hedge estimate assumes static position — real daily rebalancing reduces crash losses further.
           </p>
         </div>
       )}
@@ -783,136 +243,394 @@ function BlackSwanCard({
   )
 }
 
-function ActionBtn({
-  label,
-  color,
-  onClick,
-  disabled,
-}: {
-  label: string
-  color: 'green' | 'red' | 'amber'
-  onClick: () => void
-  disabled?: boolean
-}) {
-  const colors = {
-    green: 'bg-green-800 hover:bg-green-700 text-green-200 disabled:opacity-40',
-    red: 'bg-red-900 hover:bg-red-800 text-red-200 disabled:opacity-40',
-    amber: 'bg-amber-900 hover:bg-amber-800 text-amber-200 disabled:opacity-40',
+// ── Main Dashboard ────────────────────────────────────────────────────────────
+
+export default function Dashboard({ onNavigateTo }: Props) {
+  const [status, setStatus]           = useState<StatusData | null>(null)
+  const [position, setPosition]       = useState<PositionData | null>(null)
+  const [equity, setEquity]           = useState<EquityData | null>(null)
+  const [farmStatus, setFarmStatus]   = useState<FarmStatus | null>(null)
+  const [configs, setConfigs]         = useState<NamedConfig[]>([])
+  const [btcPrice, setBtcPrice]       = useState<number | null>(null)
+  const [loading, setLoading]         = useState(true)
+  const [error, setError]             = useState('')
+  const [confirm, setConfirm]         = useState<ConfirmAction>(null)
+  const [actionMsg, setActionMsg]     = useState('')
+  const [info, setInfo]               = useState<{ title: string; body: string } | null>(null)
+
+  const fetchAll = useCallback(async () => {
+    try {
+      const [s, p, e, farm, btc, cfgs] = await Promise.allSettled([
+        getStatus(),
+        getPosition(),
+        getEquity(),
+        getFarmStatus(),
+        getBtcPrice(),
+        listConfigs(),
+      ])
+      if (s.status === 'fulfilled')    setStatus(s.value)
+      if (p.status === 'fulfilled')    setPosition(p.value)
+      if (e.status === 'fulfilled')    setEquity(e.value)
+      if (farm.status === 'fulfilled') setFarmStatus(farm.value)
+      if (btc.status === 'fulfilled')  setBtcPrice(btc.value.price)
+      if (cfgs.status === 'fulfilled') setConfigs(cfgs.value)
+      // Only set error if the core status call failed
+      if (s.status === 'rejected') setError(String(s.reason))
+      else setError('')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchAll()
+    const id = setInterval(fetchAll, 5_000)
+    return () => clearInterval(id)
+  }, [fetchAll])
+
+  async function handleStart() {
+    try {
+      const r = await startBot()
+      setActionMsg(r.message)
+      setTimeout(() => setActionMsg(''), 3000)
+      fetchAll()
+    } catch (e) { setActionMsg(String(e)) }
   }
+
+  async function handleStop() {
+    setConfirm(null)
+    try {
+      const r = await stopBot()
+      setActionMsg(r.message)
+      setTimeout(() => setActionMsg(''), 3000)
+      fetchAll()
+    } catch (e) { setActionMsg(String(e)) }
+  }
+
+  async function handleClose() {
+    setConfirm(null)
+    try {
+      const r = await closePosition()
+      setActionMsg(r.message)
+      setTimeout(() => setActionMsg(''), 3000)
+      fetchAll()
+    } catch (e) { setActionMsg(String(e)) }
+  }
+
+  // ── Derive active config name from named configs + status ─────────────────
+  // Try to find a promoted config — that's the live config
+  const promotedConfig = configs.find(c => c.source === 'promoted')
+  const activeConfigName = promotedConfig?.name ?? 'Master Config'
+
+  // ── Farm overview strip data ──────────────────────────────────────────────
+  const bots = farmStatus?.bots ?? []
+  const runningBots = bots.filter(b => b.status === 'running').length
+  const readyBots   = bots.filter(b => b.readiness.ready).length
+  const bestBot     = bots.length > 0
+    ? bots.reduce((a, b) => ((a.metrics.sharpe ?? 0) > (b.metrics.sharpe ?? 0) ? a : b))
+    : null
+
+  // ── Today's stats ─────────────────────────────────────────────────────────
+  const pnlPositive = (position?.unrealized_pnl_usd ?? 0) >= 0
+
+  if (loading) {
+    return <div className="flex items-center justify-center h-64 text-slate-400">Loading…</div>
+  }
+
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className={`${colors[color]} disabled:cursor-not-allowed rounded-xl py-3 px-2 text-xs font-medium transition-colors text-center leading-tight`}
-    >
-      {label}
-    </button>
-  )
-}
-
-// ── Capital overview strip ─────────────────────────────────────────────────────
-function CapitalStrip({
-  equity,
-  position,
-  onInfo,
-}: {
-  equity: EquityData
-  position: PositionData | null
-  onInfo: (title: string, body: string) => void
-}) {
-  const current  = equity.current_equity  ?? 0
-  const starting = equity.starting_equity ?? 0
-  const roiPct   = equity.total_return_pct ?? (starting > 0 ? ((current - starting) / starting) * 100 : null)
-
-  // Notional exposure = strike × contracts (the real risk number)
-  const notional = position?.open && position.strike && position.contracts
-    ? position.strike * position.contracts
-    : 0
-
-  // "Free" capital = equity minus notional at risk (can show leverage > 1)
-  const free = current - notional
-
-  // Leverage ratio
-  const leverage = current > 0 && notional > 0 ? notional / current : 0
-
-  const ROI_INFO = {
-    title: 'Overall ROI',
-    body: 'Total return since the starting equity recorded in your config. Calculated as (current equity − starting equity) ÷ starting equity × 100.\n\nThis is a simple point-to-point return — it doesn\'t account for time elapsed. For time-adjusted performance, the annualised yield shown in the position card is more informative.',
-  }
-
-  const NOTIONAL_INFO = {
-    title: 'Notional at Risk',
-    body: 'Strike price × number of contracts = your maximum possible loss if BTC went to zero.\n\nThis is the "true" exposure of the short put — not the margin held by the exchange (which is much smaller). Watching this number relative to total equity tells you how leveraged the position is.\n\nE.g. $80,000 strike × 0.02 contracts = $1,600 notional on $1,256 equity = 1.27× leverage.',
-  }
-
-  const FREE_INFO = {
-    title: 'Free Capital',
-    body: 'Total equity minus the notional risk of the open position. A negative number means your notional exposure exceeds your account equity (you\'re leveraged).\n\nNote: the exchange only holds a fraction of the notional as margin — so a negative "free capital" number doesn\'t mean you\'re underwater, it means your notional exposure is larger than your total equity.',
-  }
-
-  return (
-    <div className="bg-card rounded-2xl p-4 border border-border">
-      <div className="flex items-center gap-1 mb-3">
-        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Capital Overview</p>
-        <button
-          onClick={() => onInfo(
-            'Capital Overview',
-            'A quick snapshot of where your equity stands relative to your open position.\n\n• Total Equity — current account value\n• In Trade (Notional) — strike × contracts, your maximum possible loss\n• Free Capital — equity minus notional risk (negative = leveraged)\n• Overall ROI — total return since starting equity\n\nFor time-adjusted return, see the Annualised Yield in the position card below.'
-          )}
-          className="text-slate-600 hover:text-slate-400 text-xs leading-none"
-        >ⓘ</button>
+    <div className="p-4 space-y-4 pb-4">
+      {/* Header */}
+      <div className="flex items-center justify-between pt-2">
+        <h1 className="text-lg font-bold text-white">Dashboard</h1>
+        {btcPrice != null && (
+          <span className="text-sm font-mono text-slate-300">
+            ₿ {btcPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+          </span>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        {/* Total equity */}
-        <div className="rounded-xl bg-navy px-3 py-2.5">
-          <p className="text-xs text-slate-500 mb-0.5">Total Equity</p>
-          <p className="text-sm font-semibold text-white">{fmt$(current)}</p>
-          <p className="text-xs text-slate-600 mt-0.5">started {fmt$(starting)}</p>
+      {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
+
+      {error && (
+        <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">{error}</div>
+      )}
+      {actionMsg && (
+        <div className="bg-green-950 border border-green-800 rounded-xl px-4 py-3 text-green-300 text-sm">{actionMsg}</div>
+      )}
+
+      {/* ── 1. Live Bot Header ────────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl p-4 border border-border">
+        <div className="flex items-center justify-between mb-3">
+          {/* Status indicator */}
+          <div className="flex items-center gap-3">
+            <span className={`w-3 h-3 rounded-full flex-shrink-0 ${
+              !status?.bot_running
+                ? 'bg-red-500'
+                : status.paused
+                ? 'bg-yellow-400 shadow-[0_0_8px_#facc15]'
+                : 'bg-green-400 shadow-[0_0_8px_#22c55e]'
+            }`} />
+            <div>
+              <div className="flex items-center gap-1.5">
+                <p className="font-semibold text-white">
+                  {!status?.bot_running ? 'Stopped' : status.paused ? 'Paused' : 'Running'}
+                </p>
+                <button onClick={() => setInfo(GLOSSARY.bot_status)} className="text-slate-500 hover:text-slate-300 text-xs leading-none">ⓘ</button>
+              </div>
+              {status?.bot_running && (
+                <p className="text-xs text-slate-400">
+                  {status.paused
+                    ? 'Kill switch active'
+                    : fmtUptime(status.uptime_seconds)
+                    ? `Up ${fmtUptime(status.uptime_seconds)}`
+                    : 'Running'}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Mode + config badge */}
+          <div className="flex flex-col items-end gap-1">
+            <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide ${
+              status?.mode === 'live'
+                ? 'bg-red-900 text-red-300 border border-red-700'
+                : 'bg-amber-900 text-amber-300 border border-amber-700'
+            }`}>
+              {status?.mode ?? '—'}
+            </span>
+            <span className="text-xs text-slate-500 font-medium">{activeConfigName}</span>
+          </div>
         </div>
 
-        {/* ROI */}
-        <div className="rounded-xl bg-navy px-3 py-2.5">
-          <div className="flex items-center gap-1 mb-0.5">
-            <p className="text-xs text-slate-500">Overall ROI</p>
-            <button onClick={() => onInfo(ROI_INFO.title, ROI_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
-          </div>
-          <p className={`text-sm font-semibold ${(roiPct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {roiPct != null ? `${roiPct >= 0 ? '+' : ''}${roiPct.toFixed(2)}%` : '—'}
-          </p>
-          <p className="text-xs text-slate-600 mt-0.5">{fmt$(current - starting)} net</p>
-        </div>
-
-        {/* Notional at risk */}
-        <div className={`rounded-xl px-3 py-2.5 ${notional > 0 ? 'bg-orange-950/30 border border-orange-900/30' : 'bg-navy'}`}>
-          <div className="flex items-center gap-1 mb-0.5">
-            <p className="text-xs text-slate-500">In Trade (Notional)</p>
-            <button onClick={() => onInfo(NOTIONAL_INFO.title, NOTIONAL_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
-          </div>
-          <p className={`text-sm font-semibold ${notional > 0 ? 'text-orange-300' : 'text-slate-400'}`}>
-            {notional > 0 ? fmt$(notional) : 'No position'}
-          </p>
-          {leverage > 0 && (
-            <p className="text-xs text-orange-500/60 mt-0.5">{leverage.toFixed(2)}× equity</p>
-          )}
-        </div>
-
-        {/* Free capital */}
-        <div className={`rounded-xl px-3 py-2.5 ${free < 0 ? 'bg-red-950/30 border border-red-900/30' : 'bg-navy'}`}>
-          <div className="flex items-center gap-1 mb-0.5">
-            <p className="text-xs text-slate-500">Free Capital</p>
-            <button onClick={() => onInfo(FREE_INFO.title, FREE_INFO.body)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
-          </div>
-          <p className={`text-sm font-semibold ${notional === 0 ? 'text-slate-300' : free >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            {notional === 0 ? fmt$(current) : fmt$(free)}
-          </p>
-          {notional > 0 && (
-            <p className="text-xs text-slate-600 mt-0.5">
-              {notional === 0 ? '100% undeployed' : free >= 0 ? `${((free / current) * 100).toFixed(0)}% undeployed` : 'leveraged'}
+        {status?.last_heartbeat && (
+          <div className="flex items-center gap-1 border-t border-border/40 pt-2">
+            <p className="text-xs text-slate-500">
+              Heartbeat {new Date(status.last_heartbeat).toLocaleTimeString()}
             </p>
-          )}
+            <button onClick={() => setInfo(GLOSSARY.heartbeat)} className="text-slate-600 hover:text-slate-400 text-xs leading-none">ⓘ</button>
+            <button onClick={fetchAll} title="Refresh" className="text-slate-600 hover:text-slate-400 text-xs leading-none ml-1">↻</button>
+          </div>
+        )}
+      </div>
+
+      {/* ── 2. Active Position Card ───────────────────────────────────────── */}
+      {position?.open && (
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">Active Position</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-white">
+                {position.type?.replace('_', ' ').toUpperCase()}
+              </p>
+              <p className="text-slate-400 text-sm">
+                Strike {position.strike?.toLocaleString()} · {position.days_to_expiry}d DTE
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {position.entry_date ? `Opened ${new Date(position.entry_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}
+              </p>
+            </div>
+            <div className="text-right">
+              <p className={`font-bold text-lg ${pnlPositive ? 'text-green-400' : 'text-red-400'}`}>
+                {fmt$(position.unrealized_pnl_usd)}
+              </p>
+              <p className={`text-sm ${pnlPositive ? 'text-green-500' : 'text-red-500'}`}>
+                {fmtPct(position.unrealized_pnl_pct)}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 mt-3">
+            <Stat label="Option Delta" value={position.current_delta != null ? position.current_delta.toFixed(3) : '—'} />
+            <Stat label="Premium" value={fmt$(position.premium_collected)} />
+            {position.hedge && (
+              <>
+                <Stat
+                  label="Net Delta"
+                  value={position.net_delta != null ? `${position.net_delta >= 0 ? '+' : ''}${position.net_delta.toFixed(3)} BTC` : '—'}
+                  accent={position.net_delta != null && Math.abs(position.net_delta) > 0.05}
+                />
+                <Stat
+                  label="Hedge P&L"
+                  value={position.hedge.unrealised_pnl_usd != null ? fmt$(position.hedge.unrealised_pnl_usd) : '—'}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── 3. Quick Actions Row ──────────────────────────────────────────── */}
+      <div className="bg-card rounded-2xl p-4 border border-border">
+        <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-3">Quick Actions</p>
+        <div className="grid grid-cols-3 gap-2">
+          <ActionBtn label="Start Bot" color="green" onClick={handleStart} disabled={status?.bot_running} />
+          <ActionBtn label="Stop Bot" color="red" onClick={() => setConfirm('stop')} disabled={!status?.bot_running} />
+          <ActionBtn label="Close Position" color="amber" onClick={() => setConfirm('close')} disabled={!position?.open} />
         </div>
       </div>
+
+      {/* ── 4. Farm Overview Strip ───────────────────────────────────────── */}
+      <button
+        onClick={() => onNavigateTo?.('pipeline')}
+        className="w-full bg-card rounded-2xl p-4 border border-border text-left hover:border-slate-600 transition-colors"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-1">Bot Farm</p>
+            {farmStatus ? (
+              <p className="text-sm text-white">
+                {runningBots}/{bots.length} running
+                {bestBot && bestBot.metrics.sharpe != null && (
+                  <span className="text-slate-400"> · Best: {bestBot.name} (Sharpe {bestBot.metrics.sharpe.toFixed(2)})</span>
+                )}
+                {readyBots > 0 && (
+                  <span className="text-green-400"> · {readyBots} ready ✅</span>
+                )}
+              </p>
+            ) : (
+              <p className="text-sm text-slate-500">Farm not started — tap to set up</p>
+            )}
+          </div>
+          <span className="text-slate-500 text-sm ml-2">→</span>
+        </div>
+      </button>
+
+      {/* ── 5. Today's Stats Row ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-card rounded-2xl p-3 border border-border text-center">
+          <p className="text-xs text-slate-400">Unrealised P&L</p>
+          <p className={`font-bold text-sm mt-0.5 ${(position?.unrealized_pnl_usd ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+            {position?.open ? fmt$(position.unrealized_pnl_usd) : '—'}
+          </p>
+        </div>
+        <div className="bg-card rounded-2xl p-3 border border-border text-center">
+          <p className="text-xs text-slate-400">Position</p>
+          <p className="font-bold text-sm mt-0.5 text-white">
+            {position?.open ? 'Open' : 'Flat'}
+          </p>
+        </div>
+        <div className="bg-card rounded-2xl p-3 border border-border text-center">
+          <p className="text-xs text-slate-400">Days to Expiry</p>
+          <p className="font-bold text-sm mt-0.5 text-white">
+            {position?.open && position.days_to_expiry != null ? `${position.days_to_expiry}d` : '—'}
+          </p>
+        </div>
+      </div>
+
+      {/* ── Capital overview ──────────────────────────────────────────────── */}
+      {equity && (
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          <div className="flex items-center gap-1 mb-3">
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Capital Overview</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-xl bg-navy px-3 py-2.5">
+              <p className="text-xs text-slate-500 mb-0.5">Total Equity</p>
+              <p className="text-sm font-semibold text-white">{fmt$(equity.current_equity)}</p>
+              <p className="text-xs text-slate-600 mt-0.5">started {fmt$(equity.starting_equity)}</p>
+            </div>
+            <div className="rounded-xl bg-navy px-3 py-2.5">
+              <p className="text-xs text-slate-500 mb-0.5">Overall ROI</p>
+              <p className={`text-sm font-semibold ${(equity.total_return_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {fmtPct(equity.total_return_pct)}
+              </p>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {fmt$(equity.current_equity - equity.starting_equity)} net
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Named Config Manager ─────────────────────────────────────────── */}
+      {configs.length > 0 && (
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Named Configs</p>
+            {onNavigateTo && (
+              <button
+                onClick={() => onNavigateTo('settings')}
+                className="text-xs text-green-400 hover:text-green-300 transition-colors"
+              >
+                Manage →
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            {configs.slice(0, 4).map(cfg => (
+              <div key={cfg.name} className="flex items-center justify-between bg-navy rounded-xl px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm text-white truncate">{cfg.name}</span>
+                  <ConfigSourceBadge source={cfg.source} />
+                </div>
+                <div className="flex gap-2 flex-shrink-0 ml-2 text-xs text-slate-500">
+                  {cfg.fitness != null && <span>fit {cfg.fitness.toFixed(2)}</span>}
+                  {cfg.sharpe != null && <span>S{cfg.sharpe.toFixed(2)}</span>}
+                </div>
+              </div>
+            ))}
+            {configs.length > 4 && (
+              <p className="text-xs text-slate-600 text-center pt-1">+{configs.length - 4} more in Settings</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Black Swan Calculator ─────────────────────────────────────────── */}
+      {equity && (btcPrice ?? 0) > 0 && (
+        <BlackSwanCard
+          position={position?.open ? position : null}
+          equityUsd={equity.current_equity}
+          btcPrice={btcPrice ?? 0}
+          configParams={{
+            approx_otm_offset: 0.05,
+            max_equity_per_leg: 0.10,
+            premium_fraction_of_spot: 0.02,
+            target_delta_min: 0.15,
+            target_delta_max: 0.35,
+            starting_equity: equity.starting_equity,
+          }}
+        />
+      )}
+
+      {/* ── Confirm dialog ────────────────────────────────────────────────── */}
+      {confirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm">
+            <h3 className="font-bold text-white text-lg mb-2">
+              {confirm === 'stop' ? 'Stop Bot?' : 'Close Position?'}
+            </h3>
+            <div className="bg-amber-950 border border-amber-700 rounded-xl px-3 py-3 mb-5 flex gap-2.5">
+              <span className="text-amber-400 text-base leading-snug flex-shrink-0">⚠️</span>
+              {confirm === 'stop' ? (
+                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
+                  <li>The bot will stop scanning and halt automated trading.</li>
+                  <li className="font-semibold">Any open position will NOT be closed — it stays open until restarted.</li>
+                  <li>You can restart at any time from this screen.</li>
+                </ul>
+              ) : (
+                <ul className="text-amber-200 text-xs space-y-1.5 leading-snug">
+                  <li>Your open position will be force-closed at current market price.</li>
+                  <li className="font-semibold">You'll receive whatever premium the market offers now — this cannot be undone.</li>
+                </ul>
+              )}
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirm(null)}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirm === 'stop' ? handleStop : handleClose}
+                className={`flex-1 py-3 rounded-xl text-white text-sm font-semibold ${confirm === 'stop' ? 'bg-red-600' : 'bg-amber-600'}`}
+              >
+                {confirm === 'stop' ? 'Stop' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

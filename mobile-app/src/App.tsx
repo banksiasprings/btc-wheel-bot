@@ -1,40 +1,33 @@
 import { useState, useEffect } from 'react'
 import SetupScreen from './components/SetupScreen'
 import Dashboard from './components/Dashboard'
-import Trades from './components/Trades'
-import Optimizer from './components/Optimizer'
 import Pipeline from './components/Pipeline'
+import Performance from './components/Performance'
+import Diagnostics from './components/Diagnostics'
 import Settings from './components/Settings'
-import CodeGuide from './components/CodeGuide'
-import GraphTab from './components/GraphTab'
-import Farm from './components/Farm'
 
-type Tab = 'dashboard' | 'pipeline' | 'farm' | 'optimizer' | 'graph' | 'trades' | 'code' | 'settings'
+type Tab = 'dashboard' | 'pipeline' | 'performance' | 'diagnostics' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
-  dashboard: '⬡',
-  pipeline:  '🗺',
-  farm:      '🤖',
-  optimizer: '⌁',
-  graph:     '📈',
-  trades:    '≡',
-  code:      '</>',
-  settings:  '⚙',
+  dashboard:   '🏠',
+  pipeline:    '🗺',
+  performance: '📈',
+  diagnostics: '🔬',
+  settings:    '⚙',
 }
 
 const TAB_LABELS: Record<Tab, string> = {
-  dashboard: 'Dashboard',
-  pipeline:  'Pipeline',
-  farm:      'Farm',
-  optimizer: 'Optimizer',
-  graph:     'Graph',
-  trades:    'Trades',
-  code:      'Code',
-  settings:  'Settings',
+  dashboard:   'Dashboard',
+  pipeline:    'Pipeline',
+  performance: 'Performance',
+  diagnostics: 'Diagnostics',
+  settings:    'Settings',
 }
 
+const TABS: Tab[] = ['dashboard', 'pipeline', 'performance', 'diagnostics', 'settings']
+
 export default function App() {
-  const [isSetup, setIsSetup] = useState(false)
+  const [isSetup, setIsSetup]   = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('dashboard')
 
   useEffect(() => {
@@ -50,20 +43,17 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
-        {activeTab === 'dashboard' && <Dashboard />}
-        {activeTab === 'pipeline'  && <Pipeline />}
-        {activeTab === 'farm'      && <Farm />}
-        {activeTab === 'optimizer' && <Optimizer />}
-        {activeTab === 'graph'     && <GraphTab />}
-        {activeTab === 'trades'    && <Trades />}
-        {activeTab === 'code'      && <CodeGuide />}
-        {activeTab === 'settings'  && <Settings onLogout={() => setIsSetup(false)} />}
+        {activeTab === 'dashboard'   && <Dashboard onNavigateTo={(tab) => setActiveTab(tab as Tab)} />}
+        {activeTab === 'pipeline'    && <Pipeline />}
+        {activeTab === 'performance' && <Performance />}
+        {activeTab === 'diagnostics' && <Diagnostics />}
+        {activeTab === 'settings'    && <Settings onLogout={() => setIsSetup(false)} />}
       </main>
 
       {/* Bottom tab bar */}
       <nav className="flex-shrink-0 bg-card border-t border-border pb-safe">
         <div className="flex">
-          {(Object.keys(TAB_ICONS) as Tab[]).map((tab) => (
+          {TABS.map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
