@@ -1,24 +1,24 @@
 _meta:
-  created_at: '2026-04-23T23:46:41.514950+00:00'
-  drawdown: -3.35
-  fitness: 4.9647
-  generations: 3
-  goal: balanced
-  name: balanced_20260423_2346
+  created_at: '2026-04-24T00:40:19.755987+00:00'
+  drawdown: 0.0
+  fitness: 0.9128
+  generations: 5
+  goal: capital_roi
+  name: capital_roi_20260424_0040
   notes: ''
-  sharpe: 1.44
+  sharpe: 1.96
   source: evolved
-  total_return: 22.14
-  version: 2
-  win_rate: 76.2
+  total_return: 18.27
+  version: 8
+  win_rate: 100.0
 backtest:
-  approx_otm_offset: 0.135
+  approx_otm_offset: 0.1601
   lookback_months: 12
-  premium_fraction_of_spot: 0.0182
+  premium_fraction_of_spot: 0.0113
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 16998.8441
+  starting_equity: 47936.0065
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -58,9 +58,9 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.1003
+  max_equity_per_leg: 0.099
   max_open_legs: 1
-  min_free_equity_fraction: 0.3154
+  min_free_equity_fraction: 0.0648
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -70,9 +70,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.25  # lowered for paper phase — generates trades faster in low-IV market
+  iv_rank_threshold: 0.5387
   liquidity_top_n: 100
-  max_dte: 19
-  min_dte: 11
-  target_delta_max: 0.278
-  target_delta_min: 0.1692
+  max_dte: 13
+  min_dte: 3
+  target_delta_max: 0.3902
+  target_delta_min: 0.2328

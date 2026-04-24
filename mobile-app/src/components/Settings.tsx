@@ -53,6 +53,7 @@ export default function Settings({ onLogout }: Props) {
   const [promotingConfig, setPromotingConfig] = useState<string | null>(null)
   const [promoteConfirm, setPromoteConfirm]   = useState<NamedConfig | null>(null)
   const [promoteMsg, setPromoteMsg]           = useState('')
+  const [promoteEquity, setPromoteEquity]     = useState('')
 
   function showStatus(msg: string, ms = 3000) {
     setSaveStatus(msg)
@@ -144,12 +145,15 @@ export default function Settings({ onLogout }: Props) {
   }
 
   async function handlePromote(cfg: NamedConfig) {
+    const equity = parseFloat(promoteEquity)
+    if (!equity || equity <= 0) return
     setPromotingConfig(cfg.name)
     setPromoteMsg('')
     try {
-      const r = await promoteConfig(cfg.name)
-      setPromoteMsg(`✅ ${r.message ?? `'${cfg.name}' promoted — live bot will restart`}`)
+      const r = await promoteConfig(cfg.name, equity)
+      setPromoteMsg(`✅ ${r.message ?? `'${cfg.name}' promoted — live bot will restart`} | $${equity.toLocaleString()} starting equity`)
       setPromoteConfirm(null)
+      setPromoteEquity('')
       const cfgs = await listConfigs().catch(() => [] as NamedConfig[])
       setNamedConfigs(cfgs)
     } catch (e) {
@@ -456,18 +460,36 @@ export default function Settings({ onLogout }: Props) {
             <div className="text-3xl">⬆️</div>
             <h3 className="font-bold text-white text-lg">Set as Live Config?</h3>
             <p className="text-slate-400 text-sm">
-              This will overwrite the live config with{' '}
-              <span className="text-green-400 font-medium">{promoteConfirm.name}</span>.{' '}
-              The live bot will restart with these parameters.
+              You're about to promote{' '}
+              <span className="text-green-400 font-medium">{promoteConfirm.name}</span> to the live bot.
             </p>
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-400 font-medium">Actual deposit amount (USD)</label>
+              <div className="flex items-center gap-2 bg-slate-900 border border-border rounded-xl px-3 py-2.5">
+                <span className="text-slate-400 text-sm">$</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={promoteEquity}
+                  onChange={e => setPromoteEquity(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="flex-1 bg-transparent text-white text-sm focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="bg-red-950 border border-red-800 rounded-xl px-3 py-2.5 space-y-1">
+              <p className="text-red-300 text-xs font-semibold">⚠️ The live bot will switch to MAINNET. Real money will be traded.</p>
+              <p className="text-red-300 text-xs">⚠️ The bot will restart with the new configuration.</p>
+            </div>
             <div className="flex gap-3">
-              <button onClick={() => setPromoteConfirm(null)} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
+              <button onClick={() => { setPromoteConfirm(null); setPromoteEquity('') }} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
               <button
                 onClick={() => handlePromote(promoteConfirm)}
-                disabled={!!promotingConfig}
+                disabled={!!promotingConfig || !promoteEquity || parseFloat(promoteEquity) <= 0}
                 className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
               >
-                {promotingConfig ? 'Promoting…' : 'Confirm'}
+                {promotingConfig ? 'Promoting…' : 'Promote to Live'}
               </button>
             </div>
           </div>

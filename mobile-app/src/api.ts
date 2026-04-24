@@ -450,9 +450,10 @@ export const assignBotConfig = (botId: string, configName: string) =>
     body: JSON.stringify({ config_name: configName }),
   })
 
-export const promoteConfig = (configName: string) =>
-  request<{ ok: boolean; message: string }>(`/configs/${encodeURIComponent(configName)}/promote`, {
+export const promoteConfig = (configName: string, startingEquity: number) =>
+  request<{ ok: boolean; message: string; starting_equity: number }>(`/configs/${encodeURIComponent(configName)}/promote`, {
     method: 'POST',
+    body: JSON.stringify({ starting_equity: startingEquity }),
   })
 
 export async function testConnection(): Promise<boolean> {

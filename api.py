@@ -751,15 +751,32 @@ def delete_named_config(name: str) -> dict:
     return {"ok": True, "deleted": name}
 
 
+class PromoteRequest(BaseModel):
+    starting_equity: float  # actual deposit amount in USD
+
+
 @app.post("/configs/{name}/promote", dependencies=[Depends(_require_api_key)])
-def promote_named_config(name: str) -> dict:
+def promote_named_config(name: str, req: PromoteRequest) -> dict:
     """
     Promote a named config to live (overwrites config.yaml).
-    Backs up current config.yaml to config.yaml.bak first.
+    - Forces testnet=false so real money is traded on mainnet
+    - Sets starting_equity to the provided deposit amount
+    - Backs up current config.yaml to config.yaml.bak first
+    - Logs the promotion event to data/promotion_log.json
     """
+    if req.starting_equity <= 0:
+        raise HTTPException(status_code=400, detail="starting_equity must be > 0")
     try:
-        new_live = _cs.promote_to_live(name)
-        return {"ok": True, "promoted": name, "message": "config.yaml updated; restart bot to apply"}
+        result = _cs.promote_to_live(name, req.starting_equity)
+        log_entry = result["promotion_log"]
+        return {
+            "ok": True,
+            "promoted": name,
+            "message": "config.yaml updated; restart bot to apply",
+            "starting_equity": log_entry["starting_equity"],
+            "timestamp": log_entry["timestamp"],
+            "backup_path": log_entry["previous_config_backup_path"],
+        }
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     except Exception as exc:

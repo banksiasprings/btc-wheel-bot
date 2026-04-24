@@ -92,6 +92,7 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
   const [confirmPromote, setConfirmPromote] = useState(false)
   const [promoting, setPromoting]           = useState(false)
   const [promoteMsg, setPromoteMsg]         = useState('')
+  const [startingEquity, setStartingEquity] = useState('')
 
   const m = bot.metrics
   const r = bot.readiness
@@ -117,11 +118,14 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
 
   async function handlePromote() {
     if (!assignConfig) return
+    const equity = parseFloat(startingEquity)
+    if (!equity || equity <= 0) return
     setPromoting(true)
     try {
-      const res = await promoteConfig(assignConfig)
-      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'}`)
+      const res = await promoteConfig(assignConfig, equity)
+      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'} | Starting equity: $${equity.toLocaleString()}`)
       setConfirmPromote(false)
+      setStartingEquity('')
       onRefresh()
     } catch (e) {
       setPromoteMsg(`❌ ${String(e)}`)
@@ -293,23 +297,41 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
             <div className="text-3xl">⬆️</div>
             <h3 className="font-bold text-white text-lg">Promote to Live?</h3>
             <p className="text-slate-400 text-sm">
-              This will overwrite the live config with{' '}
-              <span className="text-green-400 font-medium">{assignConfig}</span>.{' '}
-              The live bot will restart. Are you sure?
+              You're about to promote{' '}
+              <span className="text-green-400 font-medium">{assignConfig}</span> to the live bot.
             </p>
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-400 font-medium">Actual deposit amount (USD)</label>
+              <div className="flex items-center gap-2 bg-slate-900 border border-border rounded-xl px-3 py-2.5">
+                <span className="text-slate-400 text-sm">$</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={startingEquity}
+                  onChange={e => setStartingEquity(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="flex-1 bg-transparent text-white text-sm focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="bg-red-950 border border-red-800 rounded-xl px-3 py-2.5 space-y-1">
+              <p className="text-red-300 text-xs font-semibold">⚠️ The live bot will switch to MAINNET. Real money will be traded.</p>
+              <p className="text-red-300 text-xs">⚠️ The bot will restart with the new configuration.</p>
+            </div>
             <div className="flex gap-3">
               <button
-                onClick={() => setConfirmPromote(false)}
+                onClick={() => { setConfirmPromote(false); setStartingEquity('') }}
                 className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
               >
                 Cancel
               </button>
               <button
                 onClick={handlePromote}
-                disabled={promoting}
+                disabled={promoting || !startingEquity || parseFloat(startingEquity) <= 0}
                 className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
               >
-                {promoting ? 'Promoting…' : 'Promote'}
+                {promoting ? 'Promoting…' : 'Promote to Live'}
               </button>
             </div>
           </div>

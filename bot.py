@@ -804,6 +804,20 @@ class WheelBot:
             iv_rank_at_entry=self._last_iv_rank,  # for trades.csv enrichment
             dte_at_entry=signal.dte,              # for trades.csv enrichment
         )
+        # Check if this is the first trade this bot has ever made
+        import csv as _csv_check
+        _is_first_trade = False
+        _trades_csv = _data_path("trades.csv")
+        if not _trades_csv.exists():
+            _is_first_trade = True
+        else:
+            try:
+                with open(_trades_csv, newline="") as _f:
+                    _rows = list(_csv_check.DictReader(_f))
+                    _is_first_trade = len(_rows) == 0
+            except Exception:
+                pass
+
         self._positions.append(pos)
         try:
             notifier.notify_trade_opened(
@@ -811,6 +825,22 @@ class WheelBot:
             )
         except Exception:
             pass
+
+        if _is_first_trade:
+            try:
+                _bot_name = os.path.basename(_DATA_DIR.rstrip("/")) if _DATA_DIR != str(Path(__file__).parent / "data") else "main"
+                notifier._send(
+                    f"🎉 <b>FIRST TRADE FIRED!</b>\n"
+                    f"Bot: <code>{_bot_name}</code>\n"
+                    f"Instrument: {pos.instrument_name}\n"
+                    f"Strike: ${pos.strike:,.0f}\n"
+                    f"Delta: {pos.current_delta:.3f}\n"
+                    f"IV Rank: {self._last_iv_rank:.1%}\n"
+                    f"Premium: {pos.entry_price:.4f} BTC\n"
+                    f"DTE: {pos.dte_at_entry} days"
+                )
+            except Exception:
+                pass
 
     async def _close_position(
         self,

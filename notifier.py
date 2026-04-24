@@ -3,14 +3,32 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-_CONFIG_PATH = Path(__file__).parent / "data" / "notifier_config.json"
+# Master notifier config (always present)
+_MASTER_CONFIG_PATH = Path(__file__).parent / "data" / "notifier_config.json"
 
 
 def _load() -> dict:
+    """
+    Load notifier config.
+    Farm bots set WHEEL_BOT_DATA_DIR to their own data directory.
+    Try {DATA_DIR}/notifier_config.json first, then fall back to the
+    master data/notifier_config.json so farm bots share the same
+    Telegram credentials without needing their own copy.
+    """
+    data_dir = os.environ.get("WHEEL_BOT_DATA_DIR", "")
+    if data_dir:
+        bot_cfg = Path(data_dir) / "notifier_config.json"
+        if bot_cfg.exists():
+            try:
+                return json.loads(bot_cfg.read_text())
+            except Exception:
+                pass
+    # Fallback to master config
     try:
-        return json.loads(_CONFIG_PATH.read_text())
+        return json.loads(_MASTER_CONFIG_PATH.read_text())
     except Exception:
         return {}
 

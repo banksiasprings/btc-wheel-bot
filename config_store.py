@@ -173,12 +173,17 @@ def delete_config(name: str) -> bool:
     return True
 
 
-def promote_to_live(name: str) -> dict:
+def promote_to_live(name: str, starting_equity: float) -> dict:
     """
-    Copy a named config's params over config.yaml (the live/master config).
-    Creates a backup of the current config.yaml first (config.yaml.bak).
-    Returns the new live config dict.
+    Copy a named config to config.yaml (the live bot config).
+    - Forces testnet=false (live trading only)
+    - Sets starting_equity to the provided value
+    - Backs up current config.yaml to config.yaml.bak
+    - Logs the promotion event
+    Returns a dict with the new live config and a _promotion_log entry.
     """
+    import json as _json
+
     path = _config_path(name)
     if not path.exists():
         raise FileNotFoundError(f"Named config not found: {name!r}")
@@ -189,6 +194,7 @@ def promote_to_live(name: str) -> dict:
     # Backup current live config
     if live_path.exists():
         shutil.copy2(live_path, bak_path)
+    bak_path_str = str(bak_path) if live_path.exists() else None
 
     # Load named config (strip _meta), merge over live
     named_raw = yaml.safe_load(path.read_text()) or {}
@@ -196,6 +202,12 @@ def promote_to_live(name: str) -> dict:
 
     current_live = yaml.safe_load(live_path.read_text()) if live_path.exists() else {}
     new_live = _deep_merge(current_live or {}, named_raw)
+
+    # Force mainnet — never allow testnet in live
+    new_live.setdefault("deribit", {})["testnet"] = False
+
+    # Set starting equity from the provided value
+    new_live.setdefault("backtest", {})["starting_equity"] = starting_equity
 
     with open(live_path, "w") as f:
         yaml.dump(new_live, f, default_flow_style=False, allow_unicode=True)
@@ -208,7 +220,25 @@ def promote_to_live(name: str) -> dict:
     with open(path, "w") as f:
         yaml.dump(full_named, f, default_flow_style=False, allow_unicode=True)
 
-    return new_live
+    # Write promotion log entry
+    log_entry = {
+        "timestamp":               datetime.now(timezone.utc).isoformat(),
+        "config_name":             name,
+        "starting_equity":         starting_equity,
+        "previous_config_backup_path": bak_path_str,
+    }
+    log_path = BASE_DIR / "data" / "promotion_log.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_log: list = []
+    if log_path.exists():
+        try:
+            existing_log = _json.loads(log_path.read_text())
+        except Exception:
+            pass
+    existing_log.insert(0, log_entry)
+    log_path.write_text(_json.dumps(existing_log, indent=2))
+
+    return {"config": new_live, "promotion_log": log_entry}
 
 
 # ── Genome → config params helper ────────────────────────────────────────────
