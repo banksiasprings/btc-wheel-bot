@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getFarmStatus, startFarm, stopFarm, getBotLiveState, FarmStatus, BotFarmEntry, BotLiveState, assignBotConfig, promoteConfig } from '../api'
+import { getFarmStatus, startFarm, stopFarm, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState, assignBotConfig, promoteConfig } from '../api'
 import ConfigSelector from './ConfigSelector'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -22,6 +22,17 @@ function fmtTime(iso: string | undefined | null) {
   } catch {
     return iso
   }
+}
+
+/**
+ * Annualise a cumulative return using compound growth:
+ * ((1 + r)^(365/days) − 1) × 100
+ * Returns null for bots with < 7 days of data (too noisy to annualise).
+ */
+function annualisedReturn(totalReturnPct: number | undefined | null, daysRunning: number | undefined | null): number | null {
+  if (totalReturnPct == null || daysRunning == null || daysRunning < 7) return null
+  const r = totalReturnPct / 100
+  return ((1 + r) ** (365 / daysRunning) - 1) * 100
 }
 
 // ── Readiness bar ─────────────────────────────────────────────────────────────
@@ -182,11 +193,11 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
       {/* Metrics strip */}
       <div className="grid grid-cols-5 border-t border-border/40 text-center">
         {[
-          { label: 'Trades',  value: String(m.num_trades ?? 0) },
-          { label: 'Win',     value: fmtPct((m.win_rate ?? 0) * 100, 0) },
-          { label: 'Sharpe',  value: m.sharpe != null ? m.sharpe.toFixed(2) : '—' },
-          { label: 'DD',      value: fmtPct(-(m.max_drawdown ?? 0) * 100, 0) },
-          { label: 'Return',  value: fmtPct(m.total_return_pct, 1) },
+          { label: 'Trades',      value: String(m.num_trades ?? 0) },
+          { label: 'Win',         value: fmtPct((m.win_rate ?? 0) * 100, 0) },
+          { label: 'Sharpe',      value: m.sharpe != null ? m.sharpe.toFixed(2) : '—' },
+          { label: 'DD',          value: fmtPct(-(m.max_drawdown ?? 0) * 100, 0) },
+          { label: 'Ann. Return', value: fmtPct(annualisedReturn(m.total_return_pct, m.days_running), 1) },
         ].map(({ label, value }) => (
           <div key={label} className="py-2 border-r border-border/30 last:border-r-0">
             <p className="text-xs text-slate-500">{label}</p>
@@ -516,7 +527,7 @@ function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-border/40">
-              {['Bot', 'Return', 'Sharpe', 'Win%', 'DD%', 'Trades', 'Ready'].map(h => (
+              {['Bot', 'Ann. Return', 'Sharpe', 'Win%', 'DD%', 'Trades', 'Ready'].map(h => (
                 <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">
                   {h}
                 </th>
@@ -537,7 +548,7 @@ function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
                     </div>
                   </td>
                   <td className={`px-3 py-2 font-medium ${returnPositive ? 'text-green-400' : 'text-red-400'}`}>
-                    {fmtPct(m.total_return_pct, 1)}
+                    {fmtPct(annualisedReturn(m.total_return_pct, m.days_running), 1)}
                   </td>
                   <td className="px-3 py-2 text-slate-300">
                     {m.sharpe != null ? m.sharpe.toFixed(2) : '—'}
@@ -574,6 +585,7 @@ export default function Farm() {
   const [error, setError]           = useState('')
   const [actionMsg, setActionMsg]   = useState('')
   const [busy, setBusy]             = useState(false)
+  const [btcPrice, setBtcPrice]     = useState<number | null>(null)
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -599,6 +611,15 @@ export default function Farm() {
     const id = setInterval(fetchStatus, 10_000)
     return () => clearInterval(id)
   }, [fetchStatus])
+
+  // Fetch BTC price on mount and every 30s
+  useEffect(() => {
+    getBtcPrice().then(d => setBtcPrice(d.price)).catch(() => {})
+    const id = setInterval(() => {
+      getBtcPrice().then(d => setBtcPrice(d.price)).catch(() => {})
+    }, 30_000)
+    return () => clearInterval(id)
+  }, [])
 
   async function handleStartFarm() {
     setBusy(true)
@@ -652,6 +673,17 @@ export default function Farm() {
           </span>
         )}
       </div>
+
+      {/* BTC price strip */}
+      {btcPrice != null && (
+        <div className="flex items-center gap-2 bg-card border border-border rounded-2xl px-4 py-2.5">
+          <span className="text-amber-400 text-lg font-bold">₿</span>
+          <span className="text-white font-mono font-semibold text-sm">
+            {btcPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+          </span>
+          <span className="text-slate-500 text-xs ml-auto">BTC spot</span>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">

@@ -1,16 +1,13 @@
 import { useState, useEffect } from 'react'
 import SetupScreen from './components/SetupScreen'
-import Dashboard from './components/Dashboard'
 import Farm from './components/Farm'
 import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
-import Diagnostics from './components/Diagnostics'
 import Settings from './components/Settings'
 
-type Tab = 'dashboard' | 'farm' | 'performance' | 'pipeline' | 'settings'
+type Tab = 'farm' | 'performance' | 'pipeline' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
-  dashboard:   '🏠',
   farm:        '🤖',
   performance: '📈',
   pipeline:    '🗺',
@@ -18,18 +15,17 @@ const TAB_ICONS: Record<Tab, string> = {
 }
 
 const TAB_LABELS: Record<Tab, string> = {
-  dashboard:   'Dashboard',
   farm:        'Farm',
   performance: 'Performance',
   pipeline:    'Pipeline',
   settings:    'Settings',
 }
 
-const TABS: Tab[] = ['dashboard', 'farm', 'performance', 'pipeline', 'settings']
+const TABS: Tab[] = ['farm', 'performance', 'pipeline', 'settings']
 
 export default function App() {
   const [isSetup, setIsSetup]   = useState(false)
-  const [activeTab, setActiveTab] = useState<Tab>('dashboard')
+  const [activeTab, setActiveTab] = useState<Tab>('farm')
 
   useEffect(() => {
     const url = localStorage.getItem('api_url')
@@ -44,7 +40,6 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
-        {activeTab === 'dashboard'   && <Dashboard onNavigateTo={(tab) => setActiveTab(tab as Tab)} />}
         {activeTab === 'farm'        && <Farm />}
         {activeTab === 'performance' && <Performance />}
         {activeTab === 'pipeline'    && <Pipeline />}
