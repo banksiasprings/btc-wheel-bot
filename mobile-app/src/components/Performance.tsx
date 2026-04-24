@@ -126,7 +126,14 @@ export default function Performance() {
   const [liveTrades, setLiveTrades] = useState<Trade[]>([])
   const [farmStatus, setFarmStatus] = useState<FarmStatus | null>(null)
   const [botTrades, setBotTrades]   = useState<Record<string, Trade[]>>({})
-  const [selected, setSelected]     = useState<BotSelection>('live')
+  const [selected, setSelected]     = useState<BotSelection>('all')
+  // Once farm data loads, ensure the default selection is valid
+  // (if no farm bots, fall back to standalone)
+  useEffect(() => {
+    if (selected === 'all' && farmStatus && (farmStatus.bots ?? []).length === 0) {
+      setSelected('live')
+    }
+  }, [farmStatus, selected])
   const [loading, setLoading]       = useState(true)
   const [tradesLoading, setTradesLoading] = useState(false)
   const [error, setError]           = useState('')
@@ -171,13 +178,15 @@ export default function Performance() {
   // ── Build tab list ────────────────────────────────────────────────────────
   const bots = farmStatus?.bots ?? []
   const tabs: BotTab[] = [
-    { id: 'live', label: 'Live Bot' },
-    ...(bots.length > 0 ? [{ id: 'all' as BotSelection, label: 'All Bots' }] : []),
+    // Show farm bots first — the most relevant view when running the farm
+    ...(bots.length > 0 ? [{ id: 'all' as BotSelection, label: 'All Farm Bots' }] : []),
     ...bots.map(b => ({
       id: b.id,
       label: b.name,
       configName: b.config_name ?? undefined,
     })),
+    // Standalone bot tab last — only useful if main bot.py is running separately
+    ...(equity && equity.dates.length > 0 ? [{ id: 'live' as BotSelection, label: 'Standalone Bot' }] : []),
   ]
 
   // ── Equity chart data ─────────────────────────────────────────────────────
@@ -451,8 +460,8 @@ export default function Performance() {
             trades={currentTrades}
             loading={currentTradesLoading}
             empty={selected === 'live'
-              ? 'No trades yet. Start paper trading to see results here.'
-              : 'No trades for this bot yet.'}
+              ? 'No trades yet on the standalone bot. If you\'re using the farm, select a bot above.'
+              : 'No trades for this bot yet — it\'s still waiting for its first signal.'}
           />
         </div>
       )}
