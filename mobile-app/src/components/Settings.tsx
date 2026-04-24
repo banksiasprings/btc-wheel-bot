@@ -11,6 +11,7 @@ import ConfigLibrary from './ConfigLibrary'
 
 export default function Settings() {
   const [apiKey, setApiKey]               = useState(loadApiKey())
+  const [configLibOpen, setConfigLibOpen] = useState(false)
   const [loading, setLoading]             = useState(true)
   const [saveStatus, setSaveStatus]       = useState('')
   const [info, setInfo]                   = useState<{ title: string; body: string } | null>(null)
@@ -191,8 +192,19 @@ export default function Settings() {
       </div>
 
       {/* ── Config Library ───────────────────────────────────────────────── */}
-      <div className="bg-card rounded-2xl p-4 border border-border">
-        <ConfigLibrary />
+      <div className="bg-card rounded-2xl border border-border overflow-hidden">
+        <button
+          onClick={() => setConfigLibOpen(o => !o)}
+          className="w-full flex items-center justify-between px-4 py-3 text-left"
+        >
+          <p className="text-sm font-semibold text-white">Config Library</p>
+          <span className="text-slate-500 text-xs">{configLibOpen ? '▲' : '▼'}</span>
+        </button>
+        {configLibOpen && (
+          <div className="border-t border-border/40 p-4">
+            <ConfigLibrary />
+          </div>
+        )}
       </div>
 
       {/* ── Trading Mode ─────────────────────────────────────────────────── */}

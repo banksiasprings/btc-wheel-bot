@@ -167,13 +167,13 @@ export default function Performance() {
   // ── Load farm bot trades when a bot tab is selected ───────────────────────
   useEffect(() => {
     if (selected === 'live' || selected === 'all') return
-    if (botTrades[selected]) return  // already loaded
+    if (botTrades[selected] != null) return  // already loaded
     setTradesLoading(true)
     getFarmBotTrades(selected)
       .then(t => setBotTrades(prev => ({ ...prev, [selected]: t })))
       .catch(() => setBotTrades(prev => ({ ...prev, [selected]: [] })))
       .finally(() => setTradesLoading(false))
-  }, [selected, botTrades])
+  }, [selected]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Build tab list ────────────────────────────────────────────────────────
   const bots = farmStatus?.bots ?? []
@@ -206,6 +206,31 @@ export default function Performance() {
     // Build a combined set of date keys from equity + farm bots
     // Farm bots don't have time-series data from API — we show their summary metrics
     return bots
+  })()
+
+  // Build equity curve for a selected farm bot from its trade history
+  const farmBotChart = (() => {
+    if (selected === 'live' || selected === 'all') return []
+    const trades = botTrades[selected]
+    if (!trades || trades.length === 0) return []
+    const sorted = [...trades].sort((a, b) =>
+      new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    )
+    // Seed the chart with starting equity before the first trade
+    const startingEquity = bots.find(b => b.id === selected)?.metrics.starting_equity
+    const points: { date: string; equity: number }[] = []
+    if (startingEquity != null) {
+      const firstDate = new Date(sorted[0].timestamp)
+      firstDate.setDate(firstDate.getDate() - 1)
+      points.push({ date: firstDate.toISOString().slice(5, 10), equity: startingEquity })
+    }
+    for (const t of sorted) {
+      const eq = typeof t.equity_after === 'number' ? t.equity_after : parseFloat(String(t.equity_after))
+      if (!isNaN(eq)) {
+        points.push({ date: new Date(t.timestamp).toISOString().slice(5, 10), equity: eq })
+      }
+    }
+    return points
   })()
 
   // Single-bot equity from live
@@ -341,6 +366,54 @@ export default function Performance() {
               <Area type="monotone" dataKey="live" stroke="#22c55e" strokeWidth={2} fill="url(#perfGrad)" dot={false} />
             </AreaChart>
           </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── Individual farm bot equity chart ─────────────────────────── */}
+      {selected !== 'live' && selected !== 'all' && farmBotChart.length > 1 && (
+        <div className="bg-card rounded-2xl p-4 border border-border">
+          {(() => {
+            const bot = bots.find(b => b.id === selected)
+            const m = bot?.metrics
+            const startEq = m?.starting_equity ?? farmBotChart[0]?.equity
+            const curEq = farmBotChart[farmBotChart.length - 1]?.equity
+            const retPct = startEq && curEq ? ((curEq - startEq) / startEq) * 100 : null
+            const positive = (retPct ?? 0) >= 0
+            return (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">
+                    Equity curve · {farmBotChart.length} trades
+                  </p>
+                  <div className="text-right">
+                    <p className="font-semibold text-white text-sm">{fmt$(curEq)}</p>
+                    {retPct != null && (
+                      <p className={`text-xs ${positive ? 'text-green-400' : 'text-red-400'}`}>
+                        {positive ? '+' : ''}{retPct.toFixed(2)}%
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <ResponsiveContainer width="100%" height={140}>
+                  <AreaChart data={farmBotChart} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="botGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="date" hide />
+                    <YAxis hide domain={['auto', 'auto']} />
+                    <Tooltip
+                      contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, color: '#fff', fontSize: 12 }}
+                      formatter={(v: number) => [fmt$(v), 'Equity']}
+                    />
+                    <Area type="monotone" dataKey="equity" stroke="#38bdf8" strokeWidth={2} fill="url(#botGrad)" dot={false} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </>
+            )
+          })()}
         </div>
       )}
 
