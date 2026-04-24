@@ -243,6 +243,11 @@ component_files = [
     ("mobile-app/src/components/Settings.tsx",    "mobile-app/src/components/Settings.tsx"),
     ("mobile-app/src/components/ConfigLibrary.tsx","mobile-app/src/components/ConfigLibrary.tsx"),
     ("mobile-app/src/components/ConfigSelector.tsx","mobile-app/src/components/ConfigSelector.tsx"),
+    # Fix 1: previously missing frontend files
+    ("mobile-app/src/components/InfoModal.tsx",   "mobile-app/src/components/InfoModal.tsx"),
+    ("mobile-app/src/components/SetupScreen.tsx", "mobile-app/src/components/SetupScreen.tsx"),
+    ("mobile-app/src/components/SystemGuide.tsx", "mobile-app/src/components/SystemGuide.tsx"),
+    ("mobile-app/src/lib/glossary.ts",            "mobile-app/src/lib/glossary.ts"),
 ]
 replacements[119] = make_multi_file_cell(
     component_files,
@@ -271,6 +276,97 @@ replacements[127] = make_file_cell(
     ".github/workflows/deploy-mobile.yml", ".github/workflows/deploy-mobile.yml",
     "Step 70 - Write GitHub Actions deploy workflow (embedded inline)"
 )
+
+# Fix 2: Risk manager test — use $150k equity so it passes the $80k strike check
+replacements[50] = new_code_cell(source="""\
+import sys, os
+sys.path.insert(0, os.getcwd())
+for m in list(sys.modules.keys()):
+    if m in ('config', 'risk_manager'):
+        del sys.modules[m]
+
+from risk_manager import RiskManager, Position
+
+rm = RiskManager()
+equity = 150_000.0  # $150k account (sufficient for $80k strike)
+strike = 80_000.0   # $80k BTC put
+btc    = 85_000.0   # current BTC price
+
+# Test contract sizing
+contracts = rm.calculate_contracts(equity, strike)
+print(f"Contracts (equity=${equity:,.0f}, strike=${strike:,.0f}): {contracts}")
+assert contracts >= 0.1, "Should size at least 0.1 contracts"
+
+# Test ladder sizing (splits equity fraction evenly)
+ladder_fraction = 0.0828 / 2   # 2-leg ladder
+ladder_contracts = rm.calculate_contracts(equity, strike, equity_fraction=ladder_fraction)
+print(f"Ladder contracts (half fraction): {ladder_contracts}")
+
+# Test pre-trade with no positions
+ok = rm.full_pre_trade_check([], equity, strike, btc)
+print(f"Pre-trade (empty): {'PASS' if ok else 'FAIL'}")
+assert ok
+
+# Test drawdown checks
+assert rm.check_drawdown([50000, 49000, 48000]) == True   # 4% DD < 10% limit
+assert rm.check_drawdown([50000, 40000]) == False          # 20% DD > 10% limit
+print("Drawdown checks: PASS")
+
+# Test delta breach
+pos = Position("BTC-25APR25-80000-P", 80000, "put", 0.01, 85000, 1.0, 0.5, 0.03, 50000)
+should_roll, reason = rm.should_roll(pos)
+print(f"Delta breach (0.5 > 0.4): roll={should_roll}, reason={reason}")
+assert should_roll and reason == "delta_breach"
+
+print("Phase 4 CHECKPOINT PASSED")
+""")
+
+# Fix 4: Vite scaffold — check directory existence, not just package.json
+replacements[109] = new_code_cell(source="""\
+import subprocess, sys, os
+
+# Create the mobile-app with Vite — check directory first to avoid scaffold conflict
+if not os.path.isdir("mobile-app"):
+    print("Creating Vite + React + TypeScript project...")
+    result = subprocess.run(
+        ["npm", "create", "vite@latest", "mobile-app", "--", "--template", "react-ts"],
+        capture_output=True, text=True, input="y\\n"
+    )
+    print(result.stdout[-2000:])
+    if result.returncode != 0:
+        print("Error:", result.stderr[-500:])
+else:
+    print("mobile-app/ directory already exists - skipping Vite scaffold")
+    if os.path.exists("mobile-app/package.json"):
+        import json
+        pkg = json.load(open("mobile-app/package.json"))
+        print(f"Found: {pkg.get('name')} v{pkg.get('version')}")
+    else:
+        print("(no package.json yet — files will be written by subsequent cells)")
+""")
+
+# Fix 5: Cell 74 uses bt/results from cell 72 — make it self-contained
+replacements[74] = new_code_cell(source="""\
+import sys, os
+sys.path.insert(0, os.getcwd())
+for m in list(sys.modules.keys()):
+    if any(m.startswith(k) for k in ('config', 'deribit', 'strategy', 'risk', 'backtester')):
+        del sys.modules[m]
+
+from config import load_config
+from backtester import Backtester
+
+cfg = load_config()
+bt = Backtester(cfg)
+print("Re-running backtest to produce summary/CSV/chart outputs...")
+results = bt.run()
+
+bt.print_summary(results)
+bt.save_csv(results)
+bt.save_plot(results)
+print(f"Results saved to: {cfg.backtest.results_csv}")
+print(f"Chart saved to: {cfg.backtest.results_image}")
+""")
 
 # ── Assemble the final notebook ───────────────────────────────────────────────
 
