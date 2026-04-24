@@ -5,6 +5,7 @@ _meta:
   name: conservative
   notes: 'Low risk: high IV threshold, tight delta range'
   source: manual
+  status: draft
 backtest:
   approx_otm_offset: 0.0338
   lookback_months: 12

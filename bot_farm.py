@@ -1,17 +1,20 @@
 """
-bot_farm.py — Supervisor that runs N paper-trading bots simultaneously.
+bot_farm.py — Supervisor that runs paper-trading bots for all configs with status='paper'.
 
 Each bot runs in its own isolated subdirectory under farm/:
-    farm/bot_0/config.yaml        ← merged config (base + overrides)
-    farm/bot_0/data/              ← trades, state, logs (isolated)
-    farm/bot_0/KILL_SWITCH        ← per-bot kill switch
+    farm/{slug}/config.yaml        ← merged config (base + overrides)
+    farm/{slug}/data/              ← trades, state, logs (isolated)
+    farm/{slug}/KILL_SWITCH        ← per-bot kill switch
 
 The supervisor:
-  - Reads farm_config.yaml to know how many bots to launch
-  - Merges each bot's overrides onto the base config.yaml
-  - Launches each bot as a subprocess (python main.py --mode=paper --data-dir=...)
+  - Calls get_paper_configs() every 60 seconds to discover which configs are paper-status
+  - Starts new bots for any paper config not yet running
+  - Stops bots whose config status changed away from 'paper'
   - Writes farm/status.json every status_interval_seconds
   - Handles SIGTERM by sending SIGTERM to all children and waiting
+
+DEPRECATED: farm_config.yaml-based bot setup is still supported for backward compatibility
+but new bots are discovered dynamically from configs/ with status='paper'.
 
 Usage:
     python bot_farm.py [--config farm_config.yaml]
@@ -23,6 +26,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -82,6 +86,14 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text())
     except Exception:
         return None
+
+
+def _slugify(name: str) -> str:
+    """Convert a config name to a filesystem-safe slug for bot directory naming."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "config"
 
 
 # ── Bot metrics ────────────────────────────────────────────────────────────────
@@ -181,6 +193,7 @@ class BotProcess:
         self.name: str           = bot_cfg.get("name", self.bot_id)
         self.description: str    = bot_cfg.get("description", "")
         self.overrides: dict     = bot_cfg.get("overrides", {})
+        self.config_path: str | None = bot_cfg.get("config_path")  # direct path for paper configs
         self.farm_dir: Path      = farm_dir
         self.bot_dir: Path       = farm_dir / self.bot_id
         self.base_config: dict   = base_config
@@ -189,7 +202,13 @@ class BotProcess:
         self.proc: subprocess.Popen | None = None
 
         # Derive starting equity from merged config
-        merged = _deep_merge(self.base_config, self.overrides)
+        if self.config_path and Path(self.config_path).exists():
+            source_cfg = _read_yaml(Path(self.config_path))
+            # Strip _meta so it doesn't interfere with config structure
+            source_cfg.pop("_meta", None)
+            merged = source_cfg
+        else:
+            merged = _deep_merge(self.base_config, self.overrides)
         self.starting_equity: float = float(
             merged.get("backtest", {}).get("starting_equity", 10_000.0)
         )
@@ -211,26 +230,36 @@ class BotProcess:
         (self.bot_dir / "data").mkdir(exist_ok=True)
         (self.bot_dir / "logs").mkdir(exist_ok=True)
 
-        # Preserve existing _meta (e.g. config_name set via assign_config API)
-        existing_meta = {}
-        existing_config_path = self.bot_dir / "config.yaml"
-        if existing_config_path.exists():
-            try:
-                existing_raw = _read_yaml(existing_config_path)
-                existing_meta = existing_raw.get("_meta", {})
-            except Exception:
-                pass
+        if self.config_path and Path(self.config_path).exists():
+            # For paper configs: use the named config file directly (via env var)
+            # No need to copy — WHEEL_BOT_CONFIG env var points to the source
+            # But we do need a local config.yaml for readiness_validator
+            source = _read_yaml(Path(self.config_path))
+            # Force paper/testnet mode
+            source.setdefault("deribit", {})["testnet"] = True
+            with open(self.bot_dir / "config.yaml", "w") as f:
+                yaml.dump(source, f, default_flow_style=False, allow_unicode=True)
+        else:
+            # Legacy: preserve existing _meta if present
+            existing_meta = {}
+            existing_config_path = self.bot_dir / "config.yaml"
+            if existing_config_path.exists():
+                try:
+                    existing_raw = _read_yaml(existing_config_path)
+                    existing_meta = existing_raw.get("_meta", {})
+                except Exception:
+                    pass
 
-        merged = _deep_merge(self.base_config, self.overrides)
-        # Force paper / testnet mode regardless of base config
-        merged.setdefault("deribit", {})["testnet"] = True
+            merged = _deep_merge(self.base_config, self.overrides)
+            # Force paper / testnet mode regardless of base config
+            merged.setdefault("deribit", {})["testnet"] = True
 
-        # Restore _meta so config_name is preserved across restarts
-        if existing_meta:
-            merged["_meta"] = existing_meta
+            # Restore _meta so config_name is preserved across restarts
+            if existing_meta:
+                merged["_meta"] = existing_meta
 
-        with open(self.bot_dir / "config.yaml", "w") as f:
-            yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
+            with open(self.bot_dir / "config.yaml", "w") as f:
+                yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
 
     def start(self) -> None:
         """Spawn the bot subprocess."""
@@ -239,8 +268,6 @@ class BotProcess:
         log_path = self.bot_dir / "logs" / "bot.log"
         log_file = open(log_path, "a")
 
-        # We pass --data-dir so the bot writes its files into the bot's own data/
-        # directory rather than the repo-level data/ dir.
         cmd = [
             sys.executable,
             str(BASE_DIR / "main.py"),
@@ -248,10 +275,13 @@ class BotProcess:
         ]
 
         env = os.environ.copy()
-        # Point WHEEL_BOT_CONFIG to this bot's config so Config() picks it up.
-        # The bot reads WHEEL_BOT_CONFIG if set, otherwise falls back to config.yaml.
-        env["WHEEL_BOT_CONFIG"]    = str(self.bot_dir / "config.yaml")
-        env["WHEEL_BOT_DATA_DIR"]  = str(self.bot_dir / "data")
+        if self.config_path and Path(self.config_path).exists():
+            # Paper config: point bot at the named config file directly
+            env["WHEEL_BOT_CONFIG"]   = self.config_path
+        else:
+            # Legacy: use the per-bot config.yaml
+            env["WHEEL_BOT_CONFIG"]   = str(self.bot_dir / "config.yaml")
+        env["WHEEL_BOT_DATA_DIR"] = str(self.bot_dir / "data")
 
         self.proc = subprocess.Popen(
             cmd,
@@ -301,6 +331,15 @@ class BotProcess:
         except Exception:
             return "custom"
 
+    def _current_config_status(self) -> str | None:
+        """Read status from _meta in the source config file."""
+        try:
+            cfg_file = Path(self.config_path) if self.config_path else self.bot_dir / "config.yaml"
+            raw = _read_yaml(cfg_file)
+            return raw.get("_meta", {}).get("status")
+        except Exception:
+            return None
+
     def check_restart_requested(self) -> bool:
         """
         If RESTART_REQUESTED sentinel exists, reload the bot's config summary,
@@ -346,6 +385,7 @@ class BotProcess:
             "uptime_hours":   round(uptime, 2),
             "days_running":   round(uptime / 24, 2),
             "config_name":    self._current_config_name(),
+            "config_status":  self._current_config_status(),
             "config_summary": self.config_summary,
             "metrics":        metrics,
             "readiness":      _readiness_to_dict(report),
@@ -360,18 +400,21 @@ class BotFarm:
     def __init__(self, config_path: Path = BASE_DIR / "farm_config.yaml"):
         self.config_path = config_path
         self._load_config()
-        self._bots: list[BotProcess] = []
+        self._bots: dict[str, BotProcess] = {}  # keyed by bot_id
         self._shutdown = False
 
         signal.signal(signal.SIGTERM, self._handle_sigterm)
         signal.signal(signal.SIGINT,  self._handle_sigterm)
 
     def _load_config(self) -> None:
+        # DEPRECATED: farm_config.yaml is used only for readiness thresholds and
+        # backward-compatible legacy bot specs. New bots are discovered dynamically
+        # from configs/ with status='paper'.
         raw = _read_yaml(self.config_path)
         farm_sec         = raw.get("farm", {})
         self.farm_dir    = BASE_DIR / farm_sec.get("data_dir", "farm")
         self.status_interval = int(farm_sec.get("status_interval_seconds", 60))
-        self.bot_specs   = raw.get("bots", [])
+        self.legacy_bot_specs = raw.get("bots", [])
         self.thresholds  = raw.get("readiness_thresholds", {})
 
     def _handle_sigterm(self, signum, frame) -> None:
@@ -382,55 +425,142 @@ class BotFarm:
         path = BASE_DIR / base_config_name
         return _read_yaml(path)
 
+    def _discover_paper_bots(self) -> list[dict]:
+        """
+        Scan configs/ directory for configs with status='paper'.
+        Returns list of bot specs: {id, name, config_path, data_dir}
+        Bot ID is derived from config name (slugified):
+        'High-IV Aggressive' -> 'high-iv-aggressive'
+        """
+        try:
+            from config_store import get_paper_configs
+            paper_configs = get_paper_configs()
+        except Exception as exc:
+            print(f"[farm] Failed to discover paper configs: {exc}", flush=True)
+            return []
+
+        specs = []
+        for cfg in paper_configs:
+            name = cfg.get("name", "")
+            slug = _slugify(name)
+            specs.append({
+                "id":          slug,
+                "name":        name,
+                "description": f"Paper trading: {name}",
+                "config_path": cfg.get("config_path", ""),
+                "data_dir":    str(self.farm_dir / slug / "data"),
+            })
+        return specs
+
+    def _sync_paper_bots(self) -> None:
+        """
+        Reconcile running bots against current paper configs.
+        - Start new bots for any paper config not yet running.
+        - Stop bots whose config status changed away from 'paper'.
+        """
+        paper_specs = self._discover_paper_bots()
+        paper_ids   = {spec["id"] for spec in paper_specs}
+
+        # Start new paper bots
+        for spec in paper_specs:
+            bot_id = spec["id"]
+            if bot_id not in self._bots:
+                print(f"[farm] Discovered new paper config: {spec['name']!r} -> {bot_id}", flush=True)
+                bp = BotProcess(
+                    bot_cfg    = spec,
+                    farm_dir   = self.farm_dir,
+                    base_config= {},
+                    thresholds = self.thresholds,
+                )
+                self._bots[bot_id] = bp
+                bp.start()
+                time.sleep(1)  # stagger launches
+
+        # Stop bots that are no longer paper
+        for bot_id in list(self._bots.keys()):
+            bot = self._bots[bot_id]
+            # Only manage dynamically-discovered bots (those with config_path set)
+            if not bot.config_path:
+                continue
+            if bot_id not in paper_ids:
+                print(f"[farm] Config {bot.name!r} no longer paper — stopping bot {bot_id}", flush=True)
+                bot.stop()
+                del self._bots[bot_id]
+
     def setup(self) -> None:
-        """Prepare bot directories and BotProcess instances."""
+        """Prepare bot directories and BotProcess instances from legacy farm_config.yaml."""
         self.farm_dir.mkdir(parents=True, exist_ok=True)
 
-        for spec in self.bot_specs:
+        # Legacy: load bots from farm_config.yaml
+        for spec in self.legacy_bot_specs:
+            bot_id = spec.get("id")
+            if not bot_id or bot_id in self._bots:
+                continue
             base_cfg = self._get_base_config(spec.get("base_config", "config.yaml"))
             bp = BotProcess(
-                bot_cfg=spec,
-                farm_dir=self.farm_dir,
-                base_config=base_cfg,
-                thresholds=self.thresholds,
+                bot_cfg    = spec,
+                farm_dir   = self.farm_dir,
+                base_config= base_cfg,
+                thresholds = self.thresholds,
             )
-            self._bots.append(bp)
+            self._bots[bot_id] = bp
 
     def start_all(self) -> None:
-        for bot in self._bots:
+        for bot in self._bots.values():
             bot.start()
             time.sleep(1)  # stagger launches slightly
 
     def stop_all(self) -> None:
-        for bot in self._bots:
+        for bot in self._bots.values():
             bot.stop()
 
     def write_status(self) -> None:
         status = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
-            "bots": [bot.to_status_dict() for bot in self._bots],
+            "bots": [bot.to_status_dict() for bot in self._bots.values()],
         }
         _write_json(self.farm_dir / "status.json", status)
 
     def run(self) -> None:
         """Main supervisor loop."""
         self.setup()
-        self.start_all()
 
-        print(f"[farm] {len(self._bots)} bots running. Status every {self.status_interval}s", flush=True)
+        # If we have legacy farm_config.yaml bots, start them
+        if self._bots:
+            self.start_all()
+            print(f"[farm] {len(self._bots)} legacy bots started. Switching to dynamic discovery.", flush=True)
+        else:
+            print("[farm] No legacy bots. Running in dynamic discovery mode.", flush=True)
+
+        # Initial paper config sync
+        self._sync_paper_bots()
+
+        print(f"[farm] Supervisor running. Status every {self.status_interval}s", flush=True)
 
         last_status = 0.0
+        last_sync   = 0.0
+
         while not self._shutdown:
             now = time.time()
 
+            # Sync paper bots every 60 seconds
+            if now - last_sync >= 60:
+                self._sync_paper_bots()
+                last_sync = now
+
             # Check for config-assignment restart requests
-            for bot in self._bots:
+            for bot in list(self._bots.values()):
                 if not self._shutdown:
                     bot.check_restart_requested()
 
             # Restart crashed bots
-            for bot in self._bots:
+            for bot in list(self._bots.values()):
                 if not bot.is_running() and not self._shutdown:
+                    # Don't restart if status changed away from paper
+                    if bot.config_path:
+                        current_status = bot._current_config_status()
+                        if current_status != "paper":
+                            continue
                     print(f"[farm] {bot.bot_id} crashed — restarting…", flush=True)
                     bot.start()
 
@@ -461,7 +591,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         default=str(BASE_DIR / "farm_config.yaml"),
-        help="Path to farm_config.yaml",
+        help="Path to farm_config.yaml (deprecated — bots now discovered from configs/ dynamically)",
     )
     args = parser.parse_args()
 

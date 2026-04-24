@@ -8,6 +8,7 @@ _meta:
   notes: ''
   sharpe: 1.18
   source: evolved
+  status: draft
   total_return: 68.2
   total_return_pct: 68.2
 backtest:

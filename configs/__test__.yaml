@@ -5,6 +5,7 @@ _meta:
   name: __test__
   notes: test
   source: manual
+  status: draft
 backtest:
   approx_otm_offset: 0.0338
   lookback_months: 12

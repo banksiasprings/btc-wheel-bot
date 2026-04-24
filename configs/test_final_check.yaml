@@ -6,6 +6,7 @@ _meta:
   notes: ''
   sharpe: 1.18
   source: evolved
+  status: draft
   total_return_pct: 68.2
 backtest:
   approx_otm_offset: 0.0338

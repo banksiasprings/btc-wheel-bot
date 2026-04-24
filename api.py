@@ -699,9 +699,9 @@ class SaveConfigRequest(BaseModel):
 
 
 @app.get("/configs", dependencies=[Depends(_require_api_key)])
-def list_named_configs() -> list:
-    """List all saved named configs with metadata."""
-    return _cs.list_configs()
+def list_named_configs(include_archived: bool = False) -> list:
+    """List all saved named configs with metadata. Archived configs hidden by default."""
+    return _cs.list_configs(include_archived=include_archived)
 
 
 @app.post("/configs", dependencies=[Depends(_require_api_key)])
@@ -744,11 +744,129 @@ def get_named_config(name: str) -> dict:
 
 @app.delete("/configs/{name}", dependencies=[Depends(_require_api_key)])
 def delete_named_config(name: str) -> dict:
-    """Delete a named config."""
-    deleted = _cs.delete_config(name)
+    """Delete a named config. Refuses if status is 'live'."""
+    try:
+        deleted = _cs.delete_config(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     return {"ok": True, "deleted": name}
+
+
+# ── Config lifecycle endpoints ────────────────────────────────────────────────
+
+class SetStatusRequest(BaseModel):
+    status: str
+
+
+class RenameRequest(BaseModel):
+    new_name: str
+
+
+class NotesRequest(BaseModel):
+    notes: str
+
+
+class ParamsRequest(BaseModel):
+    params: dict
+
+
+class DuplicateRequest(BaseModel):
+    new_name: str
+
+
+@app.patch("/configs/{name}/status", dependencies=[Depends(_require_api_key)])
+def set_config_status(name: str, body: SetStatusRequest) -> dict:
+    """Update a config's lifecycle status."""
+    try:
+        return _cs.set_status(name, body.status)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/configs/{name}/rename", dependencies=[Depends(_require_api_key)])
+def rename_named_config(name: str, body: RenameRequest) -> dict:
+    """Rename a config file and update _meta.name inside it."""
+    try:
+        return _cs.rename_config(name, body.new_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.patch("/configs/{name}/notes", dependencies=[Depends(_require_api_key)])
+def update_config_notes(name: str, body: NotesRequest) -> dict:
+    """Update the notes field in _meta."""
+    try:
+        return _cs.update_config_notes(name, body.notes)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+
+
+@app.patch("/configs/{name}/params", dependencies=[Depends(_require_api_key)])
+def update_config_params(name: str, body: ParamsRequest) -> dict:
+    """Update the strategy/sizing/risk params of a config (merges, doesn't replace)."""
+    try:
+        return _cs.update_config_params(name, body.params)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+
+
+@app.post("/configs/{name}/duplicate", dependencies=[Depends(_require_api_key)])
+def duplicate_named_config(name: str, body: DuplicateRequest) -> dict:
+    """Create a copy of a config with a new name, status reset to draft."""
+    try:
+        return _cs.duplicate_config(name, body.new_name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/configs/{name}/archive", dependencies=[Depends(_require_api_key)])
+def archive_named_config(name: str) -> dict:
+    """Set config status to 'archived'."""
+    try:
+        return _cs.archive_config(name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+
+
+@app.post("/configs/{name}/start-paper", dependencies=[Depends(_require_api_key)])
+def start_paper_testing(name: str) -> dict:
+    """Set config status to 'paper' — farm supervisor will pick it up and start a bot."""
+    try:
+        return _cs.set_status(name, "paper")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/configs/{name}/stop-paper", dependencies=[Depends(_require_api_key)])
+def stop_paper_testing(name: str) -> dict:
+    """Set config status back to 'validated' — farm supervisor will stop the bot."""
+    try:
+        # Try to read current status to decide what to revert to
+        import yaml as _yaml
+        from pathlib import Path as _Path
+        cfg_path = _Path(_cs.get_config_yaml_path(name))
+        if cfg_path.exists():
+            data = _yaml.safe_load(cfg_path.read_text()) or {}
+            current = data.get("_meta", {}).get("status", "draft")
+            # Revert to validated if possible, else draft
+            target = "validated" if current in ("paper", "ready") else "draft"
+        else:
+            target = "draft"
+        return _cs.set_status(name, target)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 class PromoteRequest(BaseModel):

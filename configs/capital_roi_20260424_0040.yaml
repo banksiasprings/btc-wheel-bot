@@ -8,6 +8,7 @@ _meta:
   notes: ''
   sharpe: 1.96
   source: evolved
+  status: draft
   total_return: 18.27
   version: 8
   win_rate: 100.0

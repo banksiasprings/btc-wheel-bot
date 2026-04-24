@@ -5,6 +5,7 @@ _meta:
   name: capital_roi
   notes: 'Small capital optimised: lower equity per leg, tighter buffer, $5k start'
   source: manual
+  status: draft
 backtest:
   approx_otm_offset: 0.0338
   lookback_months: 12

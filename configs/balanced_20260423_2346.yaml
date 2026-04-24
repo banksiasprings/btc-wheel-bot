@@ -8,6 +8,7 @@ _meta:
   notes: ''
   sharpe: 1.44
   source: evolved
+  status: paper
   total_return: 22.14
   version: 2
   win_rate: 76.2

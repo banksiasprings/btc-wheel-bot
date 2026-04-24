@@ -2,9 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   getEvolveResultsAll, EvolveAllResults, EvolveGoal,
   getFarmStatus, FarmStatus, BotFarmEntry,
-  listConfigs, NamedConfig,
+  listConfigs, NamedConfig, ConfigStatus,
   runOptimizer, saveConfig as apiSaveConfig,
   assignBotConfig, promoteConfig,
+  startPaperTesting, stopPaperTesting,
   startFarm, stopFarm,
 } from '../api'
 import ConfigSelector from './ConfigSelector'
@@ -573,24 +574,188 @@ function FarmBotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => v
   )
 }
 
-// ── Step 3 — Paper Trade (with full farm grid) ────────────────────────────────
+// ── Paper Config Card (Step 3) ────────────────────────────────────────────────
+
+function PaperConfigCard({
+  config, bot, onRefresh,
+}: {
+  config: NamedConfig
+  bot: BotFarmEntry | null
+  onRefresh: () => void
+}) {
+  const [busy, setBusy]                     = useState(false)
+  const [msg, setMsg]                       = useState('')
+  const [showPromoteConfirm, setShowPromoteConfirm] = useState(false)
+  const [startingEquity, setStartingEquity] = useState('')
+  const [promoting, setPromoting]           = useState(false)
+  const [showStopConfirm, setShowStopConfirm] = useState(false)
+
+  const r = bot?.readiness
+  const m = bot?.metrics
+
+  async function handleStop() {
+    setBusy(true)
+    try {
+      await stopPaperTesting(config.name)
+      setShowStopConfirm(false)
+      setMsg('Stopped — farm will remove bot shortly')
+      onRefresh()
+    } catch (e) { setMsg(String(e)) } finally { setBusy(false) }
+  }
+
+  async function handlePromote() {
+    const equity = parseFloat(startingEquity)
+    if (!equity || equity <= 0) return
+    setPromoting(true)
+    try {
+      const res = await promoteConfig(config.name, equity)
+      setMsg(`Promoted: ${res.message ?? 'live bot will restart'}`)
+      setShowPromoteConfirm(false)
+      setStartingEquity('')
+      onRefresh()
+    } catch (e) { setMsg(String(e)) } finally { setPromoting(false) }
+  }
+
+  const isReady = r?.ready ?? false
+  const statusDot = bot?.status === 'running'
+    ? 'bg-green-400 shadow-[0_0_6px_#22c55e]'
+    : bot?.status === 'error' ? 'bg-red-500' : 'bg-amber-400'
+
+  return (
+    <div className={`bg-card rounded-2xl border overflow-hidden ${isReady ? 'border-green-700' : 'border-amber-700/50'}`}>
+      <div className="px-4 pt-3 pb-2">
+        <div className="flex items-center gap-2 mb-2">
+          <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${bot ? statusDot : 'bg-slate-600'}`} />
+          <p className="font-semibold text-white text-sm flex-1">{config.name}</p>
+          <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium ${
+            config.status === 'ready' ? 'bg-green-900 text-green-300 border-green-700' : 'bg-amber-900 text-amber-300 border-amber-700'
+          }`}>{config.status === 'ready' ? 'Ready' : 'Paper'}</span>
+        </div>
+
+        {/* Readiness bar */}
+        {r && <ReadinessProgressBar score={r.score} total={r.total} />}
+
+        {/* Metrics strip */}
+        {m && (
+          <div className="grid grid-cols-5 border-t border-border/40 text-center mt-2">
+            {[
+              { label: 'Trades', value: String(m.num_trades ?? 0) },
+              { label: 'Win',    value: m.win_rate != null ? `${(m.win_rate * 100).toFixed(0)}%` : '—' },
+              { label: 'Sharpe', value: m.sharpe != null ? m.sharpe.toFixed(2) : '—' },
+              { label: 'DD',     value: m.max_drawdown != null ? `-${(m.max_drawdown * 100).toFixed(0)}%` : '—' },
+              { label: 'Return', value: m.total_return_pct != null ? `${m.total_return_pct >= 0 ? '+' : ''}${m.total_return_pct.toFixed(1)}%` : '—' },
+            ].map(({ label, value }) => (
+              <div key={label} className="py-2 border-r border-border/30 last:border-r-0">
+                <p className="text-xs text-slate-500">{label}</p>
+                <p className="text-xs font-medium text-white">{value}</p>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {msg && (
+          <p className={`text-xs px-2 py-1.5 rounded-lg border mt-2 ${msg.includes('error') || msg.startsWith('Error') ? 'bg-red-950 border-red-800 text-red-300' : 'bg-green-950 border-green-800 text-green-300'}`}>{msg}</p>
+        )}
+      </div>
+
+      <div className="px-4 pb-3 flex gap-2">
+        {isReady && (
+          <button
+            onClick={() => setShowPromoteConfirm(true)}
+            disabled={busy}
+            className="flex-1 py-2 rounded-xl bg-green-700 hover:bg-green-600 text-white text-xs font-bold disabled:opacity-40"
+          >
+            Promote to Live
+          </button>
+        )}
+        <button
+          onClick={() => setShowStopConfirm(true)}
+          disabled={busy}
+          className="flex-1 py-2 rounded-xl bg-orange-900 hover:bg-orange-800 text-orange-300 text-xs font-medium disabled:opacity-40"
+        >
+          Stop Testing
+        </button>
+      </div>
+
+      {/* Stop confirm */}
+      {showStopConfirm && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <h3 className="font-bold text-white text-lg">Stop Paper Testing?</h3>
+            <p className="text-slate-400 text-sm">Stop '{config.name}'? The farm bot will be stopped.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowStopConfirm(false)} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
+              <button onClick={handleStop} disabled={busy} className="flex-1 py-3 rounded-xl bg-red-700 text-white text-sm font-semibold disabled:opacity-40">Stop</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Promote confirm */}
+      {showPromoteConfirm && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-green-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="text-3xl">⬆️</div>
+            <h3 className="font-bold text-white text-lg">Promote to Live?</h3>
+            <p className="text-slate-400 text-sm">
+              Promoting <span className="text-green-400 font-medium">{config.name}</span> to mainnet. Real money will be traded.
+            </p>
+            <div className="flex items-center gap-2 bg-slate-900 border border-border rounded-xl px-3 py-2.5">
+              <span className="text-slate-400 text-sm">$</span>
+              <input
+                type="number" min="1" step="any"
+                value={startingEquity}
+                onChange={e => setStartingEquity(e.target.value)}
+                placeholder="Deposit amount (USD)"
+                className="flex-1 bg-transparent text-white text-sm focus:outline-none"
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setShowPromoteConfirm(false); setStartingEquity('') }} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
+              <button
+                onClick={handlePromote}
+                disabled={promoting || !startingEquity || parseFloat(startingEquity) <= 0}
+                className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                {promoting ? 'Promoting…' : 'Promote'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Step 3 — Paper Trade ──────────────────────────────────────────────────────
 
 function StepPaperTrade({
-  open, onToggle, bots, farmRunning, onRefresh,
+  open, onToggle, configs, bots, farmRunning, onRefresh,
 }: {
   open: boolean
   onToggle: () => void
+  configs: NamedConfig[]
   bots: BotFarmEntry[]
   farmRunning: boolean
   onRefresh: () => void
 }) {
-  const [farmBusy, setFarmBusy]   = useState(false)
-  const [farmMsg, setFarmMsg]     = useState('')
+  const [farmBusy, setFarmBusy]         = useState(false)
+  const [farmMsg, setFarmMsg]           = useState('')
+  const [selectedStart, setSelectedStart] = useState<string | null>(null)
+  const [startingBusy, setStartingBusy] = useState(false)
+  const [startMsg, setStartMsg]         = useState('')
 
-  const readyCount = bots.filter(b => b.readiness.ready).length
-  const status: StepStatus = bots.length === 0 ? 'not_started'
-    : readyCount > 0 ? 'complete'
-    : bots.some(b => b.readiness.score > 0) ? 'in_progress'
+  // Paper + ready configs — these are what the farm runs
+  const paperConfigs = configs.filter(c => c.status === 'paper' || c.status === 'ready')
+
+  // Configs eligible to start paper testing (draft or validated, not already paper)
+  const eligibleConfigs = configs.filter(c => c.status === 'draft' || c.status === 'validated')
+
+  const readyCount = paperConfigs.filter(c => c.status === 'ready').length
+  const bestReadiness = bots.length > 0 ? Math.max(...bots.map(b => b.readiness.score)) : 0
+  const status: StepStatus = readyCount > 0 ? 'complete'
+    : paperConfigs.length > 0 ? 'in_progress'
     : 'not_started'
 
   async function handleStartFarm() {
@@ -600,11 +765,7 @@ function StepPaperTrade({
       const r = await startFarm()
       setFarmMsg(`Farm started (PID ${r.pid})`)
       setTimeout(() => { setFarmMsg(''); onRefresh() }, 1500)
-    } catch (e) {
-      setFarmMsg(String(e))
-    } finally {
-      setFarmBusy(false)
-    }
+    } catch (e) { setFarmMsg(String(e)) } finally { setFarmBusy(false) }
   }
 
   async function handleStopFarm() {
@@ -614,11 +775,25 @@ function StepPaperTrade({
       await stopFarm()
       setFarmMsg('Farm stopped')
       setTimeout(() => { setFarmMsg(''); onRefresh() }, 1500)
-    } catch (e) {
-      setFarmMsg(String(e))
-    } finally {
-      setFarmBusy(false)
-    }
+    } catch (e) { setFarmMsg(String(e)) } finally { setFarmBusy(false) }
+  }
+
+  async function handleStartPaper() {
+    if (!selectedStart) return
+    setStartingBusy(true)
+    setStartMsg('')
+    try {
+      await startPaperTesting(selectedStart)
+      setStartMsg(`Started paper testing for '${selectedStart}'`)
+      setSelectedStart(null)
+      setTimeout(() => { setStartMsg(''); onRefresh() }, 1500)
+    } catch (e) { setStartMsg(String(e)) } finally { setStartingBusy(false) }
+  }
+
+  // Map bot entries by config name for lookup
+  const botByName: Record<string, BotFarmEntry> = {}
+  for (const bot of bots) {
+    if (bot.config_name) botByName[bot.config_name] = bot
   }
 
   return (
@@ -631,10 +806,10 @@ function StepPaperTrade({
           <span className="text-sm font-bold text-white uppercase tracking-wide">Step 3 · Paper Trade</span>
           <p className="text-xs text-slate-400 mt-0.5">
             {readyCount > 0
-              ? `${readyCount} bot(s) ready for live`
-              : bots.length > 0
-              ? `Best: ${Math.max(...bots.map(b => b.readiness.score))}/8 checks passed`
-              : 'Run bot farm to verify live readiness'}
+              ? `${readyCount} config(s) ready for live`
+              : paperConfigs.length > 0
+              ? `${paperConfigs.length} config(s) running · best ${bestReadiness}/8 checks`
+              : 'Select configs to paper test'}
           </p>
         </div>
         <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
@@ -647,7 +822,9 @@ function StepPaperTrade({
             <div className="flex items-center gap-2">
               <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${farmRunning ? 'bg-green-400 shadow-[0_0_6px_#22c55e]' : 'bg-slate-600'}`} />
               <span className="text-sm text-white">
-                {farmRunning ? `Running ${bots.filter(b => b.status === 'running').length} bots` : 'Farm stopped'}
+                {farmRunning
+                  ? `Farm running · ${bots.filter(b => b.status === 'running').length} bots active`
+                  : 'Farm stopped'}
               </span>
             </div>
             <div className="flex gap-2">
@@ -666,16 +843,41 @@ function StepPaperTrade({
             <p className={`text-xs px-3 py-2 rounded-lg border ${farmMsg.startsWith('Farm started') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-slate-800 border-border text-slate-300'}`}>{farmMsg}</p>
           )}
 
-          {/* Bot cards */}
-          {bots.length === 0 ? (
+          {/* Start paper testing for a config */}
+          {eligibleConfigs.length > 0 && (
+            <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
+              <p className="text-xs text-slate-400 font-medium">Start paper testing</p>
+              <ConfigSelector value={selectedStart} onChange={setSelectedStart} label="Config to test" showStats />
+              {startMsg && (
+                <p className={`text-xs px-2 py-1.5 rounded-lg border ${startMsg.startsWith('Started') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{startMsg}</p>
+              )}
+              <button
+                onClick={handleStartPaper}
+                disabled={!selectedStart || startingBusy}
+                className="w-full py-2 rounded-xl bg-amber-800 hover:bg-amber-700 text-amber-200 text-xs font-semibold disabled:opacity-40"
+              >
+                {startingBusy ? 'Starting…' : 'Start Paper Testing'}
+              </button>
+            </div>
+          )}
+
+          {/* Paper/ready config cards */}
+          {paperConfigs.length === 0 ? (
             <div className="py-4 text-center">
-              <p className="text-slate-400 text-sm">No bots running yet.</p>
-              <p className="text-slate-600 text-xs mt-1">4 bots will run simultaneously: Conservative, Balanced, Aggressive, Capital ROI.</p>
+              <p className="text-slate-400 text-sm">No configs in paper testing yet.</p>
+              <p className="text-slate-600 text-xs mt-1">
+                Save a config in Step 1, validate it in Step 2, then start paper testing above.
+              </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {bots.map(bot => (
-                <FarmBotCard key={bot.id} bot={bot} onRefresh={onRefresh} />
+              {paperConfigs.map(cfg => (
+                <PaperConfigCard
+                  key={cfg.name}
+                  config={cfg}
+                  bot={botByName[cfg.name] ?? null}
+                  onRefresh={onRefresh}
+                />
               ))}
             </div>
           )}
@@ -688,22 +890,27 @@ function StepPaperTrade({
 // ── Step 4 — Go Live ──────────────────────────────────────────────────────────
 
 function StepGoLive({
-  open, onToggle, bots,
+  open, onToggle, bots, configs,
 }: {
   open: boolean
   onToggle: () => void
   bots: BotFarmEntry[]
+  configs: NamedConfig[]
 }) {
-  const [selectedBot, setSelectedBot]   = useState<string | null>(bots.find(b => b.readiness.ready)?.id ?? null)
-  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
+  const readyConfigs = configs.filter(c => c.status === 'ready')
+  // Also accept bots with readiness.ready for backward compat
+  const readyBots    = bots.filter(b => b.readiness.ready)
+
+  const [selectedConfig, setSelectedConfig] = useState<string | null>(
+    readyConfigs[0]?.name ?? readyBots[0]?.config_name ?? null
+  )
   const [confirmOpen, setConfirmOpen]   = useState(false)
   const [promoting, setPromoting]       = useState(false)
   const [promoteMsg, setPromoteMsg]     = useState('')
   const [startingEquity, setStartingEquity] = useState('')
 
-  const readyBots = bots.filter(b => b.readiness.ready)
-  const isLocked  = readyBots.length === 0
-  const bot       = bots.find(b => b.id === selectedBot) ?? null
+  const isLocked  = readyConfigs.length === 0 && readyBots.length === 0
+  const bot       = selectedConfig ? (bots.find(b => b.config_name === selectedConfig) ?? null) : null
   const status: StepStatus = isLocked ? 'locked' : 'not_started'
 
   async function handlePromote() {
@@ -741,7 +948,7 @@ function StepGoLive({
           <p className="text-xs text-slate-500 mt-0.5">
             {isLocked
               ? `Locked — needs 8/8 readiness (best: ${Math.max(0, ...bots.map(b => b.readiness.score))}/8)`
-              : `${readyBots.length} bot(s) ready · promote to live`}
+              : `${readyConfigs.length + readyBots.length} ready · promote to live`}
           </p>
         </div>
         {!isLocked && <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>}
@@ -749,27 +956,23 @@ function StepGoLive({
 
       {open && !isLocked && (
         <div className="px-4 pb-4 space-y-3">
-          {/* Bot selector (only ready bots) */}
+          {/* Config selector — prefer ready configs */}
           <div className="space-y-1.5">
-            <span className="text-xs text-slate-400 font-medium">Ready bot</span>
+            <span className="text-xs text-slate-400 font-medium">Ready config</span>
             <select
-              value={selectedBot ?? ''}
-              onChange={e => setSelectedBot(e.target.value)}
+              value={selectedConfig ?? ''}
+              onChange={e => setSelectedConfig(e.target.value)}
               className="w-full bg-navy border border-green-800 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none"
             >
-              {readyBots.map(b => (
-                <option key={b.id} value={b.id}>{b.name} — 8/8 ✅</option>
+              <option value="">Select a config…</option>
+              {readyConfigs.map(c => (
+                <option key={c.name} value={c.name}>{c.name} — 8/8 ✅</option>
+              ))}
+              {readyBots.filter(b => b.config_name && !readyConfigs.find(c => c.name === b.config_name)).map(b => (
+                <option key={b.id} value={b.config_name!}>{b.config_name} (via farm bot)</option>
               ))}
             </select>
           </div>
-
-          {/* Config selector */}
-          <ConfigSelector
-            value={selectedConfig}
-            onChange={setSelectedConfig}
-            label="Config to promote"
-            showStats
-          />
 
           {/* Bot stats */}
           {bot && (
@@ -912,7 +1115,8 @@ export default function Pipeline() {
         onSaved={name => {
           setConfigs(c => [...c.filter(x => x.name !== name), {
             name,
-            source: 'evolved',
+            status: 'draft' as const,
+            source: 'evolved' as const,
             created_at: new Date().toISOString(),
             fitness: null,
             total_return_pct: null,
@@ -936,6 +1140,7 @@ export default function Pipeline() {
       <StepPaperTrade
         open={openStep === 3}
         onToggle={() => toggle(3)}
+        configs={configs}
         bots={bots}
         farmRunning={farmStatus?.farm_running ?? false}
         onRefresh={refresh}
@@ -947,6 +1152,7 @@ export default function Pipeline() {
         open={openStep === 4}
         onToggle={() => toggle(4)}
         bots={bots}
+        configs={configs}
       />
     </div>
   )

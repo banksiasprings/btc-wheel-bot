@@ -10,9 +10,10 @@ export interface ConfigSelectorProps {
 }
 
 const SOURCE_BADGE: Record<ConfigSource, { label: string; cls: string }> = {
-  evolved:  { label: 'Evolved',   cls: 'bg-green-900 text-green-300 border-green-700'  },
-  manual:   { label: 'Manual',    cls: 'bg-slate-800 text-slate-400 border-slate-600'  },
-  promoted: { label: 'Promoted',  cls: 'bg-amber-900 text-amber-300 border-amber-700'  },
+  evolved:    { label: 'Evolved',    cls: 'bg-green-900 text-green-300 border-green-700'    },
+  manual:     { label: 'Manual',     cls: 'bg-slate-800 text-slate-400 border-slate-600'    },
+  promoted:   { label: 'Promoted',   cls: 'bg-amber-900 text-amber-300 border-amber-700'    },
+  duplicated: { label: 'Duplicated', cls: 'bg-purple-900 text-purple-300 border-purple-700' },
 }
 
 function SourceBadge({ source }: { source: ConfigSource }) {

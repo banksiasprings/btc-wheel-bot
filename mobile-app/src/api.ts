@@ -411,24 +411,31 @@ export const getFarmBotTrades = (botId: string) =>
 
 // ── Named config API ──────────────────────────────────────────────────────────
 
-export type ConfigSource = 'evolved' | 'manual' | 'promoted'
+export type ConfigSource = 'evolved' | 'manual' | 'promoted' | 'duplicated'
+export type ConfigStatus = 'draft' | 'validated' | 'paper' | 'ready' | 'live' | 'archived'
 
 export interface NamedConfig {
   name: string
+  status: ConfigStatus
   source: ConfigSource
   created_at: string
   notes?: string | null
   fitness?: number | null
   total_return_pct?: number | null
   sharpe?: number | null
-  params: PresetParams
+  goal?: string | null
+  params?: PresetParams
   _meta?: {
     name?: string
     [key: string]: unknown
   }
 }
 
-export const listConfigs = () => request<NamedConfig[]>('/configs')
+export const listConfigs = (includeArchived = false) =>
+  request<NamedConfig[]>(`/configs?include_archived=${includeArchived}`)
+
+export const getConfigDetail = (name: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}`)
 
 export const saveConfig = (payload: {
   name: string
@@ -443,6 +450,48 @@ export const saveConfig = (payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+
+export const setConfigStatus = (name: string, status: ConfigStatus) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  })
+
+export const renameConfig = (name: string, newName: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/rename`, {
+    method: 'PATCH',
+    body: JSON.stringify({ new_name: newName }),
+  })
+
+export const updateConfigNotes = (name: string, notes: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/notes`, {
+    method: 'PATCH',
+    body: JSON.stringify({ notes }),
+  })
+
+export const updateConfigParams = (name: string, params: Record<string, unknown>) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/params`, {
+    method: 'PATCH',
+    body: JSON.stringify({ params }),
+  })
+
+export const duplicateConfig = (name: string, newName: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify({ new_name: newName }),
+  })
+
+export const archiveConfig = (name: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/archive`, { method: 'POST' })
+
+export const deleteConfig = (name: string) =>
+  request<{ ok: boolean }>(`/configs/${encodeURIComponent(name)}`, { method: 'DELETE' })
+
+export const startPaperTesting = (name: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/start-paper`, { method: 'POST' })
+
+export const stopPaperTesting = (name: string) =>
+  request<NamedConfig>(`/configs/${encodeURIComponent(name)}/stop-paper`, { method: 'POST' })
 
 export const assignBotConfig = (botId: string, configName: string) =>
   request<{ ok: boolean }>(`/farm/bot/${botId}/assign-config`, {
