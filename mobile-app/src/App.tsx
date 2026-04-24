@@ -4,6 +4,7 @@ import Farm from './components/Farm'
 import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
 import Settings from './components/Settings'
+import { hasCredentials } from './credentials'
 
 type Tab = 'farm' | 'performance' | 'pipeline' | 'settings'
 
@@ -28,9 +29,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('farm')
 
   useEffect(() => {
-    const url = localStorage.getItem('api_url')
-    const key = localStorage.getItem('api_key')
-    setIsSetup(!!(url && key))
+    setIsSetup(hasCredentials())
   }, [])
 
   if (!isSetup) {
@@ -43,7 +42,7 @@ export default function App() {
         {activeTab === 'farm'        && <Farm />}
         {activeTab === 'performance' && <Performance />}
         {activeTab === 'pipeline'    && <Pipeline />}
-        {activeTab === 'settings'    && <Settings onLogout={() => setIsSetup(false)} />}
+        {activeTab === 'settings'    && <Settings />}
       </main>
 
       {/* Bottom tab bar */}

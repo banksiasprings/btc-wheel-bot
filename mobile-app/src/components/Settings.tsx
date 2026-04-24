@@ -4,17 +4,13 @@ import {
   getNotifierConfig, setupNotifier, testNotifier,
   NotifierConfig,
 } from '../api'
+import { saveApiKey, loadApiKey, DEFAULT_URL } from '../credentials'
 import InfoModal from './InfoModal'
 import SystemGuide from './SystemGuide'
 import ConfigLibrary from './ConfigLibrary'
 
-interface Props {
-  onLogout: () => void
-}
-
-export default function Settings({ onLogout }: Props) {
-  const [apiUrl, setApiUrl]               = useState(localStorage.getItem('api_url') ?? '')
-  const [apiKey, setApiKey]               = useState(localStorage.getItem('api_key') ?? '')
+export default function Settings() {
+  const [apiKey, setApiKey]               = useState(loadApiKey())
   const [loading, setLoading]             = useState(true)
   const [saveStatus, setSaveStatus]       = useState('')
   const [info, setInfo]                   = useState<{ title: string; body: string } | null>(null)
@@ -46,12 +42,10 @@ export default function Settings({ onLogout }: Props) {
   useEffect(() => { loadData() }, [])
 
   async function saveApiSettings() {
-    const clean = apiUrl.replace(/\/$/, '')
-    localStorage.setItem('api_url', clean)
-    localStorage.setItem('api_key', apiKey)
+    saveApiKey(apiKey.trim())
     showStatus('Testing connection…', 10000)
     const ok = await testConnection()
-    showStatus(ok ? 'Connected ✓' : 'Connection failed — check URL and key')
+    showStatus(ok ? 'Connected ✓' : 'Connection failed — check the API key')
   }
 
   async function saveTelegram() {
@@ -116,15 +110,9 @@ export default function Settings({ onLogout }: Props) {
       {/* ── API Connection ───────────────────────────────────────────────── */}
       <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
         <p className="text-sm font-semibold text-white">API Connection</p>
-        <div>
-          <label className="text-xs text-slate-400 mb-1 block">API URL</label>
-          <input
-            type="url"
-            value={apiUrl}
-            onChange={e => setApiUrl(e.target.value)}
-            placeholder="https://bot.banksiaspringsfarm.com"
-            className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-green-500 text-sm"
-          />
+        <div className="bg-navy rounded-xl px-3 py-2.5">
+          <p className="text-xs text-slate-500 mb-0.5">Server</p>
+          <p className="text-xs text-slate-300 font-mono">{DEFAULT_URL}</p>
         </div>
         <div>
           <label className="text-xs text-slate-400 mb-1 block">API Key</label>
@@ -255,18 +243,6 @@ export default function Settings({ onLogout }: Props) {
           </a>
         </div>
       </div>
-
-      {/* ── Logout ───────────────────────────────────────────────────────── */}
-      <button
-        onClick={() => {
-          localStorage.removeItem('api_url')
-          localStorage.removeItem('api_key')
-          onLogout()
-        }}
-        className="w-full py-3 rounded-xl border border-border text-slate-400 text-sm"
-      >
-        Reset & Re-configure
-      </button>
 
       {/* ── Mode switch confirm dialogs ───────────────────────────────────── */}
       {modeConfirm && pendingMode === 'live' && (

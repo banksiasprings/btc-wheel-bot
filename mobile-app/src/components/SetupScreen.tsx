@@ -1,25 +1,23 @@
 import { useState } from 'react'
 import { testConnection } from '../api'
+import { saveApiKey, DEFAULT_URL } from '../credentials'
 
 interface Props {
   onSetupComplete: () => void
 }
 
 export default function SetupScreen({ onSetupComplete }: Props) {
-  const [url, setUrl] = useState(localStorage.getItem('api_url') ?? '')
-  const [key, setKey] = useState(localStorage.getItem('api_key') ?? '')
+  const [key, setKey]     = useState('')
   const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState('')
 
   async function handleSave() {
-    if (!url || !key) {
+    if (!key.trim()) {
       setStatus('error')
-      setErrorMsg('Both fields are required')
+      setErrorMsg('API key is required')
       return
     }
-    const cleanUrl = url.replace(/\/$/, '')
-    localStorage.setItem('api_url', cleanUrl)
-    localStorage.setItem('api_key', key)
+    saveApiKey(key.trim())
     setStatus('testing')
     setErrorMsg('')
     const ok = await testConnection()
@@ -28,7 +26,7 @@ export default function SetupScreen({ onSetupComplete }: Props) {
       setTimeout(onSetupComplete, 600)
     } else {
       setStatus('error')
-      setErrorMsg('Could not reach the API. Check the URL and key, then try again.')
+      setErrorMsg('Could not reach the bot. Check the API key and try again.')
     }
   }
 
@@ -45,17 +43,9 @@ export default function SetupScreen({ onSetupComplete }: Props) {
 
       {/* Form */}
       <div className="w-full max-w-sm space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1.5">
-            API URL
-          </label>
-          <input
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://your-tunnel.trycloudflare.com"
-            className="w-full bg-card border border-border rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-green-500 text-sm"
-          />
+        <div className="bg-card border border-border rounded-2xl px-4 py-3">
+          <p className="text-xs text-slate-500">Connecting to</p>
+          <p className="text-sm text-slate-300 font-mono truncate">{DEFAULT_URL}</p>
         </div>
 
         <div>
@@ -66,11 +56,13 @@ export default function SetupScreen({ onSetupComplete }: Props) {
             type="password"
             value={key}
             onChange={(e) => setKey(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleSave()}
             placeholder="32-character hex key"
+            autoFocus
             className="w-full bg-card border border-border rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-green-500 text-sm font-mono"
           />
           <p className="text-xs text-slate-500 mt-1.5">
-            Found in <code className="text-slate-400">.env</code> as WHEEL_API_KEY
+            Found in <code className="text-slate-400">.env</code> as WHEEL_API_KEY on your server
           </p>
         </div>
 
@@ -90,7 +82,7 @@ export default function SetupScreen({ onSetupComplete }: Props) {
           disabled={status === 'testing'}
           className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-colors"
         >
-          {status === 'testing' ? 'Testing connection…' : 'Save & Connect'}
+          {status === 'testing' ? 'Testing connection…' : 'Connect'}
         </button>
       </div>
     </div>
