@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { getFarmStatus, startFarm, stopFarm, FarmStatus, BotFarmEntry, assignBotConfig, promoteConfig } from '../api'
+import { getFarmStatus, startFarm, stopFarm, getBotLiveState, FarmStatus, BotFarmEntry, BotLiveState, assignBotConfig, promoteConfig } from '../api'
 import ConfigSelector from './ConfigSelector'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -93,10 +93,22 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
   const [promoting, setPromoting]           = useState(false)
   const [promoteMsg, setPromoteMsg]         = useState('')
   const [startingEquity, setStartingEquity] = useState('')
+  const [liveState, setLiveState]           = useState<BotLiveState | null>(null)
+  const [liveLoading, setLiveLoading]       = useState(false)
 
   const m = bot.metrics
   const r = bot.readiness
   const daysToReady = r.ready ? 0 : Math.max(0, 30 - (m.days_running ?? 0))
+
+  // Fetch live state when card is expanded
+  useEffect(() => {
+    if (!expanded) return
+    setLiveLoading(true)
+    getBotLiveState(bot.id)
+      .then(setLiveState)
+      .catch(() => setLiveState(null))
+      .finally(() => setLiveLoading(false))
+  }, [expanded, bot.id])
 
   // Config name from dedicated field (set by assign-config endpoint)
   const configName: string = bot.config_name ?? 'Unassigned'
@@ -193,9 +205,156 @@ function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void 
         {bot.pid && <span>PID {bot.pid}</span>}
       </div>
 
-      {/* Expandable checklist */}
+      {/* Expandable section */}
       {expanded && (
         <div className="border-t border-border/40 px-4 py-3 space-y-1.5">
+
+          {/* ── Kill switch banner ── */}
+          {liveState?.kill_switch_active && (
+            <div className="bg-red-950 border border-red-700 rounded-xl px-3 py-2.5 mb-3">
+              <p className="text-red-300 text-xs font-bold">🛑 TRADING HALTED — Kill switch active</p>
+              <p className="text-red-400 text-xs mt-0.5">Delete the KILL_SWITCH file on the server to resume.</p>
+            </div>
+          )}
+
+          {/* ── Live position ── */}
+          {liveLoading ? (
+            <p className="text-xs text-slate-500 py-2">Loading live state…</p>
+          ) : liveState ? (
+            <div className="space-y-2 mb-3">
+              <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Live Activity</p>
+
+              {/* Heartbeat freshness */}
+              {liveState.heartbeat_age_seconds != null && (
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    liveState.heartbeat_age_seconds < 180 ? 'bg-green-400' :
+                    liveState.heartbeat_age_seconds < 600 ? 'bg-yellow-400' : 'bg-red-500'
+                  }`} />
+                  <span className="text-xs text-slate-400">
+                    Heartbeat {liveState.heartbeat_age_seconds < 60
+                      ? `${Math.round(liveState.heartbeat_age_seconds)}s ago`
+                      : `${Math.round(liveState.heartbeat_age_seconds / 60)}m ago`}
+                  </span>
+                </div>
+              )}
+
+              {/* Current position */}
+              {liveState.position?.open ? (
+                <div className="bg-navy rounded-xl px-3 py-2.5 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-amber-300">
+                      📋 Open {liveState.position.type?.toUpperCase()} Position
+                    </span>
+                    {liveState.position.dte != null && (
+                      <span className="text-xs text-slate-500">{liveState.position.dte}d DTE</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs">
+                    {liveState.position.strike != null && (
+                      <>
+                        <span className="text-slate-500">Strike</span>
+                        <span className="text-white font-mono">{fmt$(liveState.position.strike)}</span>
+                      </>
+                    )}
+                    {liveState.position.delta != null && (
+                      <>
+                        <span className="text-slate-500">Delta</span>
+                        <span className="text-white font-mono">{liveState.position.delta.toFixed(3)}</span>
+                      </>
+                    )}
+                    {liveState.position.contracts != null && (
+                      <>
+                        <span className="text-slate-500">Contracts</span>
+                        <span className="text-white font-mono">{liveState.position.contracts}</span>
+                      </>
+                    )}
+                    {liveState.position.unrealized_pnl_usd != null && (
+                      <>
+                        <span className="text-slate-500">Unrealised P&L</span>
+                        <span className={`font-mono font-semibold ${
+                          liveState.position.unrealized_pnl_usd >= 0 ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {liveState.position.unrealized_pnl_usd >= 0 ? '+' : ''}
+                          {fmt$(liveState.position.unrealized_pnl_usd)}
+                        </span>
+                      </>
+                    )}
+                    {liveState.position.expiry && (
+                      <>
+                        <span className="text-slate-500">Expiry</span>
+                        <span className="text-white font-mono text-xs">{liveState.position.expiry}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-navy rounded-xl px-3 py-2 text-xs text-slate-500">
+                  No open position — waiting for signal
+                </div>
+              )}
+
+              {/* Live state summary */}
+              {liveState.state && (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs px-1">
+                  {liveState.state.iv_rank != null && (
+                    <>
+                      <span className="text-slate-500">IV Rank</span>
+                      <span className="text-white font-mono">{(liveState.state.iv_rank * 100).toFixed(1)}%</span>
+                    </>
+                  )}
+                  {liveState.state.total_pnl_usd != null && (
+                    <>
+                      <span className="text-slate-500">Total P&L</span>
+                      <span className={`font-mono font-semibold ${
+                        liveState.state.total_pnl_usd >= 0 ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {liveState.state.total_pnl_usd >= 0 ? '+' : ''}{fmt$(liveState.state.total_pnl_usd)}
+                      </span>
+                    </>
+                  )}
+                  {liveState.state.equity_usd != null && (
+                    <>
+                      <span className="text-slate-500">Equity</span>
+                      <span className="text-white font-mono">{fmt$(liveState.state.equity_usd)}</span>
+                    </>
+                  )}
+                  {liveState.state.total_cycles != null && (
+                    <>
+                      <span className="text-slate-500">Cycles</span>
+                      <span className="text-white font-mono">{liveState.state.total_cycles}</span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Recent trades */}
+              {liveState.recent_trades.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-slate-500 uppercase tracking-wide pt-1">Recent Trades</p>
+                  {liveState.recent_trades.slice(0, 3).map((t, i) => {
+                    const pnl = typeof t.pnl_usd === 'number' ? t.pnl_usd : 0
+                    const positive = pnl >= 0
+                    return (
+                      <div key={i} className="flex items-center justify-between bg-navy rounded-lg px-2.5 py-1.5">
+                        <div className="min-w-0">
+                          <p className="text-xs text-white font-mono truncate">
+                            {t.instrument ?? t.option_type ?? '—'}
+                          </p>
+                          <p className="text-xs text-slate-500">{t.reason ?? '—'}</p>
+                        </div>
+                        <span className={`text-xs font-semibold ml-2 flex-shrink-0 ${positive ? 'text-green-400' : 'text-red-400'}`}>
+                          {positive ? '+' : ''}{fmt$(pnl)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {/* ── Readiness checklist ── */}
           <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2">
             Readiness Checklist
           </p>

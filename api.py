@@ -1854,6 +1854,85 @@ def get_farm_bot_trades(bot_id: str) -> list:
         raise HTTPException(status_code=500, detail=f"Error reading trades: {exc}")
 
 
+@app.get("/farm/bot/{bot_id}/state", dependencies=[Depends(_require_api_key)])
+def get_farm_bot_state(bot_id: str) -> dict:
+    """
+    Return the live state for a specific farm bot:
+      - current open position (from current_position.json)
+      - bot_state summary (mode, iv_rank, last heartbeat)
+      - kill_switch active flag
+      - last 5 trades for quick activity view
+    """
+    import csv as _csv
+
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+
+    data_dir = bot_dir / "data"
+
+    # Current position
+    pos = _read_json(data_dir / "current_position.json") or {}
+
+    # Bot state
+    state = _read_json(data_dir / "bot_state.json") or {}
+
+    # Kill switch
+    kill_switch_active = (bot_dir / "KILL_SWITCH").exists()
+
+    # Heartbeat age
+    heartbeat = _read_json(data_dir / "bot_heartbeat.json") or {}
+    heartbeat_ts = heartbeat.get("timestamp")
+    heartbeat_age_s: float | None = None
+    if heartbeat_ts:
+        try:
+            from datetime import datetime, timezone
+            hb = datetime.fromisoformat(heartbeat_ts.replace("Z", "+00:00"))
+            heartbeat_age_s = (datetime.now(timezone.utc) - hb).total_seconds()
+        except Exception:
+            pass
+
+    # Last 5 trades
+    recent_trades: list = []
+    trades_path = data_dir / "trades.csv"
+    if trades_path.exists():
+        try:
+            with open(trades_path, newline="") as f:
+                rows = list(_csv.DictReader(f))
+            numeric_fields = {"pnl_usd", "equity_after", "strike", "entry_price", "exit_price", "contracts", "dte_at_close"}
+            clean_rows = []
+            for row in rows:
+                clean: dict = {}
+                for k, v in row.items():
+                    if k in numeric_fields:
+                        try:
+                            clean[k] = float(v)
+                        except (ValueError, TypeError):
+                            clean[k] = v
+                    else:
+                        clean[k] = v
+                clean_rows.append(clean)
+            recent_trades = sorted(clean_rows, key=lambda t: t.get("timestamp", ""), reverse=True)[:5]
+        except Exception:
+            pass
+
+    return {
+        "bot_id": bot_id,
+        "kill_switch_active": kill_switch_active,
+        "heartbeat_age_seconds": heartbeat_age_s,
+        "position": pos,
+        "state": {
+            "mode":          state.get("mode"),
+            "config_name":   state.get("config_name"),
+            "iv_rank":       state.get("iv_rank"),
+            "total_cycles":  state.get("total_cycles"),
+            "total_pnl_usd": state.get("total_pnl_usd"),
+            "equity_usd":    state.get("equity_usd"),
+        },
+        "recent_trades": recent_trades,
+    }
+
+
 # ── PWA static file serving ────────────────────────────────────────────────────
 _STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
 

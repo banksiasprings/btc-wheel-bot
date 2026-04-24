@@ -395,10 +395,40 @@ export interface ReadinessReport {
   blocking_issues: string[]
 }
 
+export interface BotLiveState {
+  bot_id: string
+  kill_switch_active: boolean
+  heartbeat_age_seconds: number | null
+  position: {
+    open: boolean
+    type?: string
+    strike?: number
+    expiry?: string
+    delta?: number
+    contracts?: number
+    entry_price?: number
+    current_price?: number
+    unrealized_pnl_usd?: number
+    dte?: number
+  }
+  state: {
+    mode?: string
+    config_name?: string
+    iv_rank?: number
+    total_cycles?: number
+    total_pnl_usd?: number
+    equity_usd?: number
+  }
+  recent_trades: Trade[]
+}
+
 export const getFarmStatus = () => request<FarmStatus>('/farm/status')
 
 export const getBotReadiness = (botId: string) =>
   request<ReadinessReport>(`/farm/bot/${botId}/readiness`)
+
+export const getBotLiveState = (botId: string) =>
+  request<BotLiveState>(`/farm/bot/${botId}/state`)
 
 export const startFarm = () =>
   request<{ status: string; pid: number }>('/farm/start', { method: 'POST' })

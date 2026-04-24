@@ -1,30 +1,31 @@
 import { useState, useEffect } from 'react'
 import SetupScreen from './components/SetupScreen'
 import Dashboard from './components/Dashboard'
+import Farm from './components/Farm'
 import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
 import Diagnostics from './components/Diagnostics'
 import Settings from './components/Settings'
 
-type Tab = 'dashboard' | 'pipeline' | 'performance' | 'diagnostics' | 'settings'
+type Tab = 'dashboard' | 'farm' | 'performance' | 'pipeline' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   dashboard:   '🏠',
-  pipeline:    '🗺',
+  farm:        '🤖',
   performance: '📈',
-  diagnostics: '🔬',
+  pipeline:    '🗺',
   settings:    '⚙',
 }
 
 const TAB_LABELS: Record<Tab, string> = {
   dashboard:   'Dashboard',
-  pipeline:    'Pipeline',
+  farm:        'Farm',
   performance: 'Performance',
-  diagnostics: 'Diagnostics',
+  pipeline:    'Pipeline',
   settings:    'Settings',
 }
 
-const TABS: Tab[] = ['dashboard', 'pipeline', 'performance', 'diagnostics', 'settings']
+const TABS: Tab[] = ['dashboard', 'farm', 'performance', 'pipeline', 'settings']
 
 export default function App() {
   const [isSetup, setIsSetup]   = useState(false)
@@ -44,9 +45,9 @@ export default function App() {
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'dashboard'   && <Dashboard onNavigateTo={(tab) => setActiveTab(tab as Tab)} />}
-        {activeTab === 'pipeline'    && <Pipeline />}
+        {activeTab === 'farm'        && <Farm />}
         {activeTab === 'performance' && <Performance />}
-        {activeTab === 'diagnostics' && <Diagnostics />}
+        {activeTab === 'pipeline'    && <Pipeline />}
         {activeTab === 'settings'    && <Settings onLogout={() => setIsSetup(false)} />}
       </main>
 

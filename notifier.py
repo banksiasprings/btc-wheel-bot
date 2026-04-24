@@ -33,6 +33,28 @@ def _load() -> dict:
         return {}
 
 
+def _bot_name() -> str:
+    """
+    Derive a human-readable bot name from the runtime environment.
+    Reads config_name from bot_state.json if available, else falls back
+    to the last segment of WHEEL_BOT_DATA_DIR (e.g. "bot_0").
+    """
+    data_dir = os.environ.get("WHEEL_BOT_DATA_DIR", "")
+    if data_dir:
+        state_path = Path(data_dir) / "bot_state.json"
+        if state_path.exists():
+            try:
+                state = json.loads(state_path.read_text())
+                name = state.get("config_name") or state.get("bot_name", "")
+                if name:
+                    return str(name)
+            except Exception:
+                pass
+        # Fall back to directory name (e.g. "bot_0")
+        return Path(data_dir).parent.name or Path(data_dir).name
+    return "bot"
+
+
 def _send(text: str) -> None:
     cfg = _load()
     token = cfg.get("bot_token", "")
@@ -78,18 +100,20 @@ def notify_error(message: str) -> None:
     _send(f"⚠️ <b>Bot error</b>\n{message[:300]}")
 
 
-def notify_drawdown_warning(drawdown_pct: float, equity_usd: float) -> None:
+def notify_drawdown_warning(drawdown_pct: float, equity_usd: float, bot_name: str = "") -> None:
+    name = bot_name or _bot_name()
     _send(
-        f"🚨 <b>Drawdown Warning</b>\n"
+        f"🚨 <b>Drawdown Warning — {name}</b>\n"
         f"Current drawdown: <b>{drawdown_pct:.1%}</b>\n"
         f"Equity: ${equity_usd:,.0f}\n"
-        f"Trading has been halted. Review bot state and delete KILL_SWITCH to resume."
+        f"Trading halted. Delete KILL_SWITCH to resume."
     )
 
 
-def notify_high_iv_warning(iv_rank: float) -> None:
+def notify_high_iv_warning(iv_rank: float, bot_name: str = "") -> None:
+    name = bot_name or _bot_name()
     _send(
-        f"📈 <b>High IV Alert</b>\n"
-        f"IV rank: <b>{iv_rank:.1%}</b> — elevated volatility detected.\n"
+        f"📈 <b>High IV Alert — {name}</b>\n"
+        f"IV rank: <b>{iv_rank:.1%}</b> — extreme volatility.\n"
         f"New positions capped at 1 leg until IV normalises."
     )
