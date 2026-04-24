@@ -18,6 +18,37 @@ services:
 
     restart: unless-stopped
 
+  # ── Mobile API server ──────────────────────────────────────────────────────
+  api:
+    build: .
+    image: btc-wheel-bot:latest
+    container_name: btc-wheel-api
+    env_file:
+      - .env
+
+    command:
+      - "python"
+      - "-m"
+      - "uvicorn"
+      - "api:app"
+      - "--host=0.0.0.0"
+      - "--port=8765"
+
+    ports:
+      - "8765:8765"
+
+    volumes:
+      - ./data:/app/data
+      - ./farm:/app/farm
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./config.yaml:/app/config.yaml:ro
+
+    depends_on:
+      - btc-wheel-bot
+
+    restart: unless-stopped
+
   # ── Backtest one-shot service ───────────────────────────────────────────────
   backtest:
     build: .

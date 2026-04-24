@@ -38,13 +38,17 @@ def test_contracts_basic(rm):
 
 
 def test_contracts_large_equity(rm):
-    """Larger equity should yield proportionally more contracts."""
+    """Larger equity should yield proportionally more contracts (config-driven)."""
+    from config import cfg
     c = rm.calculate_contracts(equity_usd=1_000_000, strike_usd=50_000)
-    # With current config: max_equity_per_leg=0.1078
-    # max_notional = $1M × 0.1078 = $107,800
-    # collateral_per_contract = strike = $50,000 (1 contract = 1 BTC notional)
-    # raw = 107,800 / 50,000 = 2.156 → floored to nearest 0.1 lot = 2.1
-    assert c == 2.1
+    # Compute expected from actual config (avoid hardcoding a fraction that changes)
+    import math
+    max_notional = 1_000_000 * cfg.sizing.max_equity_per_leg
+    collateral_per_contract = 50_000
+    raw = max_notional / collateral_per_contract
+    min_lot = cfg.sizing.contract_size_btc
+    expected = max(min_lot, math.floor(raw / min_lot) * min_lot)
+    assert c == expected
 
 
 def test_contracts_zero_equity(rm):

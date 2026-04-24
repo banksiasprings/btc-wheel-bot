@@ -76,3 +76,20 @@ def notify_trade_closed(instrument: str, pnl_usd: float, reason: str) -> None:
 
 def notify_error(message: str) -> None:
     _send(f"⚠️ <b>Bot error</b>\n{message[:300]}")
+
+
+def notify_drawdown_warning(drawdown_pct: float, equity_usd: float) -> None:
+    _send(
+        f"🚨 <b>Drawdown Warning</b>\n"
+        f"Current drawdown: <b>{drawdown_pct:.1%}</b>\n"
+        f"Equity: ${equity_usd:,.0f}\n"
+        f"Trading has been halted. Review bot state and delete KILL_SWITCH to resume."
+    )
+
+
+def notify_high_iv_warning(iv_rank: float) -> None:
+    _send(
+        f"📈 <b>High IV Alert</b>\n"
+        f"IV rank: <b>{iv_rank:.1%}</b> — elevated volatility detected.\n"
+        f"New positions capped at 1 leg until IV normalises."
+    )

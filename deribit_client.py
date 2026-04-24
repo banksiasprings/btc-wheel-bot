@@ -23,6 +23,8 @@ from typing import Any, Callable
 import aiohttp
 import requests
 from loguru import logger
+from tenacity import retry, stop_after_attempt, wait_exponential, before_sleep_log
+import logging as _logging
 
 from config import cfg
 
@@ -90,8 +92,14 @@ class DeribitPublicREST:
         self.session = requests.Session()
         self.session.headers["Accept"] = "application/json"
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        before_sleep=before_sleep_log(logger, _logging.WARNING),
+        reraise=True,
+    )
     def _get(self, method: str, params: dict[str, Any] | None = None) -> Any:
-        """Make a GET request to a public endpoint."""
+        """Make a GET request to a public endpoint (auto-retries on network errors)."""
         url = f"{self.BASE_URL}/{method}"
         try:
             resp = self.session.get(url, params=params, timeout=self.timeout)
@@ -403,13 +411,29 @@ class DeribitWebSocket:
         self._authenticated: bool = False
         # channel_name → callback(data: dict)
         self._subscriptions: dict[str, Callable[[dict], None]] = {}
+        # Reconnect tracking
+        self._connected: bool = False
+        self._reconnect_count: int = 0
+        self._running: bool = False
 
     async def connect(self) -> None:
         """Open WebSocket connection to Deribit."""
         self._session = aiohttp.ClientSession()
         self._ws = await self._session.ws_connect(cfg.deribit.ws_url)
+        self._connected = True
+        self._running = True
         asyncio.create_task(self._recv_loop())
         logger.info(f"WebSocket connected to {cfg.deribit.ws_url}")
+
+    async def disconnect(self) -> None:
+        """Gracefully close the WebSocket connection."""
+        self._running = False
+        self._connected = False
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+        if self._session and not self._session.closed:
+            await self._session.close()
+        logger.info("WebSocket disconnected")
 
     async def authenticate(self) -> None:
         """Authenticate with API key/secret. Required for order placement and private subscriptions."""
@@ -468,43 +492,92 @@ class DeribitWebSocket:
         Receive loop — routes messages to:
           1. Pending RPC futures (request/response pairs)
           2. Subscription callbacks (push notifications)
+
+        Auto-reconnects on disconnect with exponential backoff (5s → 60s cap).
+        Re-authenticates and re-subscribes after each reconnect.
         """
-        async for msg in self._ws:
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                continue
+        while self._running:
             try:
-                data = json.loads(msg.data)
-            except json.JSONDecodeError:
-                continue
-
-            # Route RPC responses
-            if "id" in data and data["id"] in self._pending:
-                fut = self._pending.pop(data["id"])
-                if "error" in data:
-                    fut.set_exception(RuntimeError(data["error"]["message"]))
-                else:
-                    fut.set_result(data.get("result"))
-
-            # Route subscription push messages
-            elif data.get("method") == "subscription":
-                params = data.get("params", {})
-                channel = params.get("channel", "")
-                channel_data = params.get("data", {})
-                cb = self._subscriptions.get(channel)
-                if cb:
+                async for msg in self._ws:
+                    if msg.type == aiohttp.WSMsgType.ERROR:
+                        logger.warning(f"WebSocket error message: {msg}")
+                        break
+                    if msg.type != aiohttp.WSMsgType.TEXT:
+                        continue
                     try:
-                        cb(channel_data)
-                    except Exception as exc:
-                        logger.error(f"Subscription callback error [{channel}]: {exc}")
-                else:
-                    # Wildcard: match channel prefix e.g. "user.changes.any.BTC.raw"
-                    for sub_channel, sub_cb in self._subscriptions.items():
-                        if channel.startswith(sub_channel.rstrip("*")):
+                        data = json.loads(msg.data)
+                    except json.JSONDecodeError:
+                        continue
+
+                    # Route RPC responses
+                    if "id" in data and data["id"] in self._pending:
+                        fut = self._pending.pop(data["id"])
+                        if "error" in data:
+                            fut.set_exception(RuntimeError(data["error"]["message"]))
+                        else:
+                            fut.set_result(data.get("result"))
+
+                    # Route subscription push messages
+                    elif data.get("method") == "subscription":
+                        params = data.get("params", {})
+                        channel = params.get("channel", "")
+                        channel_data = params.get("data", {})
+                        cb = self._subscriptions.get(channel)
+                        if cb:
                             try:
-                                sub_cb(channel_data)
+                                cb(channel_data)
                             except Exception as exc:
                                 logger.error(f"Subscription callback error [{channel}]: {exc}")
-                            break
+                        else:
+                            # Wildcard: match channel prefix e.g. "user.changes.any.BTC.raw"
+                            for sub_channel, sub_cb in self._subscriptions.items():
+                                if channel.startswith(sub_channel.rstrip("*")):
+                                    try:
+                                        sub_cb(channel_data)
+                                    except Exception as exc:
+                                        logger.error(f"Subscription callback error [{channel}]: {exc}")
+                                    break
+
+            except Exception as exc:
+                logger.warning(f"WebSocket recv_loop exception: {exc}")
+
+            if not self._running:
+                break
+
+            # Connection dropped — attempt reconnect with exponential backoff
+            self._connected = False
+            self._authenticated = False
+            self._reconnect_count += 1
+            backoff = min(5 * (2 ** min(self._reconnect_count - 1, 4)), 60)
+            logger.warning(
+                f"WebSocket disconnected (reconnect #{self._reconnect_count}). "
+                f"Retrying in {backoff}s…"
+            )
+            # Cancel pending futures so callers don't hang
+            for fut in self._pending.values():
+                if not fut.done():
+                    fut.set_exception(ConnectionError("WebSocket reconnecting"))
+            self._pending.clear()
+
+            await asyncio.sleep(backoff)
+            try:
+                if self._session and not self._session.closed:
+                    await self._session.close()
+                self._session = aiohttp.ClientSession()
+                self._ws = await self._session.ws_connect(cfg.deribit.ws_url)
+                self._connected = True
+                logger.info(
+                    f"WebSocket reconnected (attempt #{self._reconnect_count}) "
+                    f"to {cfg.deribit.ws_url}"
+                )
+                # Re-authenticate if credentials are available
+                if cfg.deribit.api_key and cfg.deribit.api_secret:
+                    try:
+                        await self.authenticate()
+                    except Exception as auth_exc:
+                        logger.warning(f"Re-auth after reconnect failed: {auth_exc}")
+            except Exception as reconnect_exc:
+                logger.error(f"Reconnect attempt #{self._reconnect_count} failed: {reconnect_exc}")
 
     # ── Order methods (LIVE_ONLY) ──────────────────────────────────────────────
 

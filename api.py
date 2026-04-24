@@ -65,6 +65,20 @@ def _ensure_api_key() -> str:
 
 API_KEY = _ensure_api_key()
 
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+try:
+    from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
+    _PROM_ENABLED = True
+    _prom_open_positions  = Gauge("btc_bot_open_positions",  "Number of open option positions")
+    _prom_equity_usd      = Gauge("btc_bot_equity_usd",      "Current account equity in USD")
+    _prom_pnl_usd         = Gauge("btc_bot_pnl_usd_total",   "Cumulative realised P&L in USD")
+    _prom_total_trades    = Gauge("btc_bot_total_trades",     "Total closed trades")
+    _prom_iv_rank         = Gauge("btc_bot_iv_rank",          "Current IV rank (0-1)")
+    _prom_drawdown        = Gauge("btc_bot_drawdown_pct",     "Current drawdown from peak equity")
+except ImportError:
+    _PROM_ENABLED = False
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="BTC Wheel Bot API", version="1.0")
@@ -115,6 +129,43 @@ def _write_command(command: str, extra: dict | None = None) -> None:
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "1.0"}
+
+
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics():
+    """
+    Prometheus-compatible metrics endpoint.
+    No API key required (standard for Prometheus scrape configs).
+    """
+    if not _PROM_ENABLED:
+        return Response(content="# prometheus-client not installed\n", media_type="text/plain")
+
+    # Refresh gauges from current bot state files
+    try:
+        equity_data = _read_json(DATA_DIR / "equity_curve.json") or []
+        if equity_data:
+            current_eq = equity_data[-1] if isinstance(equity_data[0], (int, float)) else equity_data[-1].get("equity", 0)
+            peak_eq = max(
+                (v if isinstance(v, (int, float)) else v.get("equity", 0))
+                for v in equity_data
+            )
+            _prom_equity_usd.set(current_eq)
+            if peak_eq > 0:
+                _prom_drawdown.set((peak_eq - current_eq) / peak_eq)
+
+        pos_data = _read_json(DATA_DIR / "current_position.json") or {}
+        _prom_open_positions.set(1 if pos_data.get("open") else 0)
+
+        state_data = _read_json(DATA_DIR / "bot_state.json") or {}
+        _prom_total_trades.set(state_data.get("total_cycles", 0))
+        _prom_pnl_usd.set(state_data.get("total_pnl_usd", 0))
+        _prom_iv_rank.set(state_data.get("iv_rank", 0))
+    except Exception:
+        pass
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ── Status ────────────────────────────────────────────────────────────────────

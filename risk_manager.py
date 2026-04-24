@@ -212,6 +212,74 @@ class RiskManager:
         )
         return True
 
+    def check_volatility_cap(
+        self, iv_rank: float, open_positions: list[Position]
+    ) -> bool:
+        """
+        In extreme volatility (IV rank > 0.85), cap open legs to 1.
+
+        High-IV environments mean wider bid-ask spreads, larger margin
+        requirements, and faster delta movement — all of which amplify
+        losses when stacking multiple short legs simultaneously.
+
+        Returns False (block trade) if in high-IV regime AND already have
+        at least 1 open position.
+        """
+        HIGH_IV_THRESHOLD = 0.85
+        HIGH_IV_MAX_LEGS = 1
+
+        if iv_rank > HIGH_IV_THRESHOLD and len(open_positions) >= HIGH_IV_MAX_LEGS:
+            logger.warning(
+                f"Volatility cap ACTIVE: IV rank {iv_rank:.2%} > {HIGH_IV_THRESHOLD:.0%}. "
+                f"Max 1 leg allowed in high-IV regime (have {len(open_positions)})."
+            )
+            try:
+                import notifier
+                notifier.notify_high_iv_warning(iv_rank)
+            except Exception:
+                pass
+            return False
+        return True
+
+    def check_correlation_concentration(
+        self,
+        open_positions: list[Position],
+        underlying_price: float = 0.0,
+    ) -> bool:
+        """
+        When all open positions are puts (no calls), require that their
+        strikes differ by at least 5% of underlying to avoid concentration.
+
+        Two puts at nearly the same strike double the downside exposure at
+        that level — effectively the same as one larger put without the
+        diversification benefit of different strikes.
+
+        Returns False (block trade) if concentration risk is detected.
+        Pass underlying_price=0 to skip the strike-distance check.
+        """
+        put_positions = [p for p in open_positions if p.option_type == "put"]
+        if len(put_positions) < 2:
+            return True   # fewer than 2 puts, no concentration risk
+
+        if underlying_price <= 0:
+            return True   # can't compute distance without price, allow trade
+
+        MIN_STRIKE_DISTANCE_PCT = 0.05
+        min_distance = underlying_price * MIN_STRIKE_DISTANCE_PCT
+
+        strikes = sorted(p.strike for p in put_positions)
+        for i in range(len(strikes) - 1):
+            gap = strikes[i + 1] - strikes[i]
+            if gap < min_distance:
+                logger.warning(
+                    f"Concentration check FAILED: put strikes {strikes[i]:,.0f} and "
+                    f"{strikes[i+1]:,.0f} are only ${gap:,.0f} apart "
+                    f"(need ≥ ${min_distance:,.0f} = {MIN_STRIKE_DISTANCE_PCT:.0%} of spot)."
+                )
+                return False
+
+        return True
+
     # ── In-trade ──────────────────────────────────────────────────────────────
 
     def should_roll(self, position: Position) -> tuple[bool, str]:
@@ -263,6 +331,11 @@ class RiskManager:
                 f"Drawdown limit breached: {drawdown:.2%} > "
                 f"{cfg.risk.max_daily_drawdown:.2%}. Trading paused."
             )
+            try:
+                import notifier
+                notifier.notify_drawdown_warning(drawdown, current)
+            except Exception:
+                pass
             return False
 
         logger.debug(f"Drawdown OK: {drawdown:.2%}")
@@ -275,6 +348,7 @@ class RiskManager:
         strike_usd: float,
         btc_price: float,
         proposed_contracts: float | None = None,
+        iv_rank: float = 0.0,
     ) -> bool:
         """
         Run all pre-trade checks in sequence.
@@ -283,6 +357,9 @@ class RiskManager:
         proposed_contracts is optional — if provided, the free-margin check
         uses the exact contract count.  If omitted, it is estimated from
         the position-sizing formula (same logic as calculate_contracts).
+
+        iv_rank is used by check_volatility_cap() to enforce a 1-leg cap
+        in extreme volatility (IV rank > 0.85).
         """
         # Estimate contracts for free-margin check if not provided
         if proposed_contracts is None:
@@ -294,6 +371,8 @@ class RiskManager:
             self.check_position_size(equity_usd, strike_usd),
             self.check_collateral(open_positions, equity_usd, btc_price),
             self.check_free_margin(equity_usd, open_positions, strike_usd, proposed_contracts),
+            self.check_volatility_cap(iv_rank, open_positions),
+            self.check_correlation_concentration(open_positions, btc_price),
         ]
         result = all(checks)
         if result:

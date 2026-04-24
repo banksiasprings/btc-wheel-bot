@@ -1,10 +1,51 @@
 # btc-wheel-bot
 
+> ⚠️ **Risk Disclaimer:** This software is for educational purposes only. Bitcoin options trading involves substantial risk of loss. Never trade with capital you cannot afford to lose. This is not financial advice.
+
+A modular Python bot for a Bitcoin options **wheel-strategy** (premium-collection) on Deribit. Sells ~0.20–0.30 delta OTM puts (or calls) to harvest theta/vega decay. Alternates put/call each cycle to stay roughly delta-neutral.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    subgraph Strategy
+        CFG[config.yaml / .env] --> BOT[bot.py\nAsync poll loop]
+        CFG --> FARM[bot_farm.py\nSupervisor]
+        FARM --> B0[Bot 0\nBalanced]
+        FARM --> B1[Bot 1\nAggressive]
+        FARM --> BN[Bot N...]
+        CS[config_store.py\nNamed configs] --> FARM
+        OPT[optimizer.py\nGenetic algo] --> CS
+        RV[readiness_validator.py\n8-check gate] --> CS
+    end
+
+    subgraph Exchange
+        BOT --> DERIBIT[Deribit API\nREST + WebSocket]
+        B0 --> DERIBIT
+        B1 --> DERIBIT
+    end
+
+    subgraph Observability
+        BOT --> DATA[data/\ntrades.csv\nequity_curve.json\nbot_state.json]
+        API[api.py\nFastAPI :8765] --> DATA
+        API --> METRICS[/metrics\nPrometheus]
+    end
+
+    subgraph Mobile
+        API --> CF[Cloudflare Tunnel\nbot.banksiaspringsfarm.com]
+        CF --> PWA[React PWA\nGitHub Pages]
+        PWA --> PHONE[📱 iPhone]
+    end
+
+    BOT --> TG[Telegram\nAlerts]
+    BOT --> AI[ai_overseer.py\nLLM safety layer]
+```
+
 ## Mobile App
 
 Monitor and control the bot from your phone via a PWA that talks to the local FastAPI server through a Cloudflare Tunnel.
 
-### Architecture
+### Deployment
 
 ```
 Phone → Cloudflare Tunnel → FastAPI (api.py :8765) → bot state files / config.yaml
@@ -90,6 +131,22 @@ python main.py --mode=live
 ```
 
 ---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and fill in your credentials. Never commit `.env`.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DERIBIT_API_KEY` | Live only | From Deribit account → API management |
+| `DERIBIT_API_SECRET` | Live only | From Deribit account → API management |
+| `DERIBIT_TESTNET` | No | `true` to use testnet (default: false) |
+| `WHEEL_API_KEY` | Auto-generated | Mobile API auth key — auto-created on first run |
+| `TELEGRAM_BOT_TOKEN` | Optional | For trade and alert notifications |
+| `TELEGRAM_CHAT_ID` | Optional | Your Telegram chat ID |
+| `GEMINI_API_KEY` | Optional | Enables AI Overseer (Gemini free tier) |
+| `WHEEL_BOT_CONFIG` | Farm only | Path to bot-specific config.yaml |
+| `WHEEL_BOT_DATA_DIR` | Farm only | Path to bot-specific data directory |
 
 ## Configuration
 
