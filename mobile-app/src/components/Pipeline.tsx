@@ -7,6 +7,9 @@ import {
   assignBotConfig, promoteConfig,
   startPaperTesting, stopPaperTesting,
   startFarm, stopFarm,
+  getSweepResults, SweepResults,
+  getOptimizerSummary, OptimizerSummary,
+  updateConfigParams,
 } from '../api'
 import ConfigSelector from './ConfigSelector'
 
@@ -20,6 +23,16 @@ const EVOLVE_GOALS: { id: EvolveGoal; icon: string; label: string }[] = [
   { id: 'safest',      icon: '🛡', label: 'Safest'      },
   { id: 'sharpe',      icon: '⚖️', label: 'Sharpe'      },
   { id: 'capital_roi', icon: '📊', label: 'Capital ROI' },
+]
+
+const SWEEP_PARAMS: { key: string; label: string }[] = [
+  { key: 'iv_rank_threshold',        label: 'IV Rank Threshold'  },
+  { key: 'target_delta_min',         label: 'Min Delta'          },
+  { key: 'target_delta_max',         label: 'Max Delta'          },
+  { key: 'min_dte',                  label: 'Min DTE'            },
+  { key: 'max_dte',                  label: 'Max DTE'            },
+  { key: 'max_equity_per_leg',       label: 'Max Equity / Leg'   },
+  { key: 'premium_fraction_of_spot', label: 'Premium Fraction'   },
 ]
 
 // ── Helper components ─────────────────────────────────────────────────────────
@@ -887,7 +900,392 @@ function StepPaperTrade({
   )
 }
 
-// ── Step 4 — Go Live ──────────────────────────────────────────────────────────
+// ── Step 4 — Sweep ────────────────────────────────────────────────────────────
+
+function StepSweep({
+  open, onToggle, configs,
+}: {
+  open: boolean
+  onToggle: () => void
+  configs: NamedConfig[]
+}) {
+  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
+  const [sweepResults, setSweepResults]     = useState<SweepResults | null>(null)
+  const [sweepLoading, setSweepLoading]     = useState(false)
+  const [runningParam, setRunningParam]     = useState<string | null>(null)
+  const [runMsg, setRunMsg]                 = useState('')
+  const [applying, setApplying]             = useState(false)
+  const [applyMsg, setApplyMsg]             = useState('')
+
+  const hasBest    = (sweepResults?.best_per_param != null) && Object.keys(sweepResults.best_per_param).length > 0
+  const status: StepStatus = hasBest ? 'in_progress' : 'not_started'
+
+  // Paper + ready configs are the natural candidates to tune
+  const tuneConfigs = configs.filter(c => c.status === 'paper' || c.status === 'ready')
+  const otherConfigs = configs.filter(c => c.status !== 'paper' && c.status !== 'ready')
+
+  async function loadSweepResults() {
+    try {
+      const r = await getSweepResults()
+      setSweepResults(r)
+    } catch { /* no sweep data yet */ }
+  }
+
+  useEffect(() => { if (open) loadSweepResults() }, [open])
+
+  async function handleBroadSweep() {
+    setSweepLoading(true)
+    setRunMsg('')
+    try {
+      const r = await runOptimizer('sweep', undefined, undefined, selectedConfig ?? undefined)
+      setRunMsg(`Broad sweep started (PID ${r.pid}) — check back in a few minutes`)
+      setTimeout(loadSweepResults, 12_000)
+    } catch (e) {
+      setRunMsg(String(e))
+    } finally {
+      setSweepLoading(false)
+    }
+  }
+
+  async function handleFineSweep(param: string) {
+    setRunningParam(param)
+    setRunMsg('')
+    try {
+      const r = await runOptimizer('sweep', param, undefined, selectedConfig ?? undefined)
+      setRunMsg(`Fine sweep started for '${param}' (PID ${r.pid})`)
+      setTimeout(loadSweepResults, 8_000)
+    } catch (e) {
+      setRunMsg(String(e))
+    } finally {
+      setRunningParam(null)
+    }
+  }
+
+  async function handleApplyBest() {
+    if (!selectedConfig || !hasBest) return
+    setApplying(true)
+    setApplyMsg('')
+    try {
+      const bestParams: Record<string, unknown> = {}
+      for (const [param, best] of Object.entries(sweepResults!.best_per_param)) {
+        bestParams[param] = best.value
+      }
+      await updateConfigParams(selectedConfig, bestParams)
+      setApplyMsg(`✅ Applied ${Object.keys(bestParams).length} optimal params to '${selectedConfig}' — re-run paper testing to verify`)
+    } catch (e) {
+      setApplyMsg(String(e))
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <div className={`bg-card rounded-2xl border overflow-hidden ${
+      hasBest ? 'border-amber-800' : 'border-border'
+    }`}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+        onClick={onToggle}
+      >
+        <StatusIcon status={status} />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-white uppercase tracking-wide">Step 4 · Sweep</span>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {hasBest
+              ? `${Object.keys(sweepResults!.best_per_param).length} params optimised — apply to config`
+              : 'Tune parameters with broad + fine sweeps'}
+          </p>
+        </div>
+        <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+
+          {/* Config selector */}
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400 font-medium">Config to tune</p>
+            <select
+              value={selectedConfig ?? ''}
+              onChange={e => setSelectedConfig(e.target.value || null)}
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-amber-500"
+            >
+              <option value="">Select a config…</option>
+              {tuneConfigs.length > 0 && (
+                <optgroup label="Paper / Ready">
+                  {tuneConfigs.map(c => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.status})</option>
+                  ))}
+                </optgroup>
+              )}
+              {otherConfigs.length > 0 && (
+                <optgroup label="Other">
+                  {otherConfigs.map(c => (
+                    <option key={c.name} value={c.name}>{c.name} ({c.status})</option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </div>
+
+          {/* 1. Broad sweep */}
+          <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
+            <p className="text-xs text-white font-semibold">1 · Broad Sweep</p>
+            <p className="text-xs text-slate-500">Tests all key params over a wide range to find the best starting point.</p>
+            <button
+              onClick={handleBroadSweep}
+              disabled={sweepLoading}
+              className="w-full py-2.5 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-xs font-semibold"
+            >
+              {sweepLoading ? 'Sweeping…' : 'Sweep All Params'}
+            </button>
+          </div>
+
+          {/* 2. Fine sweep per param */}
+          <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
+            <p className="text-xs text-white font-semibold">2 · Fine Sweep</p>
+            <p className="text-xs text-slate-500">Zoom in on the best value for a single parameter.</p>
+            <div className="space-y-2 pt-1">
+              {SWEEP_PARAMS.map(({ key, label }) => {
+                const best = sweepResults?.best_per_param?.[key]
+                return (
+                  <div key={key} className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-slate-300">{label}</p>
+                      {best && (
+                        <p className="text-xs text-amber-400 font-mono">
+                          best: {best.value < 1 ? best.value.toFixed(4) : best.value.toFixed(2)}
+                          {' '}· fit {best.fitness.toFixed(3)}
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleFineSweep(key)}
+                      disabled={runningParam != null}
+                      className="flex-shrink-0 text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200"
+                    >
+                      {runningParam === key ? '…' : 'Sweep'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {runMsg && (
+            <p className={`text-xs px-3 py-2 rounded-lg border ${
+              runMsg.startsWith('Broad sweep') || runMsg.startsWith('Fine sweep')
+                ? 'bg-green-950 border-green-800 text-green-300'
+                : 'bg-red-950 border-red-800 text-red-300'
+            }`}>{runMsg}</p>
+          )}
+
+          {/* 3. Apply best values */}
+          {hasBest && (
+            <div className="space-y-2">
+              <p className="text-xs text-slate-400 font-semibold">3 · Apply Best Values</p>
+              <div className="bg-navy rounded-xl px-3 py-2.5 space-y-1.5">
+                {Object.entries(sweepResults!.best_per_param).map(([param, best]) => (
+                  <div key={param} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400">
+                      {SWEEP_PARAMS.find(p => p.key === param)?.label ?? param}
+                    </span>
+                    <span className="font-mono text-amber-300">
+                      {best.value < 1 ? best.value.toFixed(4) : best.value.toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {applyMsg && (
+                <p className={`text-xs px-3 py-2 rounded-lg border ${
+                  applyMsg.startsWith('✅')
+                    ? 'bg-green-950 border-green-800 text-green-300'
+                    : 'bg-red-950 border-red-800 text-red-300'
+                }`}>{applyMsg}</p>
+              )}
+              <button
+                onClick={handleApplyBest}
+                disabled={applying || !selectedConfig}
+                className="w-full py-2.5 rounded-xl bg-green-800 hover:bg-green-700 disabled:opacity-40 text-green-200 text-xs font-semibold"
+              >
+                {applying
+                  ? 'Applying…'
+                  : selectedConfig
+                  ? `Apply to '${selectedConfig}'`
+                  : 'Select a config above'}
+              </button>
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Step 5 — Reconcile ────────────────────────────────────────────────────────
+
+function StepReconcile({
+  open, onToggle, configs,
+}: {
+  open: boolean
+  onToggle: () => void
+  configs: NamedConfig[]
+}) {
+  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
+  const [running, setRunning]               = useState(false)
+  const [runMsg, setRunMsg]                 = useState('')
+  const [summary, setSummary]               = useState<OptimizerSummary | null>(null)
+  const [loadingResults, setLoadingResults] = useState(false)
+
+  const reconciliation = summary?.reconciliation as Record<string, unknown> | null | undefined
+  const passed         = reconciliation?.passed === true
+  const status: StepStatus = passed ? 'complete' : reconciliation != null ? 'in_progress' : 'not_started'
+
+  const paperConfigs = configs.filter(c => c.status === 'paper' || c.status === 'ready')
+
+  async function loadSummary() {
+    setLoadingResults(true)
+    try {
+      const s = await getOptimizerSummary()
+      setSummary(s)
+    } catch { /* ignore */ } finally {
+      setLoadingResults(false)
+    }
+  }
+
+  useEffect(() => { if (open) loadSummary() }, [open])
+
+  async function handleRunReconcile() {
+    setRunning(true)
+    setRunMsg('')
+    try {
+      const r = await runOptimizer('reconcile', undefined, undefined, selectedConfig ?? undefined)
+      setRunMsg(`Reconcile started (PID ${r.pid}) — loading results…`)
+      setTimeout(loadSummary, 8_000)
+    } catch (e) {
+      setRunMsg(String(e))
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  // Build display rows, exclude the top-level 'passed' flag
+  const reconFields = reconciliation
+    ? Object.entries(reconciliation).filter(([k]) => k !== 'passed')
+    : []
+
+  return (
+    <div className={`bg-card rounded-2xl border overflow-hidden ${
+      status === 'complete' ? 'border-green-800'
+      : status === 'in_progress' ? 'border-amber-800'
+      : 'border-border'
+    }`}>
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 text-left"
+        onClick={onToggle}
+      >
+        <StatusIcon status={status} />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-white uppercase tracking-wide">Step 5 · Reconcile</span>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {status === 'complete'
+              ? 'Paper P&L matches backtest — ready for live'
+              : reconciliation
+              ? 'Results available — review before going live'
+              : 'Verify paper P&L matches backtest predictions'}
+          </p>
+        </div>
+        <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+
+          {/* Config selector */}
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400 font-medium">Config to reconcile</p>
+            <select
+              value={selectedConfig ?? ''}
+              onChange={e => setSelectedConfig(e.target.value || null)}
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:border-green-500"
+            >
+              <option value="">Select a config…</option>
+              {paperConfigs.map(c => (
+                <option key={c.name} value={c.name}>{c.name} ({c.status})</option>
+              ))}
+              {configs.filter(c => c.status !== 'paper' && c.status !== 'ready').map(c => (
+                <option key={c.name} value={c.name}>{c.name} ({c.status})</option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            onClick={handleRunReconcile}
+            disabled={running}
+            className="w-full py-3 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm font-semibold"
+          >
+            {running ? 'Running reconcile…' : 'Run Reconcile'}
+          </button>
+
+          {runMsg && (
+            <p className={`text-xs px-3 py-2 rounded-lg border ${
+              runMsg.startsWith('Reconcile started')
+                ? 'bg-green-950 border-green-800 text-green-300'
+                : 'bg-red-950 border-red-800 text-red-300'
+            }`}>{runMsg}</p>
+          )}
+
+          {loadingResults && (
+            <p className="text-xs text-slate-500 text-center">Loading results…</p>
+          )}
+
+          {reconciliation && !loadingResults && (
+            <div className={`rounded-xl border px-4 py-3 space-y-2 ${
+              passed ? 'bg-green-950 border-green-800' : 'bg-red-950 border-red-800'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span>{passed ? '✅' : '❌'}</span>
+                <p className={`text-sm font-semibold ${passed ? 'text-green-300' : 'text-red-300'}`}>
+                  {passed ? 'Reconcile Passed' : 'Reconcile Failed'}
+                </p>
+              </div>
+              {reconFields.length > 0 && (
+                <div className="space-y-1.5 pt-1.5 border-t border-white/10">
+                  {reconFields.map(([key, val]) => (
+                    <div key={key} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 capitalize">{key.replace(/_/g, ' ')}</span>
+                      <span className="font-mono text-white">
+                        {typeof val === 'number' ? val.toFixed(2) : String(val)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!reconciliation && !loadingResults && summary !== null && (
+            <p className="text-xs text-slate-500 text-center py-2">
+              No reconcile results yet — run reconcile above.
+            </p>
+          )}
+
+          {passed && (
+            <div className="bg-green-950 border border-green-800 rounded-xl px-3 py-2">
+              <p className="text-xs text-green-300">
+                ✅ Config is verified — proceed to Step 6 to go live.
+              </p>
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Step 6 — Go Live ──────────────────────────────────────────────────────────
 
 function StepGoLive({
   open, onToggle, bots, configs,
@@ -943,7 +1341,7 @@ function StepGoLive({
         <StatusIcon status={status} />
         <div className="flex-1 min-w-0">
           <span className={`text-sm font-bold uppercase tracking-wide ${isLocked ? 'text-slate-500' : 'text-white'}`}>
-            Step 4 · Go Live
+            Step 6 · Go Live
           </span>
           <p className="text-xs text-slate-500 mt-0.5">
             {isLocked
@@ -1105,7 +1503,7 @@ export default function Pipeline() {
       <h1 className="text-lg font-bold text-white pt-2 mb-4">Pipeline</h1>
 
       <p className="text-xs text-slate-500 px-1 mb-3">
-        Follow these steps in order: Evolve → Validate → Paper Trade → Go Live
+        Follow these steps in order: Evolve → Validate → Paper Trade → Sweep → Reconcile → Go Live
       </p>
 
       <StepEvolve
@@ -1148,9 +1546,25 @@ export default function Pipeline() {
 
       <StepConnector />
 
-      <StepGoLive
+      <StepSweep
         open={openStep === 4}
         onToggle={() => toggle(4)}
+        configs={configs}
+      />
+
+      <StepConnector />
+
+      <StepReconcile
+        open={openStep === 5}
+        onToggle={() => toggle(5)}
+        configs={configs}
+      />
+
+      <StepConnector />
+
+      <StepGoLive
+        open={openStep === 6}
+        onToggle={() => toggle(6)}
         bots={bots}
         configs={configs}
       />
