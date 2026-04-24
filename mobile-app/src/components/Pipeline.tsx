@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   getEvolveResultsAll, EvolveAllResults, EvolveGoal,
   getFarmStatus, FarmStatus, BotFarmEntry,
@@ -916,18 +916,49 @@ function StepSweep({
   const [runMsg, setRunMsg]                 = useState('')
   const [applying, setApplying]             = useState(false)
   const [applyMsg, setApplyMsg]             = useState('')
+  const [lastUpdated, setLastUpdated]       = useState<Date | null>(null)
+  const [changedParams, setChangedParams]   = useState<Set<string>>(new Set())
+  // Save-as-new-config flow
+  const [showSaveNew, setShowSaveNew]       = useState(false)
+  const [newConfigName, setNewConfigName]   = useState('')
+  const [savingNew, setSavingNew]           = useState(false)
+  const [saveNewMsg, setSaveNewMsg]         = useState('')
+
+  // Tracks previous best values so we can highlight what changed
+  const prevBestRef = useRef<Record<string, number>>({})
 
   const hasBest    = (sweepResults?.best_per_param != null) && Object.keys(sweepResults.best_per_param).length > 0
   const status: StepStatus = hasBest ? 'in_progress' : 'not_started'
 
-  // Paper + ready configs are the natural candidates to tune
-  const tuneConfigs = configs.filter(c => c.status === 'paper' || c.status === 'ready')
+  const tuneConfigs  = configs.filter(c => c.status === 'paper' || c.status === 'ready')
   const otherConfigs = configs.filter(c => c.status !== 'paper' && c.status !== 'ready')
+
+  function formatUpdatedAgo(d: Date) {
+    const secs = Math.round((Date.now() - d.getTime()) / 1000)
+    if (secs < 60)  return `${secs}s ago`
+    if (secs < 3600) return `${Math.round(secs / 60)}m ago`
+    return `${Math.round(secs / 3600)}h ago`
+  }
 
   async function loadSweepResults() {
     try {
       const r = await getSweepResults()
+      // Detect which params changed compared to the previous load
+      const changed = new Set<string>()
+      if (r.best_per_param) {
+        for (const [param, best] of Object.entries(r.best_per_param)) {
+          const prev = prevBestRef.current[param]
+          if (prev === undefined || Math.abs(prev - best.value) > 1e-9) {
+            changed.add(param)
+          }
+          prevBestRef.current[param] = best.value
+        }
+      }
       setSweepResults(r)
+      if (changed.size > 0) {
+        setChangedParams(changed)
+        setLastUpdated(new Date())
+      }
     } catch { /* no sweep data yet */ }
   }
 
@@ -938,7 +969,7 @@ function StepSweep({
     setRunMsg('')
     try {
       const r = await runOptimizer('sweep', undefined, undefined, selectedConfig ?? undefined)
-      setRunMsg(`Broad sweep started (PID ${r.pid}) — check back in a few minutes`)
+      setRunMsg(`Broad sweep started (PID ${r.pid}) — results will load automatically`)
       setTimeout(loadSweepResults, 12_000)
     } catch (e) {
       setRunMsg(String(e))
@@ -952,7 +983,7 @@ function StepSweep({
     setRunMsg('')
     try {
       const r = await runOptimizer('sweep', param, undefined, selectedConfig ?? undefined)
-      setRunMsg(`Fine sweep started for '${param}' (PID ${r.pid})`)
+      setRunMsg(`Fine sweep started for '${SWEEP_PARAMS.find(p => p.key === param)?.label ?? param}' (PID ${r.pid})`)
       setTimeout(loadSweepResults, 8_000)
     } catch (e) {
       setRunMsg(String(e))
@@ -961,23 +992,58 @@ function StepSweep({
     }
   }
 
+  function buildBestParams() {
+    const bestParams: Record<string, unknown> = {}
+    for (const [param, best] of Object.entries(sweepResults!.best_per_param)) {
+      bestParams[param] = best.value
+    }
+    return bestParams
+  }
+
   async function handleApplyBest() {
     if (!selectedConfig || !hasBest) return
     setApplying(true)
     setApplyMsg('')
     try {
-      const bestParams: Record<string, unknown> = {}
-      for (const [param, best] of Object.entries(sweepResults!.best_per_param)) {
-        bestParams[param] = best.value
-      }
+      const bestParams = buildBestParams()
       await updateConfigParams(selectedConfig, bestParams)
-      setApplyMsg(`✅ Applied ${Object.keys(bestParams).length} optimal params to '${selectedConfig}' — re-run paper testing to verify`)
+      setApplyMsg(`✅ Applied ${Object.keys(bestParams).length} params to '${selectedConfig}'`)
+      setShowSaveNew(true)
+      setNewConfigName(`${selectedConfig}_tuned`)
+      setSaveNewMsg('')
     } catch (e) {
       setApplyMsg(String(e))
     } finally {
       setApplying(false)
     }
   }
+
+  async function handleSaveNew() {
+    if (!newConfigName.trim() || !hasBest) return
+    setSavingNew(true)
+    setSaveNewMsg('')
+    const baseConfig = configs.find(c => c.name === selectedConfig)
+    try {
+      const mergedParams = { ...(baseConfig?.params ?? {}), ...buildBestParams() }
+      await apiSaveConfig({
+        name: newConfigName.trim(),
+        source: 'evolved',
+        notes: `Sweep-tuned from '${selectedConfig ?? 'unknown'}'`,
+        fitness: sweepResults ? Math.max(...Object.values(sweepResults.best_per_param).map(b => b.fitness)) : undefined,
+        total_return_pct: baseConfig?.total_return_pct ?? null,
+        sharpe: baseConfig?.sharpe ?? null,
+        params: mergedParams,
+      })
+      setSaveNewMsg(`✅ Saved as '${newConfigName.trim()}' — select it in Step 3 to paper test`)
+      setShowSaveNew(false)
+    } catch (e) {
+      setSaveNewMsg(String(e))
+    } finally {
+      setSavingNew(false)
+    }
+  }
+
+  function fmtVal(v: number) { return v < 1 ? v.toFixed(4) : v.toFixed(2) }
 
   return (
     <div className={`bg-card rounded-2xl border overflow-hidden ${
@@ -989,7 +1055,14 @@ function StepSweep({
       >
         <StatusIcon status={status} />
         <div className="flex-1 min-w-0">
-          <span className="text-sm font-bold text-white uppercase tracking-wide">Step 4 · Sweep</span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-bold text-white uppercase tracking-wide">Step 4 · Sweep</span>
+            {changedParams.size > 0 && lastUpdated && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-900 border border-amber-700 text-amber-300 flex-shrink-0">
+                ↑ updated {formatUpdatedAgo(lastUpdated)}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-400 mt-0.5">
             {hasBest
               ? `${Object.keys(sweepResults!.best_per_param).length} params optimised — apply to config`
@@ -1043,20 +1116,35 @@ function StepSweep({
 
           {/* 2. Fine sweep per param */}
           <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
-            <p className="text-xs text-white font-semibold">2 · Fine Sweep</p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-white font-semibold">2 · Fine Sweep</p>
+              {lastUpdated && (
+                <span className="text-xs text-slate-500">Last run {formatUpdatedAgo(lastUpdated)}</span>
+              )}
+            </div>
             <p className="text-xs text-slate-500">Zoom in on the best value for a single parameter.</p>
             <div className="space-y-2 pt-1">
               {SWEEP_PARAMS.map(({ key, label }) => {
-                const best = sweepResults?.best_per_param?.[key]
+                const best    = sweepResults?.best_per_param?.[key]
+                const changed = changedParams.has(key)
                 return (
-                  <div key={key} className="flex items-center gap-2">
+                  <div key={key} className={`flex items-center gap-2 rounded-lg px-2 py-1 transition-colors ${
+                    changed ? 'bg-amber-950/50 border border-amber-800/60' : ''
+                  }`}>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs text-slate-300">{label}</p>
-                      {best && (
-                        <p className="text-xs text-amber-400 font-mono">
-                          best: {best.value < 1 ? best.value.toFixed(4) : best.value.toFixed(2)}
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs text-slate-300">{label}</p>
+                        {changed && (
+                          <span className="text-xs text-amber-400 font-bold">↑</span>
+                        )}
+                      </div>
+                      {best ? (
+                        <p className={`text-xs font-mono ${changed ? 'text-amber-300' : 'text-slate-500'}`}>
+                          best: {fmtVal(best.value)}
                           {' '}· fit {best.fitness.toFixed(3)}
                         </p>
+                      ) : (
+                        <p className="text-xs text-slate-600">no data yet</p>
                       )}
                     </div>
                     <button
@@ -1080,22 +1168,29 @@ function StepSweep({
             }`}>{runMsg}</p>
           )}
 
-          {/* 3. Apply best values */}
+          {/* 3. Apply + Save */}
           {hasBest && (
             <div className="space-y-2">
               <p className="text-xs text-slate-400 font-semibold">3 · Apply Best Values</p>
+
+              {/* Summary table */}
               <div className="bg-navy rounded-xl px-3 py-2.5 space-y-1.5">
-                {Object.entries(sweepResults!.best_per_param).map(([param, best]) => (
-                  <div key={param} className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400">
-                      {SWEEP_PARAMS.find(p => p.key === param)?.label ?? param}
-                    </span>
-                    <span className="font-mono text-amber-300">
-                      {best.value < 1 ? best.value.toFixed(4) : best.value.toFixed(2)}
-                    </span>
-                  </div>
-                ))}
+                {Object.entries(sweepResults!.best_per_param).map(([param, best]) => {
+                  const changed = changedParams.has(param)
+                  return (
+                    <div key={param} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400 flex items-center gap-1">
+                        {SWEEP_PARAMS.find(p => p.key === param)?.label ?? param}
+                        {changed && <span className="text-amber-400 text-xs">↑</span>}
+                      </span>
+                      <span className={`font-mono ${changed ? 'text-amber-300' : 'text-slate-300'}`}>
+                        {fmtVal(best.value)}
+                      </span>
+                    </div>
+                  )
+                })}
               </div>
+
               {applyMsg && (
                 <p className={`text-xs px-3 py-2 rounded-lg border ${
                   applyMsg.startsWith('✅')
@@ -1103,10 +1198,11 @@ function StepSweep({
                     : 'bg-red-950 border-red-800 text-red-300'
                 }`}>{applyMsg}</p>
               )}
+
               <button
                 onClick={handleApplyBest}
                 disabled={applying || !selectedConfig}
-                className="w-full py-2.5 rounded-xl bg-green-800 hover:bg-green-700 disabled:opacity-40 text-green-200 text-xs font-semibold"
+                className="w-full py-2.5 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-xs font-semibold"
               >
                 {applying
                   ? 'Applying…'
@@ -1114,6 +1210,46 @@ function StepSweep({
                   ? `Apply to '${selectedConfig}'`
                   : 'Select a config above'}
               </button>
+
+              {/* Save as new config */}
+              {showSaveNew && (
+                <div className="bg-navy rounded-xl px-3 py-3 space-y-2 border border-green-900">
+                  <p className="text-xs text-white font-semibold">4 · Save as New Config</p>
+                  <p className="text-xs text-slate-500">
+                    Save the tuned params under a new name, then send it back through paper testing.
+                  </p>
+                  <input
+                    type="text"
+                    value={newConfigName}
+                    onChange={e => setNewConfigName(e.target.value)}
+                    placeholder="Config name…"
+                    className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
+                  />
+                  {saveNewMsg && (
+                    <p className={`text-xs px-3 py-2 rounded-lg border ${
+                      saveNewMsg.startsWith('✅')
+                        ? 'bg-green-950 border-green-800 text-green-300'
+                        : 'bg-red-950 border-red-800 text-red-300'
+                    }`}>{saveNewMsg}</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleSaveNew}
+                      disabled={savingNew || !newConfigName.trim()}
+                      className="flex-1 py-2 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-xs font-semibold"
+                    >
+                      {savingNew ? 'Saving…' : 'Save New Config'}
+                    </button>
+                    <button
+                      onClick={() => setShowSaveNew(false)}
+                      className="px-3 py-2 rounded-xl bg-slate-700 text-slate-300 text-xs"
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )}
+
             </div>
           )}
 
