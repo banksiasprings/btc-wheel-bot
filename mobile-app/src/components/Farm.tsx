@@ -1,0 +1,598 @@
+import { useState, useEffect, useCallback } from 'react'
+import { getFarmStatus, startFarm, stopFarm, FarmStatus, BotFarmEntry, assignBotConfig, promoteConfig } from '../api'
+import ConfigSelector from './ConfigSelector'
+
+// ── Formatting helpers ─────────────────────────────────────────────────────────
+
+function fmt$(n: number | undefined | null) {
+  if (n == null) return '—'
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+}
+
+function fmtPct(n: number | undefined | null, decimals = 1) {
+  if (n == null) return '—'
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}${n.toFixed(decimals)}%`
+}
+
+function fmtTime(iso: string | undefined | null) {
+  if (!iso) return '—'
+  try {
+    return new Date(iso).toLocaleTimeString()
+  } catch {
+    return iso
+  }
+}
+
+// ── Readiness bar ─────────────────────────────────────────────────────────────
+
+const CHECK_LABELS: Record<string, string> = {
+  min_trades:     'Min Trades',
+  min_days:       'Min Days',
+  sharpe:         'Sharpe ≥ 0.8',
+  drawdown:       'Drawdown < 15%',
+  win_rate:       'Win Rate ≥ 55%',
+  walk_forward:   'Walk-Forward',
+  reconcile:      'Reconcile',
+  no_kill_switch: 'No Kill Switch',
+}
+
+function ReadinessBar({ score, total }: { score: number; total: number }) {
+  const pct = total > 0 ? score / total : 0
+
+  let barColor = 'bg-yellow-500'
+  let label    = 'Testing'
+  let labelCls = 'text-yellow-400'
+
+  if (score === total) {
+    barColor = 'bg-green-500'
+    label    = 'Ready for live'
+    labelCls = 'text-green-400'
+  } else if (score >= 5) {
+    barColor = 'bg-orange-400'
+    label    = 'Almost ready'
+    labelCls = 'text-orange-400'
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      <div className="flex items-center justify-between">
+        <span className={`text-xs font-semibold ${labelCls}`}>
+          {score === total ? '✅ ' : ''}{label}
+        </span>
+        <span className="text-xs font-mono font-bold text-white">{score}/{total} checks</span>
+      </div>
+      <div className="h-3 rounded-full bg-slate-700 overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+          style={{ width: `${pct * 100}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── Status dot ────────────────────────────────────────────────────────────────
+
+function StatusDot({ status }: { status: string }) {
+  const dot =
+    status === 'running' ? 'bg-green-400 shadow-[0_0_6px_#22c55e]' :
+    status === 'error'   ? 'bg-red-500' :
+    'bg-yellow-400'
+  return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${dot}`} />
+}
+
+// ── Bot card ─────────────────────────────────────────────────────────────────
+
+function BotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void }) {
+  const [expanded, setExpanded]         = useState(false)
+  const [assignConfig, setAssignConfig] = useState<string | null>(null)
+  const [assigning, setAssigning]       = useState(false)
+  const [assignMsg, setAssignMsg]       = useState('')
+  const [confirmPromote, setConfirmPromote] = useState(false)
+  const [promoting, setPromoting]           = useState(false)
+  const [promoteMsg, setPromoteMsg]         = useState('')
+  const [startingEquity, setStartingEquity] = useState('')
+
+  const m = bot.metrics
+  const r = bot.readiness
+  const daysToReady = r.ready ? 0 : Math.max(0, 30 - (m.days_running ?? 0))
+
+  // Config name from dedicated field (set by assign-config endpoint)
+  const configName: string = bot.config_name ?? 'Unassigned'
+
+  async function handleAssign() {
+    if (!assignConfig) return
+    setAssigning(true)
+    setAssignMsg('')
+    try {
+      await assignBotConfig(bot.id, assignConfig)
+      setAssignMsg(`✅ Assigned '${assignConfig}'`)
+      onRefresh()
+    } catch (e) {
+      setAssignMsg(`❌ ${String(e)}`)
+    } finally {
+      setAssigning(false)
+    }
+  }
+
+  async function handlePromote() {
+    if (!assignConfig) return
+    const equity = parseFloat(startingEquity)
+    if (!equity || equity <= 0) return
+    setPromoting(true)
+    try {
+      const res = await promoteConfig(assignConfig, equity)
+      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'} | Starting equity: $${equity.toLocaleString()}`)
+      setConfirmPromote(false)
+      setStartingEquity('')
+      onRefresh()
+    } catch (e) {
+      setPromoteMsg(`❌ ${String(e)}`)
+    } finally {
+      setPromoting(false)
+    }
+  }
+
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      {/* Header row */}
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 text-left"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="flex items-center gap-2.5 min-w-0">
+          <StatusDot status={bot.status} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="font-semibold text-white text-sm truncate">{bot.name}</p>
+              <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${
+                configName === 'Unassigned'
+                  ? 'bg-slate-800 text-slate-500 border-slate-600'
+                  : 'bg-amber-900 text-amber-300 border-amber-700'
+              }`}>
+                {configName}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 truncate">{bot.description}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+          <span className="text-slate-500 text-xs">{expanded ? '▲' : '▼'}</span>
+        </div>
+      </button>
+
+      {/* Readiness bar — always visible */}
+      <div className="px-4 pb-3">
+        <ReadinessBar score={r.score} total={r.total} />
+      </div>
+
+      {/* Metrics strip */}
+      <div className="grid grid-cols-5 border-t border-border/40 text-center">
+        {[
+          { label: 'Trades',  value: String(m.num_trades ?? 0) },
+          { label: 'Win',     value: fmtPct((m.win_rate ?? 0) * 100, 0) },
+          { label: 'Sharpe',  value: m.sharpe != null ? m.sharpe.toFixed(2) : '—' },
+          { label: 'DD',      value: fmtPct(-(m.max_drawdown ?? 0) * 100, 0) },
+          { label: 'Return',  value: fmtPct(m.total_return_pct, 1) },
+        ].map(({ label, value }) => (
+          <div key={label} className="py-2 border-r border-border/30 last:border-r-0">
+            <p className="text-xs text-slate-500">{label}</p>
+            <p className="text-xs font-medium text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Days info */}
+      <div className="px-4 py-2 border-t border-border/30 flex items-center justify-between text-xs text-slate-500">
+        <span>Running {(m.days_running ?? 0).toFixed(0)}d</span>
+        {!r.ready && daysToReady > 0 && (
+          <span className="text-slate-600">~{daysToReady.toFixed(0)}d to min days</span>
+        )}
+        {r.ready && <span className="text-green-500">All checks passed</span>}
+        {bot.pid && <span>PID {bot.pid}</span>}
+      </div>
+
+      {/* Expandable checklist */}
+      {expanded && (
+        <div className="border-t border-border/40 px-4 py-3 space-y-1.5">
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide mb-2">
+            Readiness Checklist
+          </p>
+          {Object.entries(r.checks).map(([key, passed]) => {
+            const label = CHECK_LABELS[key] ?? key
+            // Show metric value for each check
+            const metricHint: Record<string, string> = {
+              min_trades:     `${m.num_trades ?? 0} trades`,
+              min_days:       `${(m.days_running ?? 0).toFixed(1)}d`,
+              sharpe:         m.sharpe != null ? m.sharpe.toFixed(2) : '—',
+              drawdown:       fmtPct(-(m.max_drawdown ?? 0) * 100, 1),
+              win_rate:       fmtPct((m.win_rate ?? 0) * 100, 1),
+              walk_forward:   'see optimizer',
+              reconcile:      'see optimizer',
+              no_kill_switch: passed ? 'clear' : 'active',
+            }
+            return (
+              <div key={key} className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{passed ? '✅' : '❌'}</span>
+                  <span className={`text-xs ${passed ? 'text-slate-300' : 'text-slate-500'}`}>
+                    {label}
+                  </span>
+                </div>
+                <span className="text-xs text-slate-600">{metricHint[key] ?? ''}</span>
+              </div>
+            )
+          })}
+
+          {/* Config summary */}
+          <div className="mt-3 pt-2 border-t border-border/30">
+            <p className="text-xs text-slate-500 uppercase tracking-wide mb-1.5">Config</p>
+            <div className="grid grid-cols-2 gap-1 text-xs">
+              {bot.config_summary && Object.entries(bot.config_summary).map(([k, v]) => (
+                <div key={k} className="flex justify-between gap-1">
+                  <span className="text-slate-600 truncate">{k.replace(/_/g, ' ')}</span>
+                  <span className="text-slate-400 font-mono">
+                    {typeof v === 'number' ? (v < 1 ? v.toFixed(3) : v.toLocaleString()) : String(v ?? '—')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Assign config */}
+          <div className="mt-3 pt-2 border-t border-border/30 space-y-2">
+            <p className="text-xs text-slate-500 uppercase tracking-wide">Assign Config</p>
+            <ConfigSelector
+              value={assignConfig}
+              onChange={setAssignConfig}
+              label="Config to assign"
+              showStats={false}
+            />
+            {assignMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${
+                assignMsg.startsWith('✅')
+                  ? 'bg-green-950 border-green-800 text-green-300'
+                  : 'bg-red-950 border-red-800 text-red-300'
+              }`}>{assignMsg}</p>
+            )}
+            <button
+              onClick={handleAssign}
+              disabled={assigning || !assignConfig}
+              className="w-full py-2 rounded-xl bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-amber-200 text-xs font-semibold"
+            >
+              {assigning ? 'Assigning…' : 'Assign Config'}
+            </button>
+          </div>
+
+          {/* Promote to Live — only if 8/8 ready */}
+          {r.ready && (
+            <div className="mt-3 pt-2 border-t border-green-900/50 space-y-2">
+              {promoteMsg && (
+                <p className={`text-xs px-3 py-2 rounded-lg border ${
+                  promoteMsg.startsWith('✅')
+                    ? 'bg-green-950 border-green-800 text-green-300'
+                    : 'bg-red-950 border-red-800 text-red-300'
+                }`}>{promoteMsg}</p>
+              )}
+              <button
+                onClick={() => setConfirmPromote(true)}
+                disabled={!assignConfig}
+                className="w-full py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                Promote to Live
+              </button>
+              {!assignConfig && (
+                <p className="text-xs text-slate-500 text-center">Select a config above to promote</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Promote confirm dialog */}
+      {confirmPromote && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-green-700 rounded-2xl p-6 w-full max-w-sm space-y-4">
+            <div className="text-3xl">⬆️</div>
+            <h3 className="font-bold text-white text-lg">Promote to Live?</h3>
+            <p className="text-slate-400 text-sm">
+              You're about to promote{' '}
+              <span className="text-green-400 font-medium">{assignConfig}</span> to the live bot.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-xs text-slate-400 font-medium">Actual deposit amount (USD)</label>
+              <div className="flex items-center gap-2 bg-slate-900 border border-border rounded-xl px-3 py-2.5">
+                <span className="text-slate-400 text-sm">$</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={startingEquity}
+                  onChange={e => setStartingEquity(e.target.value)}
+                  placeholder="e.g. 5000"
+                  className="flex-1 bg-transparent text-white text-sm focus:outline-none"
+                />
+              </div>
+            </div>
+            <div className="bg-red-950 border border-red-800 rounded-xl px-3 py-2.5 space-y-1">
+              <p className="text-red-300 text-xs font-semibold">⚠️ The live bot will switch to MAINNET. Real money will be traded.</p>
+              <p className="text-red-300 text-xs">⚠️ The bot will restart with the new configuration.</p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setConfirmPromote(false); setStartingEquity('') }}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handlePromote}
+                disabled={promoting || !startingEquity || parseFloat(startingEquity) <= 0}
+                className="flex-1 py-3 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-bold"
+              >
+                {promoting ? 'Promoting…' : 'Promote to Live'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Leaderboard table ─────────────────────────────────────────────────────────
+
+function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
+  const sorted = [...bots].sort(
+    (a, b) => (b.metrics.total_return_pct ?? 0) - (a.metrics.total_return_pct ?? 0)
+  )
+
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      <p className="text-xs text-slate-400 font-medium uppercase tracking-wide px-4 pt-3 pb-2">
+        Bot Leaderboard
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border/40">
+              {['Bot', 'Return', 'Sharpe', 'Win%', 'DD%', 'Trades', 'Ready'].map(h => (
+                <th key={h} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((bot, idx) => {
+              const m = bot.metrics
+              const r = bot.readiness
+              const returnPositive = (m.total_return_pct ?? 0) >= 0
+              return (
+                <tr key={bot.id} className={`border-b border-border/20 ${idx === 0 ? 'bg-green-950/20' : ''}`}>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <StatusDot status={bot.status} />
+                      <span className="text-white font-medium truncate max-w-[80px]">{bot.name}</span>
+                    </div>
+                  </td>
+                  <td className={`px-3 py-2 font-medium ${returnPositive ? 'text-green-400' : 'text-red-400'}`}>
+                    {fmtPct(m.total_return_pct, 1)}
+                  </td>
+                  <td className="px-3 py-2 text-slate-300">
+                    {m.sharpe != null ? m.sharpe.toFixed(2) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-slate-300">
+                    {fmtPct((m.win_rate ?? 0) * 100, 0)}
+                  </td>
+                  <td className="px-3 py-2 text-red-400">
+                    {fmtPct(-(m.max_drawdown ?? 0) * 100, 1)}
+                  </td>
+                  <td className="px-3 py-2 text-slate-300">
+                    {m.num_trades ?? 0}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`font-bold ${r.ready ? 'text-green-400' : 'text-slate-500'}`}>
+                      {r.score}/{r.total}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Main Farm component ───────────────────────────────────────────────────────
+
+export default function Farm() {
+  const [farmStatus, setFarmStatus] = useState<FarmStatus | null>(null)
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState('')
+  const [actionMsg, setActionMsg]   = useState('')
+  const [busy, setBusy]             = useState(false)
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const data = await getFarmStatus()
+      setFarmStatus(data)
+      setError('')
+    } catch (err: unknown) {
+      const msg = String(err)
+      // 404 = farm not started yet — not a real error, just show "not started"
+      if (msg.includes('404')) {
+        setFarmStatus(null)
+        setError('')
+      } else {
+        setError(msg)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchStatus()
+    const id = setInterval(fetchStatus, 10_000)
+    return () => clearInterval(id)
+  }, [fetchStatus])
+
+  async function handleStartFarm() {
+    setBusy(true)
+    try {
+      const r = await startFarm()
+      setActionMsg(`Farm started (PID ${r.pid})`)
+      setTimeout(() => setActionMsg(''), 4000)
+      setTimeout(fetchStatus, 1000)
+    } catch (e) {
+      setActionMsg(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleStopFarm() {
+    setBusy(true)
+    try {
+      await stopFarm()
+      setActionMsg('Farm stopped')
+      setTimeout(() => setActionMsg(''), 4000)
+      setTimeout(fetchStatus, 1000)
+    } catch (e) {
+      setActionMsg(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const farmRunning = farmStatus?.farm_running ?? false
+  const bots        = farmStatus?.bots ?? []
+  const runningBots = bots.filter(b => b.status === 'running').length
+  const readyBots   = bots.filter(b => b.readiness.ready).length
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64 text-slate-400">
+        Loading…
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-4 space-y-4 pb-6">
+      {/* Header */}
+      <div className="flex items-center justify-between pt-2">
+        <h1 className="text-lg font-bold text-white">Bot Farm</h1>
+        {farmStatus?.updated_at && (
+          <span className="text-xs text-slate-500">
+            Updated {fmtTime(farmStatus.updated_at)}
+          </span>
+        )}
+      </div>
+
+      {error && (
+        <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+          {error}
+        </div>
+      )}
+
+      {actionMsg && (
+        <div className="bg-green-950 border border-green-800 rounded-xl px-4 py-3 text-green-300 text-sm">
+          {actionMsg}
+        </div>
+      )}
+
+      {/* Farm control bar */}
+      <div className="bg-card rounded-2xl p-4 border border-border">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span
+              className={`w-3 h-3 rounded-full flex-shrink-0 ${
+                farmRunning
+                  ? 'bg-green-400 shadow-[0_0_8px_#22c55e]'
+                  : 'bg-slate-600'
+              }`}
+            />
+            <div>
+              <p className="font-semibold text-white text-sm">
+                {farmRunning
+                  ? `Running ${runningBots} bot${runningBots !== 1 ? 's' : ''}`
+                  : farmStatus ? 'Farm stopped' : 'Farm not started'}
+              </p>
+              {farmRunning && readyBots > 0 && (
+                <p className="text-xs text-green-500">
+                  {readyBots} bot{readyBots !== 1 ? 's' : ''} ready for live
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleStartFarm}
+              disabled={farmRunning || busy}
+              className="px-4 py-2 rounded-xl bg-green-800 hover:bg-green-700 text-green-200 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Start Farm
+            </button>
+            <button
+              onClick={handleStopFarm}
+              disabled={!farmRunning || busy}
+              className="px-4 py-2 rounded-xl bg-red-900 hover:bg-red-800 text-red-200 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Stop Farm
+            </button>
+          </div>
+        </div>
+
+        {/* Summary stats */}
+        {bots.length > 0 && (
+          <div className="grid grid-cols-4 gap-2 pt-2 border-t border-border/40">
+            {[
+              { label: 'Total Bots',  value: String(bots.length) },
+              { label: 'Running',     value: String(runningBots) },
+              { label: 'Ready',       value: String(readyBots) },
+              { label: 'Best Return', value: fmtPct(
+                  Math.max(...bots.map(b => b.metrics.total_return_pct ?? 0)), 1
+                ) },
+            ].map(({ label, value }) => (
+              <div key={label} className="rounded-xl bg-navy px-2 py-2 text-center">
+                <p className="text-xs text-slate-500">{label}</p>
+                <p className="text-sm font-medium text-white">{value}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* No bots yet */}
+      {bots.length === 0 && (
+        <div className="bg-card rounded-2xl border border-border px-4 py-8 text-center">
+          <p className="text-slate-400 text-sm">
+            {farmStatus
+              ? 'No bots running yet. Start the farm to launch bots.'
+              : 'Start the farm to begin parallel paper trading.'}
+          </p>
+          <p className="text-slate-600 text-xs mt-2">
+            4 bots will run simultaneously: Conservative, Balanced, Aggressive, and Capital ROI
+          </p>
+        </div>
+      )}
+
+      {/* Bot cards */}
+      {bots.length > 0 && (
+        <div className="space-y-3">
+          {bots.map(bot => (
+            <BotCard key={bot.id} bot={bot} onRefresh={fetchStatus} />
+          ))}
+        </div>
+      )}
+
+      {/* Leaderboard */}
+      {bots.length > 1 && <Leaderboard bots={bots} />}
+    </div>
+  )
+}

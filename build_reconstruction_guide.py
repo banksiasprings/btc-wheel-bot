@@ -254,10 +254,18 @@ replacements[119] = make_multi_file_cell(
     "Steps 62-67 - Write all React component files (embedded inline)"
 )
 
+# Cell 119 addition: main.tsx and index.css (standard React entry points)
+# These are added to the component_files list above so they land in the same cell.
+# However, since component_files is already consumed at cell 119, we add them
+# to a dedicated sub-cell embedded inside remaining_mobile below.
+
 # Cell 121: remaining mobile-app files (copy glob)
 # We handle this by listing all the remaining interesting files explicitly
 remaining_mobile = [
-    ("mobile-app/package.json", "mobile-app/package.json"),
+    ("mobile-app/package.json",     "mobile-app/package.json"),
+    # Fix 3: Standard React entry-point files (previously missing)
+    ("mobile-app/src/main.tsx",     "mobile-app/src/main.tsx"),
+    ("mobile-app/src/index.css",    "mobile-app/src/index.css"),
 ]
 # Check for other relevant files in mobile-app root that aren't already covered
 for fname in ["tailwind.config.js", "postcss.config.js", "tsconfig.json",
@@ -268,7 +276,7 @@ for fname in ["tailwind.config.js", "postcss.config.js", "tsconfig.json",
 
 replacements[121] = make_multi_file_cell(
     remaining_mobile,
-    "Step 68 - Write remaining mobile-app config files (embedded inline)"
+    "Step 68 - Write remaining mobile-app config files + React entry points (embedded inline)"
 )
 
 # Cell 127: deploy-mobile.yml
@@ -276,6 +284,167 @@ replacements[127] = make_file_cell(
     ".github/workflows/deploy-mobile.yml", ".github/workflows/deploy-mobile.yml",
     "Step 70 - Write GitHub Actions deploy workflow (embedded inline)"
 )
+
+# Fix 3 (backtest verification cell): confirm sharpe_ratio field name.
+# Both cell 72 and cell 134 already use results.sharpe_ratio correctly.
+# We replace cell 72 with an explicit version that includes a comment confirming
+# the field name so future readers don't confuse it with a hypothetical .sharpe attr.
+replacements[72] = new_code_cell(source="""\
+import sys, os
+sys.path.insert(0, os.getcwd())
+for m in list(sys.modules.keys()):
+    if any(m.startswith(k) for k in ('config', 'deribit', 'strategy', 'risk', 'backtester')):
+        del sys.modules[m]
+
+from config import load_config
+from backtester import Backtester
+
+cfg = load_config()
+bt = Backtester(cfg)
+print("Running backtest (fetching live Deribit data - takes ~30s)...")
+results = bt.run()
+
+# Field name reference: BacktestResults uses .sharpe_ratio (not .sharpe)
+# See backtester.py BacktestResults dataclass line: sharpe_ratio: float
+print(f"\\nResults summary:")
+print(f"  Total return    : {results.total_return_pct:+.2f}%")
+print(f"  Annualized      : {results.annualized_return_pct:+.2f}%")
+print(f"  Sharpe ratio    : {results.sharpe_ratio:.2f}")   # correct field: sharpe_ratio
+print(f"  Max drawdown    : {results.max_drawdown_pct:.2f}%")
+print(f"  Win rate        : {results.win_rate_pct:.1f}%")
+print(f"  Num cycles      : {results.num_cycles}")
+print(f"  Margin ROI ann  : {results.annualised_margin_roi:.4f}")
+print(f"  Premium/margin  : {results.premium_on_margin:.4f}")
+
+assert results.num_cycles >= 0, "Backtest should complete without error"
+assert hasattr(results, 'sharpe_ratio'), "Field is sharpe_ratio, not sharpe"
+print("\\nPhase 6 CHECKPOINT PASSED")
+""")
+
+# Fix 4 (API name notes): Cell 40 is the strategy concepts markdown cell.
+# The actual IV rank method is calculate_iv_rank() not get_iv_rank().
+replacements[40] = new_markdown_cell(source="""\
+### Step 23 - Strategy concepts
+
+**IV rank formula:**
+```
+iv_rank = (current_iv - 52w_low) / (52w_high - 52w_low)
+```
+- Uses last 365 daily data points from `get_historical_volatility`
+- Returns 0.0 (IV cheapest in a year) to 1.0 (most expensive)
+- Returns 0.5 when IV is flat (no meaningful signal)
+- Only enter positions when iv_rank >= iv_rank_threshold (default 0.701 = top 30%)
+
+> **API note:** The method in `strategy.py` is `calculate_iv_rank(iv_history)` — not `get_iv_rank`.
+
+**Dynamic delta (iv_dynamic_delta=True):**
+```
+target_delta_mid = d_min + (d_max - d_min) * iv_rank
+```
+- IV rank = 0.0 -> target = d_min (sell far OTM, conservative)
+- IV rank = 1.0 -> target = d_max (sell closer ATM, more premium when IV is richly priced)
+- When disabled: target = (d_min + d_max) / 2 (fixed midpoint)
+
+**Strike scoring formula:**
+```
+delta_score = 1 - |actual_delta - target_mid| / target_mid
+iv_score    = min(mark_iv / 100, 1.0)
+score       = 0.7 * delta_score + 0.3 * iv_score
+```
+70% weight on delta proximity, 30% on IV richness.
+
+**Wheel guard (`_put_cycle_complete` flag):**
+- Starts False -> bot always starts by selling puts
+- Set True after ANY put expiry (OTM or ITM)
+- Set False after any call expiry
+- Prevents opening a call leg before the put has settled
+
+**Recovery call mode (`_last_put_was_itm` flag):**
+- Set True when a put expires ITM (underlying < strike)
+- Next call leg: `select_strike()` filters to only strikes >= `_last_put_strike`
+- Ensures covered call captures full BTC recovery above the assignment level
+- Cleared after call expiry
+""")
+
+# Fix 4b (API name notes): Cell 46 is the risk manager design markdown cell.
+# The actual sizing method is calculate_contracts() not calculate_position_size().
+replacements[46] = new_markdown_cell(source="""\
+### Step 26 - Risk manager design
+
+All checks return `True` (proceed) or `False` (block). The key method
+`full_pre_trade_check()` runs all 5 pre-trade guards in sequence.
+
+**Pre-trade guards:**
+1. `check_kill_switch()` - KILL_SWITCH file exists -> halt immediately
+2. `check_max_legs()` - already at max_open_legs -> skip this tick
+3. `check_position_size()` - can we size >= 0.1 contracts? (min viable position)
+4. `check_collateral()` - total collateral <= equity * collateral_buffer
+5. `check_free_margin()` - after opening, >= min_free_equity_fraction remains free
+
+> **API note:** The contract sizing method is `calculate_contracts(equity, strike, equity_fraction=None)`
+> — not `calculate_position_size`. See `risk_manager.py`.
+
+**Sizing formula:**
+```
+max_notional  = equity_usd * max_equity_per_leg
+contracts     = floor(max_notional / strike_usd / 0.1) * 0.1
+```
+The `equity_fraction` parameter overrides `max_equity_per_leg` and is used by
+the ladder to split total exposure evenly: `per_leg = max_equity_per_leg / ladder_legs`.
+
+**Kill switch:** Create a file named `KILL_SWITCH` in the project root.
+Bot detects it on the next tick and halts all trading. Delete the file to resume.
+The API endpoint `/controls/stop` creates this file; `/controls/start` deletes it.
+
+**Drawdown circuit breaker:** If `(peak_equity - current_equity) / peak_equity > max_daily_drawdown`,
+no new positions are opened until equity recovers.
+""")
+
+# Fix 4c (API name notes): Cell 52 is the bot architecture overview.
+# Paper mode is started via `python main.py --mode paper` (not mode='paper').
+replacements[52] = new_markdown_cell(source="""\
+### Step 29 - Bot architecture overview
+
+`WheelBot` is an async class with a `run()` method that loops forever,
+calling `_tick()` every `poll_interval` seconds (default 60s).
+
+> **API note:** Paper mode is invoked via `python main.py --mode paper` on the CLI.
+> Inside `bot.py` the `WheelBot.__init__` receives `paper: bool` — there is no
+> `mode='paper'` keyword argument. See `main.py` `cmd_paper()`.
+
+**Per-tick sequence:**
+1. `_process_commands()` - check `data/bot_commands.json` for mobile API commands
+2. `check_kill_switch()` - halt if KILL_SWITCH file exists
+3. Fetch market state: `get_historical_volatility`, `get_instruments`, tickers
+4. Update 7-day BTC price ring-buffer (for AI overseer)
+5. Record one daily close price for regime MA calculation
+6. (Live mode) Refresh equity from `get_account_summary()`
+7. Compute IV rank
+8. `_check_expired_positions()` (paper mode) OR WebSocket settlement callback (live)
+9. Update mark prices and deltas on open positions
+10. Recalculate equity (paper) or use Deribit equity (live)
+11. `check_drawdown()` - halt new positions if breached
+12. AI overseer check (if enabled and due)
+13. Force-close check (mobile command)
+14. Roll check: inspect each open position via `should_roll()`
+15. Delta hedge rebalance via `HedgeManager.rebalance()`
+16. Open new leg (standard mode) or ladder legs
+17. Write state files: `bot_state.json`, `current_position.json`, `tick_log.csv`, heartbeat
+
+**Paper mode vs live mode differences:**
+- Paper: positions tracked in memory, expiry simulated by parsing instrument name
+- Live: positions reconciled from Deribit on startup, settlement via WebSocket callback
+
+**State persistence:**
+- `_write_state()` / `_read_state()` in `data/bot_state.json`
+- Hedge state in `data/hedge_state.json`
+- Trade log in `data/trades.csv`
+- Equity curve in `data/equity_curve.json`
+
+**First trade detection:**
+The bot checks if `data/trades.csv` is empty on each new position open.
+If it is, it sends a special Telegram notification (FIRST TRADE FIRED!).
+""")
 
 # Fix 2: Risk manager test — use $150k equity so it passes the $80k strike check
 replacements[50] = new_code_cell(source="""\

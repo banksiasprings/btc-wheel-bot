@@ -1,0 +1,63 @@
+farm:
+  status_interval_seconds: 60
+  data_dir: farm
+
+bots:
+  - id: bot_0
+    name: "Balanced Evolved"
+    description: "Evolved config (balanced goal) — fitness 4.96, 22% return, Sharpe 1.44"
+    base_config: configs/balanced_20260423_2346.yaml
+    overrides:
+      strategy:
+        # Lowered from evolved threshold (47.66%) for paper phase — current low-IV market
+        # means the evolved threshold won't fire for months. 25th percentile generates
+        # trades faster so readiness checks can accumulate the required data.
+        iv_rank_threshold: 0.25
+
+
+  - id: bot_1
+    name: "Balanced"
+    description: "Default balanced config"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        # Lowered from 0.50 for paper phase — generates trades faster in low-IV market
+        iv_rank_threshold: 0.25
+      backtest:
+        starting_equity: 10000.0
+
+  - id: bot_2
+    name: "Aggressive"
+    description: "Higher delta, lower IV threshold — more trades"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        # Lowered from 0.35 for paper phase — generates trades faster in low-IV market
+        iv_rank_threshold: 0.25
+        target_delta_min: 0.20
+        target_delta_max: 0.40
+      backtest:
+        starting_equity: 10000.0
+
+  - id: bot_3
+    name: "Capital ROI"
+    description: "Evolved config optimising for minimum capital ROI"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        # Lowered from evolved threshold for paper phase — generates trades faster in low-IV market
+        iv_rank_threshold: 0.25
+      sizing:
+        max_equity_per_leg: 0.08
+        min_free_equity_fraction: 0.10
+      backtest:
+        starting_equity: 5000.0
+
+readiness_thresholds:
+  min_trades: 20
+  min_days: 30
+  min_sharpe: 0.8
+  max_drawdown: 0.15
+  min_win_rate: 0.55
+  min_walk_forward_robustness: 0.75
+  min_reconcile_accuracy: 0.80

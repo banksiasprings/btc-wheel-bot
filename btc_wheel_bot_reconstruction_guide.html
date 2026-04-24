@@ -8286,7 +8286,7 @@ gh repo create banksiasprings/btc-wheel-bot --private --source<span class="o">=<
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=4cac9d46">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=046b795b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8328,7 +8328,7 @@ own named config YAML instead of the default <code>config.yaml</code>.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=99c71be4">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=cbbf3083">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8573,7 +8573,7 @@ BTC-PERPETUAL is the futures instrument used for delta hedging.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=09f84dfe">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=93e07a10">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8751,7 +8751,7 @@ to reconcile any open positions from Deribit (in case bot was restarted mid-trad
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=a6634730">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=dfe326c0">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8766,6 +8766,9 @@ to reconcile any open positions from Deribit (in case bot was restarted mid-trad
 <li>Returns 0.5 when IV is flat (no meaningful signal)</li>
 <li>Only enter positions when iv_rank &gt;= iv_rank_threshold (default 0.701 = top 30%)</li>
 </ul>
+<blockquote>
+<p><strong>API note:</strong> The method in <code>strategy.py</code> is <code>calculate_iv_rank(iv_history)</code> — not <code>get_iv_rank</code>.</p>
+</blockquote>
 <p><strong>Dynamic delta (iv_dynamic_delta=True):</strong></p>
 <pre><code>target_delta_mid = d_min + (d_max - d_min) * iv_rank
 </code></pre>
@@ -8808,7 +8811,7 @@ score       = 0.7 * delta_score + 0.3 * iv_score
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=0808077f">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d340cf6c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8900,7 +8903,7 @@ score       = 0.7 * delta_score + 0.3 * iv_score
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=0d17cf37">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=f2fc5187">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8916,6 +8919,10 @@ score       = 0.7 * delta_score + 0.3 * iv_score
 <li><code>check_collateral()</code> - total collateral &lt;= equity * collateral_buffer</li>
 <li><code>check_free_margin()</code> - after opening, &gt;= min_free_equity_fraction remains free</li>
 </ol>
+<blockquote>
+<p><strong>API note:</strong> The contract sizing method is <code>calculate_contracts(equity, strike, equity_fraction=None)</code>
+— not <code>calculate_position_size</code>. See <code>risk_manager.py</code>.</p>
+</blockquote>
 <p><strong>Sizing formula:</strong></p>
 <pre><code>max_notional  = equity_usd * max_equity_per_leg
 contracts     = floor(max_notional / strike_usd / 0.1) * 0.1
@@ -8941,7 +8948,7 @@ no new positions are opened until equity recovers.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d62701f1">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=42d7cf4c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -8974,7 +8981,7 @@ no new positions are opened until equity recovers.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=ed6943cb">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=32d60da4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9039,7 +9046,7 @@ no new positions are opened until equity recovers.</p>
 </div>
 </div>
 </div>
-<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=5bec4454">
+<div class="jp-Cell jp-MarkdownCell jp-Notebook-cell" id="cell-id=75d391bc">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9047,6 +9054,11 @@ no new positions are opened until equity recovers.</p>
 </div><div class="jp-RenderedHTMLCommon jp-RenderedMarkdown jp-MarkdownOutput" data-mime-type="text/markdown">
 <h3 id="Step-29---Bot-architecture-overview">Step 29 - Bot architecture overview<a class="anchor-link" href="#Step-29---Bot-architecture-overview">¶</a></h3><p><code>WheelBot</code> is an async class with a <code>run()</code> method that loops forever,
 calling <code>_tick()</code> every <code>poll_interval</code> seconds (default 60s).</p>
+<blockquote>
+<p><strong>API note:</strong> Paper mode is invoked via <code>python main.py --mode paper</code> on the CLI.
+Inside <code>bot.py</code> the <code>WheelBot.__init__</code> receives <code>paper: bool</code> — there is no
+<code>mode='paper'</code> keyword argument. See <code>main.py</code> <code>cmd_paper()</code>.</p>
+</blockquote>
 <p><strong>Per-tick sequence:</strong></p>
 <ol>
 <li><code>_process_commands()</code> - check <code>data/bot_commands.json</code> for mobile API commands</li>
@@ -9109,7 +9121,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=60e4d834">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=58511523">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9131,7 +9143,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=f823625a">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9b735f4b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9164,7 +9176,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3f34e22a">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d55e062b">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9197,7 +9209,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=8a62e62a">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9d34e0d7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9230,7 +9242,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=117da9b3">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=40efded4">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9263,7 +9275,7 @@ and copy the full implementations from the project files.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=2696ef82">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=0a3a96ff">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9400,7 +9412,7 @@ margin_req    = margin_rate * spot * contracts * 0.1  # 0.1 BTC/contract
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=f576b6e1">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=bdc6b727">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9433,7 +9445,7 @@ margin_req    = margin_rate * spot * contracts * 0.1  # 0.1 BTC/contract
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=f00fc193">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=a10e7dba">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9455,10 +9467,12 @@ margin_req    = margin_rate * spot * contracts * 0.1  # 0.1 BTC/contract
 <span class="nb">print</span><span class="p">(</span><span class="s2">"Running backtest (fetching live Deribit data - takes ~30s)..."</span><span class="p">)</span>
 <span class="n">results</span> <span class="o">=</span> <span class="n">bt</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
 
+<span class="c1"># Field name reference: BacktestResults uses .sharpe_ratio (not .sharpe)</span>
+<span class="c1"># See backtester.py BacktestResults dataclass line: sharpe_ratio: float</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Results summary:"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Total return    : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">total_return_pct</span><span class="si">:</span><span class="s2">+.2f</span><span class="si">}</span><span class="s2">%"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Annualized      : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">annualized_return_pct</span><span class="si">:</span><span class="s2">+.2f</span><span class="si">}</span><span class="s2">%"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Sharpe ratio    : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">sharpe_ratio</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Sharpe ratio    : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">sharpe_ratio</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>   <span class="c1"># correct field: sharpe_ratio</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Max drawdown    : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">max_drawdown_pct</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">%"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Win rate        : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">win_rate_pct</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">%"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Num cycles      : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">num_cycles</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -9466,6 +9480,7 @@ margin_req    = margin_rate * spot * contracts * 0.1  # 0.1 BTC/contract
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  Premium/margin  : </span><span class="si">{</span><span class="n">results</span><span class="o">.</span><span class="n">premium_on_margin</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="k">assert</span> <span class="n">results</span><span class="o">.</span><span class="n">num_cycles</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"Backtest should complete without error"</span>
+<span class="k">assert</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="s1">'sharpe_ratio'</span><span class="p">),</span> <span class="s2">"Field is sharpe_ratio, not sharpe"</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">Phase 6 CHECKPOINT PASSED"</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -9483,7 +9498,7 @@ margin_req    = margin_rate * spot * contracts * 0.1  # 0.1 BTC/contract
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=e6a1b57d">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=70cf9a3c">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9691,7 +9706,7 @@ the optimizer blends live trade outcomes into fitness scores. Blend shifts from 
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=7b6cdc02">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d03535b7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -9896,7 +9911,7 @@ which configs to run as paper-trading bots. Returns configs with status <code>pa
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=ddc8b6c1">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3be5c6c7">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10088,7 +10103,7 @@ across all paper bots regardless of trade frequency.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3fcef20e">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=133d5da8">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10121,7 +10136,7 @@ across all paper bots regardless of trade frequency.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=e8b26323">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=643a531d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10155,7 +10170,7 @@ dynamically from <code>configs/</code> with <code>status='paper'</code>).</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=57096f13">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=c26b50df">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10326,7 +10341,7 @@ otherwise it intercepts API calls.</li>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=3ea9ac6f">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=01f75719">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10514,7 +10529,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=71e895d3">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=d4890a7d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10597,7 +10612,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9fd647ec">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=27bbc941">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10630,7 +10645,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=58349f20">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=f76e413d">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10663,7 +10678,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=eaa3c873">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=6eee20aa">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10696,7 +10711,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=b63561c4">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=8bf91cc1">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10777,7 +10792,7 @@ on iPhone via "Add to Home Screen".</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=6fdd02aa">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=61f3534a">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
@@ -10785,13 +10800,23 @@ on iPhone via "Add to Home Screen".</p>
 <div class="jp-InputPrompt jp-InputArea-prompt">In [ ]:</div>
 <div class="jp-CodeMirrorEditor jp-Editor jp-InputArea-editor" data-type="inline">
 <div class="cm-editor cm-s-jupyter">
-<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Step 68 - Write remaining mobile-app config files (embedded inline)</span>
+<div class="highlight hl-ipython3"><pre><span></span><span class="c1"># Step 68 - Write remaining mobile-app config files + React entry points (embedded inline)</span>
 <span class="kn">import</span> <span class="nn">pathlib</span><span class="o">,</span> <span class="nn">base64</span>
 
 <span class="n">_b64_mobile_app_package_json</span> <span class="o">=</span> <span class="s2">"ewogICJuYW1lIjogIndoZWVsLWJvdC1wd2EiLAogICJ2ZXJzaW9uIjogIjEuMC4wIiwKICAicHJpdmF0ZSI6IHRydWUsCiAgInR5cGUiOiAibW9kdWxlIiwKICAiaG9tZXBhZ2UiOiAiaHR0cHM6Ly9iYW5rc2lhc3ByaW5ncy5naXRodWIuaW8vYnRjLXdoZWVsLWJvdCIsCiAgInNjcmlwdHMiOiB7CiAgICAiZGV2IjogInZpdGUiLAogICAgImJ1aWxkIjogInRzYyAmJiB2aXRlIGJ1aWxkIiwKICAgICJwcmV2aWV3IjogInZpdGUgcHJldmlldyIKICB9LAogICJkZXBlbmRlbmNpZXMiOiB7CiAgICAibGlnaHR3ZWlnaHQtY2hhcnRzIjogIl41LjEuMCIsCiAgICAicmVhY3QiOiAiXjE4LjMuMSIsCiAgICAicmVhY3QtZG9tIjogIl4xOC4zLjEiLAogICAgInJlY2hhcnRzIjogIl4yLjEyLjciCiAgfSwKICAiZGV2RGVwZW5kZW5jaWVzIjogewogICAgIkB0eXBlcy9yZWFjdCI6ICJeMTguMy40IiwKICAgICJAdHlwZXMvcmVhY3QtZG9tIjogIl4xOC4zLjAiLAogICAgIkB2aXRlanMvcGx1Z2luLXJlYWN0IjogIl40LjMuMSIsCiAgICAiYXV0b3ByZWZpeGVyIjogIl4xMC40LjIwIiwKICAgICJwb3N0Y3NzIjogIl44LjQuNDEiLAogICAgInRhaWx3aW5kY3NzIjogIl4zLjQuMTAiLAogICAgInR5cGVzY3JpcHQiOiAiXjUuNS40IiwKICAgICJ2aXRlIjogIl41LjQuMiIsCiAgICAidml0ZS1wbHVnaW4tcHdhIjogIl4wLjIwLjUiLAogICAgIndvcmtib3gtd2luZG93IjogIl43LjEuMCIKICB9LAogICJvcHRpb25hbERlcGVuZGVuY2llcyI6IHsKICAgICJAcm9sbHVwL3JvbGx1cC1saW51eC14NjQtZ251IjogIl40LjYwLjIiCiAgfQp9Cg=="</span>
 <span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/package.json"</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/package.json"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">base64</span><span class="o">.</span><span class="n">b64decode</span><span class="p">(</span><span class="n">_b64_mobile_app_package_json</span><span class="p">)</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Written: mobile-app/package.json (33 lines)"</span><span class="p">)</span>
+
+<span class="n">_b64_mobile_app_src_main_tsx</span> <span class="o">=</span> <span class="s2">"aW1wb3J0IHsgU3RyaWN0TW9kZSB9IGZyb20gJ3JlYWN0JwppbXBvcnQgeyBjcmVhdGVSb290IH0gZnJvbSAncmVhY3QtZG9tL2NsaWVudCcKaW1wb3J0ICcuL2luZGV4LmNzcycKaW1wb3J0IEFwcCBmcm9tICcuL0FwcCcKCmNyZWF0ZVJvb3QoZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ3Jvb3QnKSEpLnJlbmRlcigKICA8U3RyaWN0TW9kZT4KICAgIDxBcHAgLz4KICA8L1N0cmljdE1vZGU+LAopCg=="</span>
+<span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/src/main.tsx"</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/src/main.tsx"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">base64</span><span class="o">.</span><span class="n">b64decode</span><span class="p">(</span><span class="n">_b64_mobile_app_src_main_tsx</span><span class="p">)</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Written: mobile-app/src/main.tsx (10 lines)"</span><span class="p">)</span>
+
+<span class="n">_b64_mobile_app_src_index_css</span> <span class="o">=</span> <span class="s2">"QHRhaWx3aW5kIGJhc2U7CkB0YWlsd2luZCBjb21wb25lbnRzOwpAdGFpbHdpbmQgdXRpbGl0aWVzOwoKaHRtbCwgYm9keSwgI3Jvb3QgewogIGhlaWdodDogMTAwJTsKICBiYWNrZ3JvdW5kLWNvbG9yOiAjMGYxNzJhOwogIGNvbG9yOiB3aGl0ZTsKICBmb250LWZhbWlseTogLWFwcGxlLXN5c3RlbSwgQmxpbmtNYWNTeXN0ZW1Gb250LCAnU2Vnb2UgVUknLCBSb2JvdG8sIHNhbnMtc2VyaWY7CiAgLXdlYmtpdC1mb250LXNtb290aGluZzogYW50aWFsaWFzZWQ7Cn0KCi8qIFNhZmUgYXJlYSBpbnNldHMgZm9yIGlPUyBub3RjaCAqLwoucGItc2FmZSB7CiAgcGFkZGluZy1ib3R0b206IGVudihzYWZlLWFyZWEtaW5zZXQtYm90dG9tLCAwcHgpOwp9Ci5wdC1zYWZlIHsKICBwYWRkaW5nLXRvcDogZW52KHNhZmUtYXJlYS1pbnNldC10b3AsIDBweCk7Cn0K"</span>
+<span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/src/index.css"</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/src/index.css"</span><span class="p">)</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">base64</span><span class="o">.</span><span class="n">b64decode</span><span class="p">(</span><span class="n">_b64_mobile_app_src_index_css</span><span class="p">)</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">),</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Written: mobile-app/src/index.css (19 lines)"</span><span class="p">)</span>
 
 <span class="n">_b64_mobile_app_tailwind_config_js</span> <span class="o">=</span> <span class="s2">"LyoqIEB0eXBlIHtpbXBvcnQoJ3RhaWx3aW5kY3NzJykuQ29uZmlnfSAqLwpleHBvcnQgZGVmYXVsdCB7CiAgY29udGVudDogWycuL2luZGV4Lmh0bWwnLCAnLi9zcmMvKiovKi57anMsdHMsanN4LHRzeH0nXSwKICB0aGVtZTogewogICAgZXh0ZW5kOiB7CiAgICAgIGNvbG9yczogewogICAgICAgIG5hdnk6ICcjMGYxNzJhJywKICAgICAgICBjYXJkOiAnIzFlMjkzYicsCiAgICAgICAgYm9yZGVyOiAnIzMzNDE1NScsCiAgICAgIH0sCiAgICB9LAogIH0sCiAgcGx1Z2luczogW10sCn0K"</span>
 <span class="n">pathlib</span><span class="o">.</span><span class="n">Path</span><span class="p">(</span><span class="s2">"mobile-app/tailwind.config.js"</span><span class="p">)</span><span class="o">.</span><span class="n">parent</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -10908,7 +10933,7 @@ that touches files in <code>mobile-app/</code>.</p>
 </div>
 </div>
 </div>
-</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=2836fe0c">
+</div><div class="jp-Cell jp-CodeCell jp-Notebook-cell jp-mod-noOutputs" id="cell-id=9935f298">
 <div class="jp-Cell-inputWrapper" tabindex="0">
 <div class="jp-Collapser jp-InputCollapser jp-Cell-inputCollapser">
 </div>
