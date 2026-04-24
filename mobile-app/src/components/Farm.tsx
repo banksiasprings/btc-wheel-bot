@@ -640,6 +640,9 @@ export default function Farm() {
         )}
       </div>
 
+      {/* Leaderboard — directly below farm control */}
+      {bots.length > 1 && <Leaderboard bots={bots} />}
+
       {/* No bots yet */}
       {bots.length === 0 && (
         <div className="bg-card rounded-2xl border border-border px-4 py-8 text-center">
@@ -662,9 +665,6 @@ export default function Farm() {
           ))}
         </div>
       )}
-
-      {/* Leaderboard */}
-      {bots.length > 1 && <Leaderboard bots={bots} />}
     </div>
   )
 }
