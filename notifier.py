@@ -73,31 +73,38 @@ def _send(text: str) -> None:
 
 
 def notify_bot_started(mode: str) -> None:
-    _send(f"🟢 <b>Bot started</b> — mode: <code>{mode}</code>")
+    name = _bot_name()
+    _send(f"🟢 <b>{name}</b> started — mode: <code>{mode}</code>")
 
 
 def notify_bot_stopped() -> None:
-    _send("🔴 <b>Bot stopped</b>")
+    name = _bot_name()
+    _send(f"🔴 <b>{name}</b> stopped")
 
 
 def notify_trade_opened(instrument: str, strike: float, premium_btc: float, dte: int) -> None:
+    name = _bot_name()
     _send(
-        f"📥 <b>Opened</b> {instrument}\n"
+        f"📥 <b>{name}</b> opened\n"
+        f"<code>{instrument}</code>\n"
         f"Strike: ${strike:,.0f}  •  Premium: {premium_btc:.5f} BTC  •  DTE: {dte}"
     )
 
 
 def notify_trade_closed(instrument: str, pnl_usd: float, reason: str) -> None:
+    name = _bot_name()
     sign = "+" if pnl_usd >= 0 else ""
     emoji = "✅" if pnl_usd >= 0 else "❌"
     _send(
-        f"{emoji} <b>Closed</b> {instrument}\n"
+        f"{emoji} <b>{name}</b> closed\n"
+        f"<code>{instrument}</code>\n"
         f"P&L: {sign}${pnl_usd:,.2f}  •  Reason: {reason}"
     )
 
 
 def notify_error(message: str) -> None:
-    _send(f"⚠️ <b>Bot error</b>\n{message[:300]}")
+    name = _bot_name()
+    _send(f"⚠️ <b>{name}</b> error\n{message[:300]}")
 
 
 def notify_drawdown_warning(drawdown_pct: float, equity_usd: float, bot_name: str = "") -> None:
