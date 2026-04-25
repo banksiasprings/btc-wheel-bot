@@ -480,6 +480,7 @@ export default function Farm() {
   const [actionMsg, setActionMsg]   = useState('')
   const [busy, setBusy]             = useState(false)
   const [btcPrice, setBtcPrice]     = useState<number | null>(null)
+  const [confirm, setConfirm]       = useState<{ type: 'start' | 'stop'; liveBots: number; totalBots: number } | null>(null)
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -515,25 +516,30 @@ export default function Farm() {
     return () => clearInterval(id)
   }, [])
 
-  async function handleStartFarm() {
-    setBusy(true)
-    try {
-      const r = await startFarm()
-      setActionMsg(`Farm started (PID ${r.pid})`)
-      setTimeout(() => setActionMsg(''), 4000)
-      setTimeout(fetchStatus, 1000)
-    } catch (e) {
-      setActionMsg(String(e))
-    } finally {
-      setBusy(false)
-    }
+  function handleStartFarm() {
+    const allBots   = farmStatus?.bots ?? []
+    const liveBots  = allBots.filter(b => b.readiness?.ready).length
+    setConfirm({ type: 'start', liveBots, totalBots: allBots.length })
   }
 
-  async function handleStopFarm() {
+  function handleStopFarm() {
+    const allBots  = farmStatus?.bots ?? []
+    const liveBots = allBots.filter(b => b.readiness?.ready).length
+    setConfirm({ type: 'stop', liveBots, totalBots: allBots.length })
+  }
+
+  async function executeConfirmed() {
+    if (!confirm) return
+    setConfirm(null)
     setBusy(true)
     try {
-      await stopFarm()
-      setActionMsg('Farm stopped')
+      if (confirm.type === 'start') {
+        const r = await startFarm()
+        setActionMsg(`Farm started (PID ${r.pid})`)
+      } else {
+        await stopFarm()
+        setActionMsg('Farm stopped')
+      }
       setTimeout(() => setActionMsg(''), 4000)
       setTimeout(fetchStatus, 1000)
     } catch (e) {
@@ -653,6 +659,73 @@ export default function Farm() {
 
   return (
     <div className="p-4 space-y-4 pb-6">
+
+      {/* ── Confirm modal ─────────────────────────────────────────────────── */}
+      {confirm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm px-4 pb-8"
+             onClick={() => setConfirm(null)}>
+          <div className="w-full max-w-sm bg-card border rounded-2xl p-5 space-y-4"
+               style={{ borderColor: confirm.liveBots > 0 ? '#ef4444' : '#334155' }}
+               onClick={e => e.stopPropagation()}>
+
+            {/* Icon + title */}
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">{confirm.type === 'start' ? '🚀' : '🛑'}</span>
+              <div>
+                <p className="font-bold text-white text-base">
+                  {confirm.type === 'start' ? 'Start the Farm?' : 'Stop the Farm?'}
+                </p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {confirm.totalBots} bot{confirm.totalBots !== 1 ? 's' : ''} will be affected
+                </p>
+              </div>
+            </div>
+
+            {/* Live warning */}
+            {confirm.liveBots > 0 && (
+              <div className="bg-red-950 border border-red-800 rounded-xl px-3 py-2.5">
+                <p className="text-red-300 text-xs font-semibold">⚠️ Live bots detected</p>
+                <p className="text-red-400 text-xs mt-1">
+                  {confirm.liveBots} bot{confirm.liveBots !== 1 ? 's are' : ' is'} marked ready for live trading.
+                  {confirm.type === 'start'
+                    ? ' Starting the farm will execute real trades with real money.'
+                    : ' Stopping the farm may interrupt active positions.'}
+                </p>
+              </div>
+            )}
+
+            {/* Description */}
+            <p className="text-slate-300 text-sm">
+              {confirm.type === 'start'
+                ? 'This will start all configured bots. They will begin monitoring the market and placing trades according to their configs.'
+                : 'This will stop all running bots. Any open positions will remain open but no new trades will be placed.'}
+            </p>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirm(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeConfirmed}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-colors ${
+                  confirm.type === 'start'
+                    ? confirm.liveBots > 0
+                      ? 'bg-red-700 hover:bg-red-600 text-white'
+                      : 'bg-green-700 hover:bg-green-600 text-white'
+                    : 'bg-red-900 hover:bg-red-800 text-red-100'
+                }`}
+              >
+                {confirm.type === 'start' ? 'Yes, Start Farm' : 'Yes, Stop Farm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between pt-2">
         <h1 className="text-lg font-bold text-white">Bot Farm</h1>

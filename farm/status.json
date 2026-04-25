@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-25T19:10:52.607816+00:00",
+  "updated_at": "2026-04-25T19:16:01.924561+00:00",
   "bots": [
     {
       "id": "daily-trader-v1",
@@ -7,8 +7,8 @@
       "description": "Paper trading: daily trader V1",
       "status": "running",
       "pid": 14661,
-      "uptime_hours": 14.76,
-      "days_running": 0.61,
+      "uptime_hours": 14.84,
+      "days_running": 0.62,
       "config_name": "daily trader V1",
       "config_status": "paper",
       "config_summary": {
@@ -49,8 +49,8 @@
       "description": "Paper trading: chaos-tester",
       "status": "running",
       "pid": 13980,
-      "uptime_hours": 15.71,
-      "days_running": 0.65,
+      "uptime_hours": 15.8,
+      "days_running": 0.66,
       "config_name": "chaos-tester",
       "config_status": "paper",
       "config_summary": {
@@ -91,8 +91,8 @@
       "description": "Paper trading: chaos-hedged",
       "status": "running",
       "pid": 14662,
-      "uptime_hours": 14.76,
-      "days_running": 0.61,
+      "uptime_hours": 14.84,
+      "days_running": 0.62,
       "config_name": "chaos-hedged",
       "config_status": "paper",
       "config_summary": {
@@ -133,7 +133,7 @@
       "description": "Paper trading: max yield V1",
       "status": "running",
       "pid": 14883,
-      "uptime_hours": 14.6,
+      "uptime_hours": 14.69,
       "days_running": 0.61,
       "config_name": "max yield V1",
       "config_status": "paper",
@@ -175,8 +175,8 @@
       "description": "Paper trading: capital ROI V1",
       "status": "running",
       "pid": 16605,
-      "uptime_hours": 12.05,
-      "days_running": 0.5,
+      "uptime_hours": 12.13,
+      "days_running": 0.51,
       "config_name": "capital ROI V1",
       "config_status": "paper",
       "config_summary": {
@@ -217,7 +217,7 @@
       "description": "Paper trading: sharpe V1",
       "status": "running",
       "pid": 16643,
-      "uptime_hours": 12.01,
+      "uptime_hours": 12.1,
       "days_running": 0.5,
       "config_name": "sharpe V1",
       "config_status": "paper",
@@ -259,7 +259,7 @@
       "description": "Paper trading: Safest V1",
       "status": "running",
       "pid": 18221,
-      "uptime_hours": 9.49,
+      "uptime_hours": 9.57,
       "days_running": 0.4,
       "config_name": "Safest V1",
       "config_status": "paper",
