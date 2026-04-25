@@ -252,9 +252,11 @@ export default function TradingView() {
     getFarmStatus().then(fs => {
       setFarmStatus(fs)
       if (!botId && fs.bots.length > 0) {
-        // Prefer the first bot that has an active open position, otherwise first bot
-        const withPos = fs.bots.find(b => b.has_open_position)
-        setBotId((withPos ?? fs.bots[0]).id)
+        // Apply custom farm order first, then prefer any bot with an open position,
+        // otherwise default to the first in the user's preferred order (not server order)
+        const ordered = applyBotOrder(fs.bots)
+        const withPos = ordered.find(b => b.has_open_position)
+        setBotId((withPos ?? ordered[0]).id)
       }
     }).catch(() => {})
   }, [])

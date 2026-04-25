@@ -149,9 +149,8 @@ function StepEvolve({
   const [presetName, setPresetName]     = useState('daily_trader_v1')
   const [savingPreset, setSavingPreset] = useState(false)
   const [presetMsg, setPresetMsg]       = useState('')
-  // Seed config (selective evolution)
-  const [seedConfigName, setSeedConfigName] = useState<string>('')
-  const [availableConfigs, setAvailableConfigs] = useState<NamedConfig[]>([])
+  // Seed config (selective evolution) — UI hidden for now, backend still supports --seed-config
+  const [seedConfigName] = useState<string>('')
 
   const goalData = evolveAll?.[goal]
   const hasData  = (goalData?.version ?? 0) > 0 && goalData?.current != null
@@ -177,14 +176,6 @@ function StepEvolve({
     }).catch(() => {})
   }, [open])
 
-  // Load available configs for seed picker
-  useEffect(() => {
-    if (!open) return
-    listConfigs(false).then(cs => {
-      // Only show non-chaos, non-test configs as seed candidates
-      setAvailableConfigs(cs.filter(c => c.status !== 'archived'))
-    }).catch(() => {})
-  }, [open])
 
   // Poll while running
   useEffect(() => {
@@ -346,27 +337,6 @@ function StepEvolve({
             </div>
           </div>
 
-          {/* Seed config picker — optional selective evolution */}
-          <div className="space-y-1.5">
-            <p className="text-xs text-slate-400 font-medium">Seed From Config <span className="text-slate-600">(optional)</span></p>
-            <p className="text-xs text-slate-600">Pick an existing config to focus the search near those parameters. Evolution still explores new territory — ~40% of the population starts random.</p>
-            <select
-              value={seedConfigName}
-              onChange={e => setSeedConfigName(e.target.value)}
-              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 appearance-none"
-            >
-              <option value="">— Start from scratch —</option>
-              {availableConfigs.map(c => (
-                <option key={c.name} value={c.name}>
-                  {c.name}{c.fitness != null ? ` · fit ${c.fitness.toFixed(2)}` : ''}{c.source === 'evolved' ? ' 🧬' : c.source === 'manual' ? ' ✍️' : ''}
-                </option>
-              ))}
-            </select>
-            {seedConfigName && (
-              <p className="text-xs text-amber-400">🧬 Seeding from <span className="font-mono">{seedConfigName}</span> — evolution will mutate around this baseline</p>
-            )}
-          </div>
-
           {launchErr && (
             <p className="text-xs px-3 py-2 rounded-lg border bg-red-950 border-red-800 text-red-300">{launchErr}</p>
           )}
@@ -376,7 +346,7 @@ function StepEvolve({
             disabled={launching}
             className="w-full bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
           >
-            {launching ? 'Launching…' : seedConfigName ? `Evolve From '${seedConfigName}'` : `Run ${goalMeta?.label ?? ''} Evolution`}
+            {launching ? 'Launching…' : `Run ${goalMeta?.label ?? ''} Evolution`}
           </button>
 
           {/* Previous result summary */}
