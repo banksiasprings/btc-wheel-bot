@@ -1,266 +1,14 @@
 {
-  "updated_at": "2026-04-25T19:16:01.924561+00:00",
+  "updated_at": "2026-04-25T19:19:10.382276+00:00",
   "bots": [
-    {
-      "id": "daily-trader-v1",
-      "name": "daily trader V1",
-      "description": "Paper trading: daily trader V1",
-      "status": "running",
-      "pid": 14661,
-      "uptime_hours": 14.84,
-      "days_running": 0.62,
-      "config_name": "daily trader V1",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.701,
-        "target_delta_min": 0.1883,
-        "target_delta_max": 0.4057,
-        "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
-    {
-      "id": "chaos-tester",
-      "name": "chaos-tester",
-      "description": "Paper trading: chaos-tester",
-      "status": "running",
-      "pid": 13980,
-      "uptime_hours": 15.8,
-      "days_running": 0.66,
-      "config_name": "chaos-tester",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.0,
-        "target_delta_min": 0.2,
-        "target_delta_max": 0.5,
-        "max_equity_per_leg": 0.1,
-        "starting_equity": 100000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 100000.0,
-        "starting_equity": 100000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
-    {
-      "id": "chaos-hedged",
-      "name": "chaos-hedged",
-      "description": "Paper trading: chaos-hedged",
-      "status": "running",
-      "pid": 14662,
-      "uptime_hours": 14.84,
-      "days_running": 0.62,
-      "config_name": "chaos-hedged",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.0,
-        "target_delta_min": 0.2,
-        "target_delta_max": 0.5,
-        "max_equity_per_leg": 0.1,
-        "starting_equity": 100000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 100000.0,
-        "starting_equity": 100000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
-    {
-      "id": "max-yield-v1",
-      "name": "max yield V1",
-      "description": "Paper trading: max yield V1",
-      "status": "running",
-      "pid": 14883,
-      "uptime_hours": 14.69,
-      "days_running": 0.61,
-      "config_name": "max yield V1",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.7467,
-        "target_delta_min": 0.1895,
-        "target_delta_max": 0.4115,
-        "max_equity_per_leg": 0.0412,
-        "starting_equity": 1000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
-    {
-      "id": "capital-roi-v1",
-      "name": "capital ROI V1",
-      "description": "Paper trading: capital ROI V1",
-      "status": "running",
-      "pid": 16605,
-      "uptime_hours": 12.13,
-      "days_running": 0.51,
-      "config_name": "capital ROI V1",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.701,
-        "target_delta_min": 0.1883,
-        "target_delta_max": 0.4057,
-        "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
-    {
-      "id": "sharpe-v1",
-      "name": "sharpe V1",
-      "description": "Paper trading: sharpe V1",
-      "status": "running",
-      "pid": 16643,
-      "uptime_hours": 12.1,
-      "days_running": 0.5,
-      "config_name": "sharpe V1",
-      "config_status": "paper",
-      "config_summary": {
-        "iv_rank_threshold": 0.701,
-        "target_delta_min": 0.1883,
-        "target_delta_max": 0.4057,
-        "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
-      },
-      "metrics": {
-        "num_trades": 0,
-        "win_rate": 0.0,
-        "total_return_pct": 0.0,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
-      },
-      "readiness": {
-        "score": 2,
-        "total": 8,
-        "ready": false,
-        "checks": {
-          "min_trades": false,
-          "min_days": false,
-          "sharpe": false,
-          "drawdown": true,
-          "win_rate": false,
-          "walk_forward": false,
-          "reconcile": false,
-          "no_kill_switch": true
-        }
-      }
-    },
     {
       "id": "safest-v1",
       "name": "Safest V1",
       "description": "Paper trading: Safest V1",
-      "status": "running",
-      "pid": 18221,
-      "uptime_hours": 9.57,
-      "days_running": 0.4,
+      "status": "error",
+      "pid": 25106,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
       "config_name": "Safest V1",
       "config_status": "paper",
       "config_summary": {
@@ -293,7 +41,285 @@
           "reconcile": false,
           "no_kill_switch": true
         }
+      },
+      "has_open_position": false,
+      "open_position": null
+    },
+    {
+      "id": "capital-roi-v1",
+      "name": "capital ROI V1",
+      "description": "Paper trading: capital ROI V1",
+      "status": "error",
+      "pid": 25108,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "capital ROI V1",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.701,
+        "target_delta_min": 0.1883,
+        "target_delta_max": 0.4057,
+        "max_equity_per_leg": 0.0828,
+        "starting_equity": 1000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 1000.0,
+        "starting_equity": 1000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": false,
+      "open_position": null
+    },
+    {
+      "id": "chaos-hedged",
+      "name": "chaos-hedged",
+      "description": "Paper trading: chaos-hedged",
+      "status": "error",
+      "pid": 25109,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "chaos-hedged",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.0,
+        "target_delta_min": 0.2,
+        "target_delta_max": 0.5,
+        "max_equity_per_leg": 0.1,
+        "starting_equity": 100000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 77000.0,
+        "expiry": "2026-04-27",
+        "dte": 1,
+        "pnl_usd": -3.87
       }
+    },
+    {
+      "id": "chaos-tester",
+      "name": "chaos-tester",
+      "description": "Paper trading: chaos-tester",
+      "status": "error",
+      "pid": 25111,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "chaos-tester",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.0,
+        "target_delta_min": 0.2,
+        "target_delta_max": 0.5,
+        "max_equity_per_leg": 0.1,
+        "starting_equity": 100000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 76000.0,
+        "expiry": "2026-05-01",
+        "dte": 5,
+        "pnl_usd": -10.83
+      }
+    },
+    {
+      "id": "daily-trader-v1",
+      "name": "daily trader V1",
+      "description": "Paper trading: daily trader V1",
+      "status": "error",
+      "pid": 25113,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "daily trader V1",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.701,
+        "target_delta_min": 0.1883,
+        "target_delta_max": 0.4057,
+        "max_equity_per_leg": 0.0828,
+        "starting_equity": 1000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 1000.0,
+        "starting_equity": 1000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": false,
+      "open_position": null
+    },
+    {
+      "id": "max-yield-v1",
+      "name": "max yield V1",
+      "description": "Paper trading: max yield V1",
+      "status": "error",
+      "pid": 25114,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "max yield V1",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.7467,
+        "target_delta_min": 0.1895,
+        "target_delta_max": 0.4115,
+        "max_equity_per_leg": 0.0412,
+        "starting_equity": 1000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 1000.0,
+        "starting_equity": 1000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": false,
+      "open_position": null
+    },
+    {
+      "id": "sharpe-v1",
+      "name": "sharpe V1",
+      "description": "Paper trading: sharpe V1",
+      "status": "error",
+      "pid": 25115,
+      "uptime_hours": 0.0,
+      "days_running": 0.0,
+      "config_name": "sharpe V1",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.701,
+        "target_delta_min": 0.1883,
+        "target_delta_max": 0.4057,
+        "max_equity_per_leg": 0.0828,
+        "starting_equity": 1000.0
+      },
+      "metrics": {
+        "num_trades": 0,
+        "win_rate": 0.0,
+        "total_return_pct": 0.0,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0,
+        "current_equity": 1000.0,
+        "starting_equity": 1000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": false,
+      "open_position": null
     }
   ]
 }

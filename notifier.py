@@ -124,3 +124,22 @@ def notify_high_iv_warning(iv_rank: float, bot_name: str = "") -> None:
         f"IV rank: <b>{iv_rank:.1%}</b> — extreme volatility.\n"
         f"New positions capped at 1 leg until IV normalises."
     )
+
+
+def notify_farm_started(bot_count: int, live_bot_count: int = 0) -> None:
+    """Sent by the API when the farm supervisor process is launched."""
+    live_note = f"\n⚡ {live_bot_count} bot{'s' if live_bot_count != 1 else ''} ready for live trading" if live_bot_count else ""
+    _send(
+        f"🟢 <b>Bot Farm started</b>\n"
+        f"{bot_count} bot{'s' if bot_count != 1 else ''} initialising{live_note}"
+    )
+
+
+def notify_farm_stopped(bot_count: int, open_positions: int = 0, manual: bool = True) -> None:
+    """Sent by the API immediately before the farm supervisor process is killed."""
+    trigger = "manually stopped" if manual else "stopped"
+    pos_note = f"\n⚠️ {open_positions} open position{'s' if open_positions != 1 else ''} left unmanaged — check Deribit" if open_positions else "\nNo open positions."
+    _send(
+        f"🔴 <b>Bot Farm {trigger}</b>\n"
+        f"{bot_count} bot{'s' if bot_count != 1 else ''} halted{pos_note}"
+    )

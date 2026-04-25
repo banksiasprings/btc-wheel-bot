@@ -1784,6 +1784,24 @@ def farm_start() -> dict:
         stderr=subprocess.STDOUT,
     )
     FARM_PID_FILE.write_text(str(proc.pid))
+
+    # Notify via Telegram — count bots and any that are live-ready
+    try:
+        import notifier as _notifier
+        bot_dirs = [d for d in FARM_DIR.iterdir() if d.is_dir() and (d / "config.yaml").exists()]
+        live_count = 0
+        for bd in bot_dirs:
+            try:
+                import yaml as _yaml
+                cfg = _yaml.safe_load((bd / "config.yaml").read_text()) or {}
+                if cfg.get("_meta", {}).get("status") in ("live", "ready"):
+                    live_count += 1
+            except Exception:
+                pass
+        _notifier.notify_farm_started(len(bot_dirs), live_count)
+    except Exception:
+        pass
+
     return {"status": "started", "pid": proc.pid}
 
 
@@ -1792,6 +1810,25 @@ def farm_stop() -> dict:
     """Send SIGTERM to the bot_farm.py process."""
     if not FARM_PID_FILE.exists():
         return {"status": "not_running"}
+
+    # Gather farm state BEFORE killing so we can include it in the notification
+    try:
+        import notifier as _notifier
+        bot_dirs = [d for d in FARM_DIR.iterdir() if d.is_dir() and (d / "config.yaml").exists()]
+        open_positions = 0
+        for bd in bot_dirs:
+            try:
+                pos_path = bd / "data" / "current_position.json"
+                if pos_path.exists():
+                    pos = _read_json(pos_path) or {}
+                    if pos.get("instrument") or pos.get("strike"):
+                        open_positions += 1
+            except Exception:
+                pass
+        _notifier.notify_farm_stopped(len(bot_dirs), open_positions, manual=True)
+    except Exception:
+        pass
+
     try:
         pid = int(FARM_PID_FILE.read_text().strip())
         os.kill(pid, signal.SIGTERM)
