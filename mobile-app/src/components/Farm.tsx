@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getFarmStatus, startFarm, stopFarm, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ function StatusDot({ status }: { status: string }) {
 
 // ── Bot card ─────────────────────────────────────────────────────────────────
 
-function BotCard({ bot, onRefresh: _onRefresh }: { bot: BotFarmEntry; onRefresh: () => void }) {
+function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt }: { bot: BotFarmEntry; onRefresh: () => void; isDragging?: boolean; onExpandAttempt?: () => boolean }) {
   const [expanded, setExpanded]   = useState(false)
   const [promoteMsg, setPromoteMsg] = useState('')
   const [liveState, setLiveState]   = useState<BotLiveState | null>(null)
@@ -121,9 +121,15 @@ function BotCard({ bot, onRefresh: _onRefresh }: { bot: BotFarmEntry; onRefresh:
       {/* Header row */}
       <button
         className="w-full flex items-center justify-between px-4 py-3 text-left"
-        onClick={() => setExpanded(e => !e)}
+        onClick={() => {
+          // Suppress expand if the tap was really the end of a drag
+          if (onExpandAttempt && !onExpandAttempt()) return
+          setExpanded(e => !e)
+        }}
       >
         <div className="flex items-center gap-2.5 min-w-0">
+          {/* Drag handle — visible always, glows amber when actively dragging */}
+          <span className={`text-sm select-none flex-shrink-0 transition-colors ${isDragging ? 'text-amber-400' : 'text-slate-700'}`}>⠿</span>
           <StatusDot status={bot.status} />
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
@@ -542,6 +548,93 @@ export default function Farm() {
   const runningBots = bots.filter(b => b.status === 'running').length
   const readyBots   = bots.filter(b => b.readiness.ready).length
 
+  // ── Drag-to-reorder ──────────────────────────────────────────────────────────
+  const [botOrder, setBotOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('farm_bot_order')
+      return saved ? JSON.parse(saved) : []
+    } catch { return [] }
+  })
+  const [draggingId, setDraggingId]   = useState<string | null>(null)
+  const cardRefs      = useRef<Record<string, HTMLDivElement | null>>({})
+  const longPressRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const liveOrderRef  = useRef<string[]>([])   // tracks order during active drag
+  const lastSwapRef   = useRef<number>(0)       // throttle rapid swaps
+  const didDragRef    = useRef(false)           // suppress expand-click after drag
+
+  const sortedBots = useMemo(() => {
+    if (botOrder.length === 0) return bots
+    return [...bots].sort((a, b) => {
+      const ia = botOrder.indexOf(a.id)
+      const ib = botOrder.indexOf(b.id)
+      if (ia === -1 && ib === -1) return 0
+      if (ia === -1) return 1
+      if (ib === -1) return -1
+      return ia - ib
+    })
+  }, [bots, botOrder])
+
+  function startLongPress(botId: string) {
+    longPressRef.current = setTimeout(() => {
+      liveOrderRef.current = sortedBots.map(b => b.id)
+      setDraggingId(botId)
+      if (navigator.vibrate) navigator.vibrate(40)
+    }, 500)
+  }
+
+  function handleCardTouchMove(e: React.TouchEvent, botId: string) {
+    // Cancel long-press if finger moves before the timer fires
+    if (!draggingId) {
+      if (longPressRef.current) { clearTimeout(longPressRef.current); longPressRef.current = null }
+      return
+    }
+    if (draggingId !== botId) return
+    e.preventDefault()  // prevent scroll while dragging
+
+    // Throttle: skip if last swap was < 120ms ago
+    const now = Date.now()
+    if (now - lastSwapRef.current < 120) return
+
+    const touch = e.touches[0]
+    const order = liveOrderRef.current
+
+    // Find the non-dragged card whose centre is closest to the finger
+    let bestId = botId
+    let bestDist = Infinity
+    for (const id of order) {
+      if (id === botId) continue
+      const ref = cardRefs.current[id]
+      if (!ref) continue
+      const rect = ref.getBoundingClientRect()
+      const dist = Math.abs(touch.clientY - (rect.top + rect.height / 2))
+      if (dist < bestDist) { bestDist = dist; bestId = id }
+    }
+
+    if (bestId !== botId) {
+      const fromIdx = order.indexOf(botId)
+      const toIdx   = order.indexOf(bestId)
+      if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
+        const newOrder = [...order]
+        newOrder.splice(fromIdx, 1)
+        newOrder.splice(toIdx, 0, botId)
+        liveOrderRef.current = newOrder
+        lastSwapRef.current  = now
+        setBotOrder(newOrder)
+      }
+    }
+  }
+
+  function endDrag(e?: React.TouchEvent) {
+    if (longPressRef.current) { clearTimeout(longPressRef.current); longPressRef.current = null }
+    if (draggingId) {
+      if (e) e.preventDefault()  // prevent the synthesised click from toggling expand
+      didDragRef.current = true
+      setTimeout(() => { didDragRef.current = false }, 200)
+      localStorage.setItem('farm_bot_order', JSON.stringify(liveOrderRef.current))
+    }
+    setDraggingId(null)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 text-slate-400">
@@ -664,12 +757,40 @@ export default function Farm() {
         </div>
       )}
 
-      {/* Bot cards */}
+      {/* Bot cards — long-press any card to drag-reorder */}
       {bots.length > 0 && (
         <div className="space-y-3">
-          {bots.map(bot => (
-            <BotCard key={bot.id} bot={bot} onRefresh={fetchStatus} />
+          {draggingId && (
+            <p className="text-xs text-amber-400 text-center animate-pulse">Drag to reorder · release to drop</p>
+          )}
+          {sortedBots.map(bot => (
+            <div
+              key={bot.id}
+              ref={el => { cardRefs.current[bot.id] = el }}
+              onTouchStart={() => startLongPress(bot.id)}
+              onTouchMove={e => handleCardTouchMove(e, bot.id)}
+              onTouchEnd={e => endDrag(e)}
+              onTouchCancel={() => endDrag()}
+              className={`transition-all duration-150 ${
+                draggingId === bot.id
+                  ? 'opacity-70 scale-[0.97] shadow-2xl relative z-10'
+                  : draggingId
+                  ? 'opacity-90'
+                  : ''
+              }`}
+              style={{ touchAction: draggingId === bot.id ? 'none' : 'pan-y' }}
+            >
+              <BotCard
+                bot={bot}
+                onRefresh={fetchStatus}
+                isDragging={draggingId === bot.id}
+                onExpandAttempt={() => !didDragRef.current}
+              />
+            </div>
           ))}
+          {bots.length > 1 && !draggingId && (
+            <p className="text-xs text-slate-700 text-center">Hold a card to reorder</p>
+          )}
         </div>
       )}
     </div>
