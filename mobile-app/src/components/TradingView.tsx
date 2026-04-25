@@ -19,7 +19,7 @@ interface ChartPoint {
   tradeStrike?: number
 }
 
-type InfoType = 'trade' | 'strike' | 'breakeven' | 'zone' | 'expiry' | 'projection'
+type InfoType = 'trade' | 'strike' | 'breakeven' | 'zone' | 'expiry' | 'projection' | 'est_strike' | 'est_breakeven'
 interface InfoPanel { type: InfoType; payload?: ChartPoint }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -188,6 +188,34 @@ function InfoPanelContent({
       ]
       break
     }
+    case 'est_strike': {
+      const estStrike = o.zone_center ?? o.zone_lower
+      const otm = cfg ? `${(cfg.otm_offset * 100).toFixed(1)}%` : null
+      icon = '🎯'
+      color = 'text-amber-400'
+      title = `Est. Next Strike — ${estStrike ? K(estStrike) : '?'}`
+      body = [
+        `This is where the bot would likely sell its next PUT — the center of the current entry zone, based on the ${otm ?? 'configured'} out-of-the-money offset applied to the current BTC price.`,
+        `The bot does NOT have an open position yet. This line is estimated — the actual strike chosen at entry may differ depending on available strikes on Deribit.`,
+        `The bot enters when IV Rank rises above ${cfg ? `${(cfg.iv_rank_threshold * 100).toFixed(0)}%` : 'the threshold'}. Right now it is monitoring and waiting for that signal.`,
+      ]
+      break
+    }
+    case 'est_breakeven': {
+      const estStrike = o.zone_center ?? o.zone_lower
+      const pf = cfg?.premium_fraction
+      const estBE = estStrike && pf ? estStrike * (1 - pf) : null
+      icon = '📈'
+      color = 'text-teal-400'
+      title = `Est. Breakeven — ${estBE ? K(estBE) : '?'}`
+      body = [
+        `Estimated breakeven if the bot enters near the current zone center (${estStrike ? K(estStrike) : '?'}).`,
+        `Calculated as: strike × (1 − premium fraction). The premium fraction (${pf ? (pf * 100).toFixed(2) + '%' : '?'}) is the minimum premium the bot requires as a % of the strike.`,
+        `If BTC stays above this level at expiry, the trade is profitable. Below this, losses exceed the premium collected.`,
+        `This is an estimate only — the actual breakeven depends on the premium received at trade entry.`,
+      ]
+      break
+    }
   }
 
   return (
@@ -287,6 +315,14 @@ export default function TradingView() {
     return hist
   })()
 
+  // ── Monitoring / estimated overlays (when no open position) ────────────────
+
+  const isMonitoring = !!chartData && !chartData.overlays?.active_strike
+  const estStrike    = isMonitoring ? (chartData?.overlays?.zone_center ?? chartData?.overlays?.zone_lower ?? null) : null
+  const estBreakeven = estStrike && chartData?.config?.premium_fraction != null
+    ? estStrike * (1 - chartData.config.premium_fraction)
+    : null
+
   // ── Y axis domain ───────────────────────────────────────────────────────────
 
   const histPoints = allChartData.filter(p => !p.isFuture)
@@ -298,6 +334,7 @@ export default function TradingView() {
     const vals = [
       ...allChartData.map(c => c.close ?? c.projected ?? 0).filter(v => v > 0),
       o?.active_strike, o?.breakeven, o?.zone_upper, o?.zone_lower,
+      estStrike, estBreakeven,
     ].filter((v): v is number => v != null && v > 0)
     const mn = Math.min(...vals), mx = Math.max(...vals)
     const pad = (mx - mn) * 0.06
@@ -414,6 +451,8 @@ export default function TradingView() {
               <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-green-500"/>BTC Price</span>
               {o?.active_strike   && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-orange-400"/>Strike</span>}
               {o?.breakeven       && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-emerald-400"/>Breakeven</span>}
+              {estStrike != null  && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-amber-500 opacity-60"/>Est. Strike</span>}
+              {estBreakeven != null && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-teal-400 opacity-60"/>Est. BE</span>}
               {o?.zone_lower      && <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-2.5 rounded-sm bg-blue-500 opacity-40"/>Entry Zone</span>}
               {tradeCount > 0     && <span className="flex items-center gap-1.5"><span className="text-green-400 font-bold text-xs">▲</span><span className="text-red-400 font-bold text-xs">▼</span>Trades</span>}
               <span className="flex items-center gap-1.5 ml-auto"><span className="inline-block w-3 border-t border-dashed border-slate-500"/>Projection</span>
@@ -500,6 +539,20 @@ export default function TradingView() {
                   />
                 )}
 
+                {/* Est. Strike (monitoring mode) */}
+                {estStrike != null && (
+                  <ReferenceLine y={estStrike} stroke="#f59e0b" strokeDasharray="4 6" strokeWidth={1.5} strokeOpacity={0.6}
+                    label={{ value: `Est. Strike ${K(estStrike)}`, position: 'insideTopLeft', fill: '#f59e0b', fontSize: 9, opacity: 0.75 }}
+                  />
+                )}
+
+                {/* Est. Breakeven (monitoring mode) */}
+                {estBreakeven != null && (
+                  <ReferenceLine y={estBreakeven} stroke="#2dd4bf" strokeDasharray="3 7" strokeWidth={1.5} strokeOpacity={0.55}
+                    label={{ value: `Est. BE ${K(estBreakeven)}`, position: 'insideBottomLeft', fill: '#2dd4bf', fontSize: 9, opacity: 0.7 }}
+                  />
+                )}
+
                 {/* Expiry vertical */}
                 {o?.expiry_ts != null && o.expiry_ts > nowTs && (
                   <ReferenceLine x={o.expiry_ts} stroke="#a78bfa" strokeDasharray="4 4" strokeWidth={1.5}
@@ -510,7 +563,7 @@ export default function TradingView() {
             </ResponsiveContainer>
 
             {/* Clickable key-level chips */}
-            {(o?.active_strike || o?.breakeven || o?.zone_lower || o?.expiry_ts) && (
+            {(o?.active_strike || o?.breakeven || o?.zone_lower || o?.expiry_ts || estStrike || estBreakeven) && (
               <div className="flex flex-wrap gap-2 px-3 py-3 border-t border-slate-800">
                 {o?.active_strike && (
                   <button onClick={() => setInfoPanel(p => p?.type === 'strike' ? null : { type: 'strike' })}
@@ -526,6 +579,23 @@ export default function TradingView() {
                       infoPanel?.type === 'breakeven' ? 'bg-emerald-900/60 border-emerald-600 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-emerald-300'
                     }`}>
                     📈 Breakeven {K(o.breakeven)}
+                  </button>
+                )}
+                {/* Estimated chips — shown in monitoring mode (no active position) */}
+                {estStrike != null && (
+                  <button onClick={() => setInfoPanel(p => p?.type === 'est_strike' ? null : { type: 'est_strike' })}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-colors opacity-75 ${
+                      infoPanel?.type === 'est_strike' ? 'bg-amber-900/60 border-amber-600 text-amber-300' : 'bg-slate-800 border-slate-700 border-dashed text-slate-400 hover:text-amber-300'
+                    }`}>
+                    🎯 Est. Strike {K(estStrike)}
+                  </button>
+                )}
+                {estBreakeven != null && (
+                  <button onClick={() => setInfoPanel(p => p?.type === 'est_breakeven' ? null : { type: 'est_breakeven' })}
+                    className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-colors opacity-75 ${
+                      infoPanel?.type === 'est_breakeven' ? 'bg-teal-900/60 border-teal-600 text-teal-300' : 'bg-slate-800 border-slate-700 border-dashed text-slate-400 hover:text-teal-300'
+                    }`}>
+                    📈 Est. BE {K(estBreakeven)}
                   </button>
                 )}
                 {o?.zone_lower && (
@@ -589,6 +659,56 @@ export default function TradingView() {
               )}
             </div>
             {o.expiry_ts && <p className="text-xs text-slate-400">Expires {fmtDate(o.expiry_ts)}</p>}
+          </div>
+        )}
+
+        {/* ── Monitoring card — shown when no open position ────────────────── */}
+        {isMonitoring && chartData && (
+          <div className="bg-card rounded-2xl border border-slate-700 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-60"/>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"/>
+                </span>
+                <span className="text-sm font-bold text-white">Monitoring — No Open Position</span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">Waiting</span>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              The bot is watching the market but has not yet entered a trade.
+              It will sell a PUT option when IV Rank rises above{' '}
+              <span className="text-white font-medium">
+                {chartData.config ? `${(chartData.config.iv_rank_threshold * 100).toFixed(0)}%` : 'the threshold'}
+              </span>
+              {' '}— indicating options are expensive enough to collect meaningful premium.
+            </p>
+            {(estStrike || estBreakeven || o?.zone_lower) && (
+              <div className="grid grid-cols-3 gap-2">
+                {estStrike != null && (
+                  <div className="bg-navy rounded-xl px-3 py-2 text-center border border-dashed border-amber-800/50">
+                    <p className="text-xs text-slate-500">Est. Strike</p>
+                    <p className="text-sm font-semibold text-amber-400/80 mt-0.5">{K(estStrike)}</p>
+                    {chartData.current_price && <p className="text-xs text-slate-500">↑ {((chartData.current_price - estStrike) / chartData.current_price * 100).toFixed(1)}%</p>}
+                  </div>
+                )}
+                {estBreakeven != null && (
+                  <div className="bg-navy rounded-xl px-3 py-2 text-center border border-dashed border-teal-800/50">
+                    <p className="text-xs text-slate-500">Est. BE</p>
+                    <p className="text-sm font-semibold text-teal-400/80 mt-0.5">{K(estBreakeven)}</p>
+                    {chartData.current_price && <p className="text-xs text-slate-500">↑ {((chartData.current_price - estBreakeven) / chartData.current_price * 100).toFixed(1)}%</p>}
+                  </div>
+                )}
+                {o?.zone_lower && o?.zone_upper && (
+                  <div className="bg-navy rounded-xl px-3 py-2 text-center">
+                    <p className="text-xs text-slate-500">Entry Zone</p>
+                    <p className="text-xs font-semibold text-blue-400/80 mt-0.5">{K(o.zone_lower)}</p>
+                    <p className="text-xs text-slate-500">↕ {K(o.zone_upper)}</p>
+                  </div>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-slate-600 italic">Values marked Est. are projections based on current config — actual levels depend on market conditions at entry.</p>
           </div>
         )}
 
