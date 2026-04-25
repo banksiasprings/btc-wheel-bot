@@ -574,6 +574,15 @@ export default function Farm() {
     })
   }, [bots, botOrder])
 
+  // Lock page scroll while dragging — React synthetic handlers are passive and
+  // can't preventDefault, so we attach a native listener with passive:false.
+  useEffect(() => {
+    if (!draggingId) return
+    const block = (e: TouchEvent) => e.preventDefault()
+    document.addEventListener('touchmove', block, { passive: false })
+    return () => document.removeEventListener('touchmove', block)
+  }, [draggingId])
+
   function startLongPress(botId: string) {
     longPressRef.current = setTimeout(() => {
       liveOrderRef.current = sortedBots.map(b => b.id)
