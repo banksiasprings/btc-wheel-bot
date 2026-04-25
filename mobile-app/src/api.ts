@@ -330,8 +330,8 @@ export interface ChartData {
   trade_markers: TradeMarker[]
 }
 
-export const getChartData = (days: number) =>
-  request<ChartData>(`/chart/btc_history?days=${days}`)
+export const getChartData = (days: number, botId?: string) =>
+  request<ChartData>(`/chart/btc_history?days=${days}${botId ? `&bot_id=${encodeURIComponent(botId)}` : ''}`)
 
 // ── Farm API ──────────────────────────────────────────────────────────────────
 

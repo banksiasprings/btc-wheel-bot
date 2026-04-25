@@ -1353,9 +1353,9 @@ def notifications_test() -> dict:
 _chart_cache: dict = {}
 
 @app.get("/chart/btc_history", dependencies=[Depends(_require_api_key)])
-def get_btc_history(days: int = 30) -> dict:
+def get_btc_history(days: int = 30, bot_id: str | None = None) -> dict:
     """Return BTC OHLC candles + strategy overlay values for the chart."""
-    cache_key = f"chart_{days}"
+    cache_key = f"chart_{days}_{bot_id or 'main'}"
     now = time.time()
     if _chart_cache.get(cache_key, {}).get("expires", 0) > now:
         return _chart_cache[cache_key]["data"]
@@ -1415,8 +1415,14 @@ def get_btc_history(days: int = 30) -> dict:
         pass
 
     # Config overlays
-    cfg = _read_yaml(BASE_DIR / "config.yaml") or {}
-    pos = _read_json(DATA_DIR / "current_position.json") or {}
+    if bot_id:
+        effective_data_dir = FARM_DIR / bot_id / "data"
+        cfg = _read_yaml(FARM_DIR / bot_id / "config.yaml") or {}
+        pos = _read_json(effective_data_dir / "current_position.json") or {}
+    else:
+        effective_data_dir = DATA_DIR
+        cfg = _read_yaml(BASE_DIR / "config.yaml") or {}
+        pos = _read_json(DATA_DIR / "current_position.json") or {}
 
     otm_offset       = cfg.get("backtest",  {}).get("approx_otm_offset",        0.05)
     delta_min        = cfg.get("strategy",  {}).get("target_delta_min",          0.15)
@@ -1451,25 +1457,46 @@ def get_btc_history(days: int = 30) -> dict:
             pass
 
     # Trade history markers
-    raw_trades = _read_json(DATA_DIR / "paper_trades" / "paper_trades.json") or []
+    import csv as _csv
     trade_markers = []
-    for t in raw_trades:
-        try:
-            entry_ts = int(datetime.fromisoformat(t["entry_date"]).timestamp())
-            exit_ts: int | None = None
-            if t.get("exit_date"):
-                exit_ts = int(datetime.fromisoformat(t["exit_date"]).timestamp())
-            pnl = t.get("pnl_usd") or 0
-            trade_markers.append({
-                "entry_time": entry_ts,
-                "exit_time":  exit_ts,
-                "strike":     t.get("strike"),
-                "pnl_usd":    pnl,
-                "won":        pnl >= 0,
-                "reason":     t.get("reason", ""),
-            })
-        except Exception:
-            continue
+    if bot_id:
+        trades_path = effective_data_dir / "trades.csv"
+        if trades_path.exists():
+            with open(trades_path, newline="") as f:
+                for row in _csv.DictReader(f):
+                    try:
+                        exit_ts = int(datetime.fromisoformat(row["timestamp"]).timestamp())
+                        strike = float(row.get("strike") or 0)
+                        pnl = float(row.get("pnl_usd") or 0)
+                        trade_markers.append({
+                            "entry_time": exit_ts,
+                            "exit_time": exit_ts,
+                            "strike": strike,
+                            "pnl_usd": pnl,
+                            "won": pnl >= 0,
+                            "reason": row.get("reason", ""),
+                        })
+                    except Exception:
+                        continue
+    else:
+        raw_trades = _read_json(DATA_DIR / "paper_trades" / "paper_trades.json") or []
+        for t in raw_trades:
+            try:
+                entry_ts = int(datetime.fromisoformat(t["entry_date"]).timestamp())
+                exit_ts_val: int | None = None
+                if t.get("exit_date"):
+                    exit_ts_val = int(datetime.fromisoformat(t["exit_date"]).timestamp())
+                pnl = t.get("pnl_usd") or 0
+                trade_markers.append({
+                    "entry_time": entry_ts,
+                    "exit_time":  exit_ts_val,
+                    "strike":     t.get("strike"),
+                    "pnl_usd":    pnl,
+                    "won":        pnl >= 0,
+                    "reason":     t.get("reason", ""),
+                })
+            except Exception:
+                continue
 
     payload = {
         "candles":      candles,

@@ -4,12 +4,14 @@ import Farm from './components/Farm'
 import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
 import Settings from './components/Settings'
+import TradingView from './components/TradingView'
 import { hasCredentials } from './credentials'
 
-type Tab = 'farm' | 'performance' | 'pipeline' | 'settings'
+type Tab = 'farm' | 'trading' | 'performance' | 'pipeline' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   farm:        '🤖',
+  trading:     '📊',
   performance: '📈',
   pipeline:    '🗺',
   settings:    '⚙',
@@ -17,12 +19,13 @@ const TAB_ICONS: Record<Tab, string> = {
 
 const TAB_LABELS: Record<Tab, string> = {
   farm:        'Farm',
+  trading:     'Trading',
   performance: 'Performance',
   pipeline:    'Pipeline',
   settings:    'Settings',
 }
 
-const TABS: Tab[] = ['farm', 'performance', 'pipeline', 'settings']
+const TABS: Tab[] = ['farm', 'trading', 'performance', 'pipeline', 'settings']
 
 export default function App() {
   const [isSetup, setIsSetup]   = useState(false)
@@ -40,6 +43,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'farm'        && <Farm />}
+        {activeTab === 'trading'     && <TradingView />}
         {activeTab === 'performance' && <Performance />}
         {activeTab === 'pipeline'    && <Pipeline />}
         {activeTab === 'settings'    && <Settings />}
