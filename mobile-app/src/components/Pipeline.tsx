@@ -12,10 +12,12 @@ import {
   updateConfigParams,
   getOptimizerProgress, EvolutionProgress,
   getEvolveResults, EvolveResults, EvolveGenome,
+  getOptimizerRunning, WalkForwardResults, MonteCarloResults, getWalkForwardResults, getMonteCarloResults,
 } from '../api'
 import {
   LineChart, Line,
   ScatterChart, Scatter,
+  BarChart, Bar, Cell, ReferenceLine,
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import ConfigSelector from './ConfigSelector'
@@ -567,66 +569,310 @@ function StepEvolve({
   )
 }
 
+// ── Step 2 helpers ────────────────────────────────────────────────────────────
+
+function WFResultsPanel({ r }: { r: WalkForwardResults }) {
+  const rob = r.robustness_score ?? 0
+  const isStrong     = rob >= 0.8
+  const isAcceptable = rob >= 0.5
+  const robColor    = isStrong ? 'text-green-400'  : isAcceptable ? 'text-amber-400'  : 'text-red-400'
+  const robBarColor = isStrong ? 'bg-green-500'    : isAcceptable ? 'bg-amber-500'    : 'bg-red-500'
+  const verdictBg   = isStrong ? 'bg-green-900/40 text-green-300' : isAcceptable ? 'bg-amber-900/40 text-amber-300' : 'bg-red-900/40 text-red-300'
+  const IS = r.in_sample
+  const OOS = r.out_of_sample
+  const fmtRet = (n?: number) => n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+  const fmtN   = (n?: number, d = 2) => n == null ? '—' : n.toFixed(d)
+  return (
+    <div className="space-y-2.5 pt-2">
+      <div>
+        <div className="flex justify-between text-xs mb-1">
+          <span className="text-slate-400">Robustness score</span>
+          <span className={robColor}>{(rob * 100).toFixed(0)}%</span>
+        </div>
+        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full ${robBarColor}`} style={{ width: `${Math.min(rob * 100, 100)}%` }} />
+        </div>
+        <div className="flex justify-between text-xs text-slate-600 mt-0.5">
+          <span>0%</span><span>50%</span><span>80%</span><span>100%</span>
+        </div>
+      </div>
+      {IS && OOS && (
+        <div className="rounded-xl overflow-hidden border border-slate-700/50">
+          <div className="grid grid-cols-3 text-xs text-slate-500 bg-slate-800/60 px-3 py-1.5">
+            <span></span>
+            <span className="text-center text-slate-300">In-Sample</span>
+            <span className="text-center text-amber-400">Out-of-Sample</span>
+          </div>
+          {([
+            ['Sharpe',   fmtN(IS.sharpe),          fmtN(OOS.sharpe)         ],
+            ['Return',   fmtRet(IS.return_pct),    fmtRet(OOS.return_pct)   ],
+            ['Win Rate', `${fmtN(IS.win_rate, 0)}%`, `${fmtN(OOS.win_rate, 0)}%`],
+            ['Drawdown', `${fmtN(IS.max_drawdown, 1)}%`, `${fmtN(OOS.max_drawdown, 1)}%`],
+            ['Trades',   String(IS.num_cycles ?? '—'), String(OOS.num_cycles ?? '—')],
+          ] as [string, string, string][]).map(([label, isV, oosV]) => (
+            <div key={label} className="grid grid-cols-3 text-xs px-3 py-1.5 border-t border-slate-700/30">
+              <span className="text-slate-400">{label}</span>
+              <span className="text-center text-white">{isV}</span>
+              <span className="text-center text-amber-300">{oosV}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className={`text-xs rounded-xl px-3 py-2.5 ${verdictBg}`}>
+        {isStrong ? '✅' : isAcceptable ? '⚠️' : '❌'} {r.verdict ?? (isStrong ? 'Strong' : isAcceptable ? 'Acceptable' : 'Over-fitted')}
+      </div>
+    </div>
+  )
+}
+
+function MCResultsPanel({ r }: { r: MonteCarloResults }) {
+  const prob = r.prob_profit_pct ?? 0
+  const d    = r.distributions?.return_pct
+  const sD   = r.distributions?.sharpe
+  const medSharpe = sD?.p50 ?? 0
+  const isRobust   = medSharpe >= 1.0
+  const isMarginal = medSharpe >= 0.5
+  const verdictBg  = isRobust ? 'bg-green-900/40 text-green-300' : isMarginal ? 'bg-amber-900/40 text-amber-300' : 'bg-red-900/40 text-red-300'
+  const probColor  = prob >= 70 ? 'text-green-400' : prob >= 50 ? 'text-amber-400' : 'text-red-400'
+  const sortedRuns = (r.runs ?? [])
+    .sort((a, b) => a.return_pct - b.return_pct)
+    .map((run, i) => ({ i, v: +run.return_pct.toFixed(2) }))
+  const fmtRet = (n?: number) => n == null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+  return (
+    <div className="space-y-2.5 pt-2">
+      <div className="text-center py-1">
+        <div className={`text-3xl font-bold ${probColor}`}>{prob.toFixed(0)}%</div>
+        <div className="text-xs text-slate-400 mt-0.5">
+          profitable across {r.n_runs ?? 0} random {r.sim_months ?? 6}-month windows
+        </div>
+      </div>
+      {sortedRuns.length > 0 && (
+        <div>
+          <p className="text-xs text-slate-500 mb-1">Return distribution (sorted, each bar = 1 window)</p>
+          <div className="h-24">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={sortedRuns} barCategoryGap={0} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                <ReferenceLine y={0} stroke="#475569" strokeWidth={1} />
+                <Bar dataKey="v" isAnimationActive={false}>
+                  {sortedRuns.map((entry, i) => (
+                    <Cell key={i} fill={entry.v >= 0 ? '#22c55e' : '#ef4444'} opacity={0.75} />
+                  ))}
+                </Bar>
+                <Tooltip
+                  content={({ active, payload }) =>
+                    active && payload?.[0] ? (
+                      <div className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white">
+                        {(payload[0].value as number) >= 0 ? '+' : ''}
+                        {(payload[0].value as number).toFixed(1)}%
+                      </div>
+                    ) : null
+                  }
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+      {d && (
+        <div className="grid grid-cols-3 gap-1.5">
+          {([
+            ['Worst', 'p5',     d.p5,  d.p5 < 0 ? 'text-red-400' : 'text-green-400'],
+            ['Median', 'p50',   d.p50, d.p50 >= 0 ? 'text-green-400' : 'text-red-400'],
+            ['Best',   'p95',   d.p95, 'text-green-400'],
+          ] as [string, string, number, string][]).map(([label, pct, val, color]) => (
+            <div key={label} className="bg-navy rounded-xl px-2 py-2 text-center">
+              <div className={`text-sm font-semibold ${color}`}>{fmtRet(val)}</div>
+              <div className="text-xs text-slate-500 leading-tight mt-0.5">{label}<br/>{pct}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {sD && (
+        <div className="grid grid-cols-2 gap-1.5 text-xs">
+          <div className="bg-navy rounded-xl px-3 py-2">
+            <div className="text-slate-400">Median Sharpe</div>
+            <div className="text-white font-semibold mt-0.5">{medSharpe.toFixed(2)}</div>
+          </div>
+          <div className="bg-navy rounded-xl px-3 py-2">
+            <div className="text-slate-400">Worst Sharpe (p5)</div>
+            <div className={`font-semibold mt-0.5 ${sD.p5 >= 0 ? 'text-white' : 'text-red-400'}`}>{sD.p5.toFixed(2)}</div>
+          </div>
+        </div>
+      )}
+      <div className={`text-xs rounded-xl px-3 py-2.5 ${verdictBg}`}>
+        {isRobust ? '✅ Robust' : isMarginal ? '⚠️ Marginal' : '❌ Fails under stress'} — median Sharpe {medSharpe.toFixed(2)}
+      </div>
+    </div>
+  )
+}
+
+function ValidateTestCard({
+  title, icon, description, state, elapsed, onRun, children,
+}: {
+  title: string; icon: string; description: string
+  state: 'idle' | 'running' | 'done' | 'error'
+  elapsed: number; onRun: () => void; children?: React.ReactNode
+}) {
+  const [showResults, setShowResults] = useState(false)
+  useEffect(() => { if (state === 'done') setShowResults(true) }, [state])
+  const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`
+  return (
+    <div className={`rounded-xl border overflow-hidden ${
+      state === 'done'  ? 'border-green-800/60'
+      : state === 'error' ? 'border-red-800/60'
+      : state === 'running' ? 'border-amber-700/60'
+      : 'border-slate-700'
+    }`}>
+      <div className="flex items-center gap-3 px-3 py-2.5 bg-navy">
+        <span className="text-base">{icon}</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-semibold text-white">{title}</span>
+          {state === 'running' && <span className="text-xs text-amber-400 ml-2 animate-pulse">running · {fmt(elapsed)}</span>}
+          {state === 'done'    && <span className="text-xs text-green-400 ml-2">✓ done</span>}
+          {state === 'error'   && <span className="text-xs text-red-400 ml-2">✗ failed</span>}
+        </div>
+        {state === 'done' ? (
+          <button onClick={() => setShowResults(v => !v)}
+            className="text-xs px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300">
+            {showResults ? 'Hide' : 'Show'}
+          </button>
+        ) : (
+          <button onClick={onRun} disabled={state === 'running'}
+            className="text-xs px-2.5 py-1 rounded-lg bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-blue-200">
+            {state === 'running' ? '…' : 'Run'}
+          </button>
+        )}
+      </div>
+      <div className="px-3 py-2 text-xs text-slate-400 leading-relaxed border-t border-slate-800">
+        {description}
+      </div>
+      {state === 'running' && (
+        <div className="px-3 py-3 flex flex-col items-center gap-2 bg-slate-900/40 border-t border-slate-800">
+          <div className="flex gap-1">
+            {[0,1,2,3].map(i => (
+              <div key={i} className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-bounce"
+                   style={{ animationDelay: `${i * 0.15}s` }} />
+            ))}
+          </div>
+          <span className="text-xs text-slate-400">elapsed {fmt(elapsed)}</span>
+        </div>
+      )}
+      {state === 'done' && showResults && children && (
+        <div className="px-3 pb-3 border-t border-slate-800 bg-slate-900/20">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Step 2 — Validate ─────────────────────────────────────────────────────────
 
 function StepValidate({
-  open, onToggle, configs,
+  open, onToggle,
 }: {
   open: boolean
   onToggle: () => void
-  configs: NamedConfig[]
 }) {
-  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
-  const [running, setRunning]               = useState<Record<string, boolean>>({})
-  const [results, setResults]               = useState<Record<string, string>>({})
+  type TestState = 'idle' | 'running' | 'done' | 'error'
+  const [wfState, setWfState] = useState<TestState>('idle')
+  const [mcState, setMcState] = useState<TestState>('idle')
+  const [wfResults, setWfResults] = useState<WalkForwardResults | null>(null)
+  const [mcResults, setMcResults] = useState<MonteCarloResults | null>(null)
+  const [wfElapsed, setWfElapsed] = useState(0)
+  const [mcElapsed, setMcElapsed] = useState(0)
+  const [runAllActive, setRunAllActive] = useState(false)
 
-  const tests = [
-    { key: 'walk_forward', label: 'Walk-Forward',  mode: 'walk_forward' },
-    { key: 'monte_carlo',  label: 'Monte Carlo',   mode: 'monte_carlo'  },
-    { key: 'reconcile',    label: 'Reconcile',     mode: 'reconcile'    },
-  ] as const
+  // Load any existing results when panel opens
+  useEffect(() => {
+    if (!open) return
+    getWalkForwardResults().then(r => {
+      if (r.available !== false && r.robustness_score != null) { setWfResults(r); setWfState('done') }
+    }).catch(() => {})
+    getMonteCarloResults().then(r => {
+      if (r.available !== false && r.n_runs != null) { setMcResults(r); setMcState('done') }
+    }).catch(() => {})
+  }, [open])
 
-  const doneCount = Object.values(results).filter(v => v.startsWith('✅')).length
-  const status: StepStatus = doneCount === tests.length ? 'complete'
-    : doneCount > 0 ? 'in_progress'
-    : 'not_started'
+  // Run-All chaining: once WF completes, kick off MC automatically
+  useEffect(() => {
+    if (!runAllActive) return
+    if (wfState === 'done' && mcState === 'idle') startMC()
+    if (wfState === 'done' && mcState === 'done') setRunAllActive(false)
+  }, [runAllActive, wfState, mcState])
 
-  async function runTest(mode: string, key: string) {
-    setRunning(r => ({ ...r, [key]: true }))
-    setResults(r => ({ ...r, [key]: '🔄 Running…' }))
-    try {
-      await runOptimizer(mode, undefined, undefined, selectedConfig)
-      setResults(r => ({ ...r, [key]: '✅ Done' }))
-    } catch (e) {
-      setResults(r => ({ ...r, [key]: `❌ ${String(e)}` }))
-    } finally {
-      setRunning(r => ({ ...r, [key]: false }))
+  // Polling while WF runs
+  useEffect(() => {
+    if (wfState !== 'running') return
+    let cancelled = false
+    const timer = setInterval(() => setWfElapsed(e => e + 1), 1000)
+    async function poll() {
+      try {
+        const { running } = await getOptimizerRunning()
+        if (!running && !cancelled) {
+          await new Promise(res => setTimeout(res, 800))
+          const r = await getWalkForwardResults()
+          if (!cancelled) {
+            if (r.available !== false && r.robustness_score != null) { setWfResults(r); setWfState('done') }
+            else setWfState('error')
+          }
+        }
+      } catch { /* keep polling */ }
     }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { cancelled = true; clearInterval(id); clearInterval(timer) }
+  }, [wfState])
+
+  // Polling while MC runs
+  useEffect(() => {
+    if (mcState !== 'running') return
+    let cancelled = false
+    const timer = setInterval(() => setMcElapsed(e => e + 1), 1000)
+    async function poll() {
+      try {
+        const { running } = await getOptimizerRunning()
+        if (!running && !cancelled) {
+          await new Promise(res => setTimeout(res, 800))
+          const r = await getMonteCarloResults()
+          if (!cancelled) {
+            if (r.available !== false && r.n_runs != null) { setMcResults(r); setMcState('done') }
+            else setMcState('error')
+          }
+        }
+      } catch { /* keep polling */ }
+    }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { cancelled = true; clearInterval(id); clearInterval(timer) }
+  }, [mcState])
+
+  async function startWF() {
+    setWfState('running'); setWfElapsed(0)
+    try { await runOptimizer('walk_forward') } catch { setWfState('error') }
   }
 
-  async function runAll() {
-    for (const t of tests) {
-      await runTest(t.mode, t.key)
-    }
+  async function startMC() {
+    setMcState('running'); setMcElapsed(0)
+    try { await runOptimizer('monte_carlo') } catch { setMcState('error') }
   }
+
+  const doneCount   = (wfState === 'done' ? 1 : 0) + (mcState === 'done' ? 1 : 0)
+  const anyRunning  = wfState === 'running' || mcState === 'running'
+  const status: StepStatus = doneCount === 2 ? 'complete' : doneCount > 0 ? 'in_progress' : 'not_started'
 
   return (
     <div className={`bg-card rounded-2xl border overflow-hidden ${
       status === 'complete' ? 'border-green-800' : status === 'in_progress' ? 'border-amber-800' : 'border-border'
     }`}>
-      <button
-        className="w-full flex items-center gap-3 px-4 py-3 text-left"
-        onClick={onToggle}
-      >
+      <button className="w-full flex items-center gap-3 px-4 py-3 text-left" onClick={onToggle}>
         <StatusIcon status={status} />
         <div className="flex-1 min-w-0">
           <span className="text-sm font-bold text-white uppercase tracking-wide">Step 2 · Validate</span>
           <p className="text-xs text-slate-400 mt-0.5">
-            {status === 'complete'
-              ? `All ${tests.length} tests passed`
-              : status === 'in_progress'
-              ? `${doneCount}/${tests.length} tests done`
-              : 'Backtest · Monte Carlo · Walk-Forward'}
+            {status === 'complete' ? 'Both tests passed · ready to paper trade'
+              : anyRunning ? 'Running validation…'
+              : 'Walk-Forward · Monte Carlo'}
           </p>
         </div>
         <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
@@ -634,47 +880,39 @@ function StepValidate({
 
       {open && (
         <div className="px-4 pb-4 space-y-3">
-          <ConfigSelector
-            value={selectedConfig}
-            onChange={setSelectedConfig}
-            label="Testing config"
-            showStats
-          />
+          <p className="text-xs text-slate-500 -mt-1">
+            Both tests use the current best genome. Run Evolve (Step 1) first to generate one.
+          </p>
 
-          {/* Test list */}
-          <div className="space-y-2">
-            {tests.map(t => (
-              <div key={t.key} className="flex items-center gap-3 bg-navy rounded-xl px-3 py-2.5">
-                <span className="text-sm w-5 text-center">
-                  {results[t.key]?.startsWith('✅') ? '✅' :
-                   results[t.key]?.startsWith('❌') ? '❌' :
-                   results[t.key]?.startsWith('🔄') ? '🔄' : '⬜'}
-                </span>
-                <span className="flex-1 text-sm text-white">{t.label}</span>
-                <button
-                  onClick={() => runTest(t.mode, t.key)}
-                  disabled={running[t.key]}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-200"
-                >
-                  {running[t.key] ? 'Running…' : 'Run'}
-                </button>
-              </div>
-            ))}
-          </div>
+          <ValidateTestCard
+            title="Walk-Forward"
+            icon="🔬"
+            description="Splits your history into a training half and an unseen test half. The robustness score is how much performance survives the handoff — ≥ 80% is strong, ≥ 50% is acceptable, below that suggests over-fitting."
+            state={wfState}
+            elapsed={wfElapsed}
+            onRun={startWF}
+          >
+            {wfResults && <WFResultsPanel r={wfResults} />}
+          </ValidateTestCard>
+
+          <ValidateTestCard
+            title="Monte Carlo"
+            icon="🎲"
+            description="Runs 100 backtests on random 6-month windows drawn from price history. If the strategy stays profitable across most windows, the edge is real — not just a lucky backtest period."
+            state={mcState}
+            elapsed={mcElapsed}
+            onRun={startMC}
+          >
+            {mcResults && <MCResultsPanel r={mcResults} />}
+          </ValidateTestCard>
 
           <button
-            onClick={runAll}
-            disabled={Object.values(running).some(Boolean)}
+            onClick={() => { setRunAllActive(true); startWF() }}
+            disabled={anyRunning || runAllActive}
             className="w-full py-3 rounded-xl bg-green-800 hover:bg-green-700 disabled:opacity-40 text-green-200 text-sm font-semibold"
           >
-            Run All Tests
+            {runAllActive && anyRunning ? 'Running…' : runAllActive ? 'Starting next…' : 'Run Both Tests'}
           </button>
-
-          {configs.length === 0 && (
-            <p className="text-xs text-slate-500 text-center">
-              Save a config in Step 1 first, then select it here.
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -1961,7 +2199,6 @@ export default function Pipeline() {
       <StepValidate
         open={openStep === 2}
         onToggle={() => toggle(2)}
-        configs={configs}
       />
 
       <StepConnector />

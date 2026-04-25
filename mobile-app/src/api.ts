@@ -535,6 +535,50 @@ export const promoteConfig = (configName: string, startingEquity: number) =>
     body: JSON.stringify({ starting_equity: startingEquity }),
   })
 
+export interface WalkForwardPeriod {
+  fitness: number
+  sharpe: number
+  return_pct: number
+  win_rate: number
+  max_drawdown: number
+  num_cycles: number
+}
+
+export interface WalkForwardResults {
+  available?: boolean
+  timestamp?: string
+  split?: { is_start: string; is_end: string; is_days: number; oos_start: string; oos_end: string; oos_days: number }
+  in_sample?: WalkForwardPeriod
+  out_of_sample?: WalkForwardPeriod
+  robustness_score?: number
+  verdict?: string
+}
+
+export interface MCRun {
+  run: number; start_date: string; end_date: string
+  fitness: number; sharpe: number; return_pct: number; win_rate: number; max_drawdown: number; num_cycles: number
+}
+
+export interface MCDistribution {
+  p5: number; p25: number; p50: number; p75: number; p95: number; mean: number; std: number
+}
+
+export interface MonteCarloResults {
+  available?: boolean
+  timestamp?: string
+  n_runs?: number
+  sim_months?: number
+  prob_profit_pct?: number
+  distributions?: {
+    fitness: MCDistribution; sharpe: MCDistribution; return_pct: MCDistribution
+    win_rate: MCDistribution; max_drawdown: MCDistribution; num_cycles: MCDistribution
+  }
+  runs?: MCRun[]
+}
+
+export const getWalkForwardResults = () => request<WalkForwardResults>('/optimizer/walk_forward_results')
+export const getMonteCarloResults  = () => request<MonteCarloResults>('/optimizer/monte_carlo_results')
+
 export async function testConnection(): Promise<boolean> {
   try {
     await getStatus()
