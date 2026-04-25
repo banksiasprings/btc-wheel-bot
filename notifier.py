@@ -126,6 +126,38 @@ def notify_high_iv_warning(iv_rank: float, bot_name: str = "") -> None:
     )
 
 
+def notify_position_risk(bot_name: str, risk_level: str, pos: dict) -> None:
+    """
+    Sent when a bot's position crosses into 'caution' or 'danger'.
+    Only called once per risk-level transition to avoid spam.
+    """
+    strike  = pos.get("strike", 0)
+    spot    = pos.get("current_spot", 0)
+    pnl     = pos.get("unrealized_pnl_usd", 0)
+    delta   = pos.get("current_delta")
+    dte     = pos.get("dte") or pos.get("days_to_expiry", "?")
+    opt     = (pos.get("type") or "option").replace("short_", "").upper()
+    sign    = "+" if pnl >= 0 else ""
+    pnl_str = f"{sign}${pnl:,.0f}"
+
+    if risk_level == "danger":
+        emoji = "🚨"
+        heading = f"DANGER — {bot_name} position is ITM or deep at risk"
+        action  = "Consider closing the position immediately from the app to limit losses."
+    else:
+        emoji = "⚠️"
+        heading = f"Caution — {bot_name} position approaching strike"
+        action  = "Monitor closely. Use the Emergency Close button if conditions worsen."
+
+    delta_str = f"  •  Δ {delta:.3f}" if delta is not None else ""
+    _send(
+        f"{emoji} <b>{heading}</b>\n"
+        f"Short {opt} @ ${strike:,.0f}  •  Spot ${spot:,.0f}{delta_str}\n"
+        f"P&L: {pnl_str}  •  DTE: {dte}\n"
+        f"{action}"
+    )
+
+
 def notify_farm_started(bot_count: int, live_bot_count: int = 0) -> None:
     """Sent by the API when the farm supervisor process is launched."""
     live_note = f"\n⚡ {live_bot_count} bot{'s' if live_bot_count != 1 else ''} ready for live trading" if live_bot_count else ""

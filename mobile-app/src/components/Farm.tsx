@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { getFarmStatus, startFarm, stopFarm, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
+import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
 import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -95,7 +95,14 @@ function StatusDot({ status }: { status: string }) {
 
 // ── Bot card ─────────────────────────────────────────────────────────────────
 
-function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt }: { bot: BotFarmEntry; onRefresh: () => void; isDragging?: boolean; onExpandAttempt?: () => boolean }) {
+function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onClosePosition, closeMsgText }: {
+  bot: BotFarmEntry
+  onRefresh: () => void
+  isDragging?: boolean
+  onExpandAttempt?: () => boolean
+  onClosePosition?: (bot: BotFarmEntry) => void
+  closeMsgText?: string
+}) {
   const [expanded, setExpanded]   = useState(false)
   const [promoteMsg, setPromoteMsg] = useState('')
   const [liveState, setLiveState]   = useState<BotLiveState | null>(null)
@@ -142,13 +149,22 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt }: { 
               }`}>
                 {configName}
               </span>
-              {bot.has_open_position && bot.open_position && (
-                <span className="text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 bg-green-900/60 text-green-300 border-green-700">
-                  📋 {bot.open_position.type?.replace('short_', '').toUpperCase() ?? 'PUT'} open
-                  {bot.open_position.strike ? ` $${(bot.open_position.strike/1000).toFixed(0)}k` : ''}
-                  {bot.open_position.dte != null ? ` · ${bot.open_position.dte}d` : ''}
-                </span>
-              )}
+              {bot.has_open_position && bot.open_position && (() => {
+                const risk = bot.position_risk ?? 'ok'
+                const riskStyle = risk === 'danger'
+                  ? 'bg-red-900/80 text-red-200 border-red-600 animate-pulse'
+                  : risk === 'caution'
+                    ? 'bg-amber-900/80 text-amber-200 border-amber-600'
+                    : 'bg-green-900/60 text-green-300 border-green-700'
+                const riskIcon = risk === 'danger' ? '🚨' : risk === 'caution' ? '⚠️' : '📋'
+                return (
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${riskStyle}`}>
+                    {riskIcon} {bot.open_position.type?.replace('short_', '').toUpperCase() ?? 'PUT'} open
+                    {bot.open_position.strike ? ` $${(bot.open_position.strike/1000).toFixed(0)}k` : ''}
+                    {bot.open_position.dte != null ? ` · ${bot.open_position.dte}d` : ''}
+                  </span>
+                )
+              })()}
             </div>
             <p className="text-xs text-slate-500 truncate">{bot.description}</p>
           </div>
@@ -275,6 +291,28 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt }: { 
               ) : (
                 <div className="bg-navy rounded-xl px-3 py-2 text-xs text-slate-500">
                   No open position — waiting for signal
+                </div>
+              )}
+
+              {/* Emergency close button — shown when there's a live open position */}
+              {bot.has_open_position && onClosePosition && (
+                <div className="space-y-1.5">
+                  {closeMsgText ? (
+                    <div className="text-xs text-center text-amber-400 py-1">{closeMsgText}</div>
+                  ) : (
+                    <button
+                      onClick={() => onClosePosition(bot)}
+                      className={`w-full py-2 rounded-xl text-xs font-bold transition-colors border ${
+                        bot.position_risk === 'danger'
+                          ? 'bg-red-800 hover:bg-red-700 text-red-100 border-red-600'
+                          : bot.position_risk === 'caution'
+                            ? 'bg-amber-900 hover:bg-amber-800 text-amber-100 border-amber-700'
+                            : 'bg-slate-700 hover:bg-slate-600 text-slate-200 border-slate-500'
+                      }`}
+                    >
+                      🆘 Emergency Close Position
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -481,6 +519,8 @@ export default function Farm() {
   const [busy, setBusy]             = useState(false)
   const [btcPrice, setBtcPrice]     = useState<number | null>(null)
   const [confirm, setConfirm]       = useState<{ type: 'start' | 'stop'; liveBots: number; totalBots: number } | null>(null)
+  const [closeConfirm, setCloseConfirm] = useState<{ botId: string; botName: string; pos: BotFarmEntry['open_position'] } | null>(null)
+  const [closeMsg, setCloseMsg]     = useState<Record<string, string>>({})
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -546,6 +586,23 @@ export default function Farm() {
       setActionMsg(String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function executeClose() {
+    if (!closeConfirm) return
+    const { botId, botName } = closeConfirm
+    setCloseConfirm(null)
+    setCloseMsg(prev => ({ ...prev, [botId]: 'Sending close command…' }))
+    try {
+      await closeFarmBotPosition(botId)
+      setCloseMsg(prev => ({ ...prev, [botId]: '✅ Close command sent — bot will execute on next cycle' }))
+      setTimeout(() => {
+        setCloseMsg(prev => { const n = { ...prev }; delete n[botId]; return n })
+        setTimeout(fetchStatus, 2000)
+      }, 4000)
+    } catch (e) {
+      setCloseMsg(prev => ({ ...prev, [botId]: `Error: ${String(e)}` }))
     }
   }
 
@@ -726,6 +783,80 @@ export default function Farm() {
         </div>
       )}
 
+      {/* ── Emergency close confirmation modal ───────────────────────────── */}
+      {closeConfirm && (() => {
+        const pos = closeConfirm.pos
+        const pnl = pos?.pnl_usd
+        const spot = pos?.current_spot
+        const strike = pos?.strike
+        const delta = pos?.current_delta
+        const isItm = spot != null && strike != null && (
+          (pos?.type?.includes('put') && spot < strike) ||
+          (pos?.type?.includes('call') && spot > strike)
+        )
+        return (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm px-4 pb-8"
+               onClick={() => setCloseConfirm(null)}>
+            <div className="w-full max-w-sm bg-card border border-red-800 rounded-2xl p-5 space-y-4"
+                 onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">🆘</span>
+                <div>
+                  <p className="font-bold text-white text-base">Emergency Close Position?</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{closeConfirm.botName}</p>
+                </div>
+              </div>
+
+              {pos && (
+                <div className="bg-slate-800 rounded-xl px-3 py-2.5 space-y-1">
+                  <p className="text-xs text-slate-300">
+                    <span className="text-slate-500">Position: </span>
+                    {(pos.type ?? 'Option').replace('short_', 'Short ').toUpperCase()} @ ${(strike ?? 0).toLocaleString()}
+                  </p>
+                  {spot != null && <p className="text-xs text-slate-300"><span className="text-slate-500">BTC Spot: </span>${spot.toLocaleString()}</p>}
+                  {delta != null && <p className="text-xs text-slate-300"><span className="text-slate-500">Delta: </span>{delta.toFixed(3)}</p>}
+                  {pnl != null && (
+                    <p className={`text-xs font-semibold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                      Unrealised P&L: {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
+                    </p>
+                  )}
+                  {isItm && <p className="text-xs text-red-400 font-semibold">⚠️ Option is currently in the money</p>}
+                </div>
+              )}
+
+              <p className="text-slate-300 text-sm">
+                This sends a buy-back command to the bot. It will execute a market order to close the short option on its next cycle (within seconds if running).
+              </p>
+
+              <div className="flex gap-3">
+                <button onClick={() => setCloseConfirm(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium transition-colors">
+                  Cancel
+                </button>
+                <button onClick={executeClose}
+                  className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 text-white text-sm font-bold transition-colors">
+                  Close Position
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* ── Danger banner ────────────────────────────────────────────────── */}
+      {bots.some(b => b.position_risk === 'danger') && (
+        <div className="bg-red-950 border border-red-700 rounded-2xl px-4 py-3 flex items-start gap-3">
+          <span className="text-xl flex-shrink-0 mt-0.5">🚨</span>
+          <div>
+            <p className="text-red-300 font-semibold text-sm">Position in danger zone</p>
+            <p className="text-red-400 text-xs mt-0.5">
+              {bots.filter(b => b.position_risk === 'danger').map(b => b.name).join(', ')} — option is ITM or approaching it.
+              Check below and consider emergency close.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between pt-2">
         <h1 className="text-lg font-bold text-white">Bot Farm</h1>
@@ -866,6 +997,8 @@ export default function Farm() {
                 onRefresh={fetchStatus}
                 isDragging={draggingId === bot.id}
                 onExpandAttempt={() => !didDragRef.current}
+                onClosePosition={b => setCloseConfirm({ botId: b.id, botName: b.name, pos: b.open_position ?? null })}
+                closeMsgText={closeMsg[bot.id]}
               />
             </div>
           ))}

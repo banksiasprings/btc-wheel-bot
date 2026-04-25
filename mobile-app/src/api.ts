@@ -377,12 +377,17 @@ export interface BotFarmEntry {
   metrics: BotMetrics
   readiness: BotReadiness
   has_open_position?: boolean
+  position_risk?: 'ok' | 'caution' | 'danger'
   open_position?: {
     type: string | null
     strike: number | null
     expiry: string | null
     dte: number | null
     pnl_usd: number | null
+    pnl_pct: number | null
+    current_spot: number | null
+    current_delta: number | null
+    premium_collected: number | null
   } | null
 }
 
@@ -535,6 +540,11 @@ export const assignBotConfig = (botId: string, configName: string) =>
   request<{ ok: boolean }>(`/farm/bot/${botId}/assign-config`, {
     method: 'POST',
     body: JSON.stringify({ config_name: configName }),
+  })
+
+export const closeFarmBotPosition = (botId: string) =>
+  request<{ ok: boolean; bot_id: string; command: string }>(`/farm/bot/${botId}/close_position`, {
+    method: 'POST',
   })
 
 export const promoteConfig = (configName: string, startingEquity: number) =>

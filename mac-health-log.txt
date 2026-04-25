@@ -1,15 +1,3 @@
-Top CPU processes:
-  mdworker_shared  0.0%  2336K
-  uncd             0.0%  1536K
-  mdworker_shared  0.0%  2228K
-  System Events    0.0%  7928K
-  claude           0.0%  155M
-Memory: 2656 MB free (679070 pages free), 0 pages in compressor
-Disk: 855G total, 13G used, 701G available (2% used)
-Thermal: N/A
-Alerts: None triggered
-
-[TIDY 2026-04-25 09:33] Terminals: was 3, closed 0, now 3 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player
 [HEALTH 2026-04-25 09:35]
 Uptime: 14:14, 4 users, load averages: 1.47 0.69 0.58
 Top CPU processes:
@@ -498,3 +486,15 @@ Disk: 13Gi used / 700Gi available (855Gi total) — 2% used
 Thermal: N/A
 Alerts: None triggered
 
+[TIDY 2026-04-26 05:33] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player
+[HEALTH 2026-04-26 05:34]
+Uptime: up 1 day, 10:13, load avg: 1.62 1.56 1.42
+Top CPU processes:
+  Python        0.0%  48M
+  claude        0.0%  146M
+  System Events 0.0%  7964K
+  mdworker      0.0%  2192K
+  FolderActions 0.0%  3872K
+Memory: ~1079MB pages free, ~7.9GB inactive, ~4.8GB speculative (28GB total)
+Disk: 855GB total, 13GB used, 700GB available (2%)
+Thermal: N/A

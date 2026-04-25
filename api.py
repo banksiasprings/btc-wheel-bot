@@ -1722,6 +1722,52 @@ def get_farm_status() -> dict:
     if data is None:
         raise HTTPException(status_code=404, detail="Farm status file unreadable")
     data["farm_running"] = _farm_is_running()
+
+    # ── Risk-transition Telegram alerts ──────────────────────────────────────
+    # Fire a Telegram notification the first time a bot crosses into caution or
+    # danger.  We track the last-known level in data/farm_risk_levels.json so
+    # we only notify on transitions, not every poll cycle.
+    try:
+        risk_path  = DATA_DIR / "farm_risk_levels.json"
+        last_known = (_read_json(risk_path) or {}) if risk_path.exists() else {}
+        current    = {}
+        changed    = False
+
+        import notifier as _notifier
+
+        for bot in data.get("bots", []):
+            bot_id = bot.get("id", "")
+            risk   = bot.get("position_risk", "ok")
+            current[bot_id] = risk
+
+            prev = last_known.get(bot_id, "ok")
+            # Notify on ok→caution, ok→danger, caution→danger transitions
+            if risk in ("caution", "danger") and prev != risk:
+                changed = True
+                pos = bot.get("open_position") or {}
+                try:
+                    _notifier.notify_position_risk(
+                        bot.get("name", bot_id), risk, pos
+                    )
+                except Exception:
+                    pass
+            # Also notify if position cleared (danger/caution → ok = relief)
+            if risk == "ok" and prev in ("caution", "danger"):
+                changed = True
+                try:
+                    _notifier._send(
+                        f"✅ <b>{bot.get('name', bot_id)}</b> — position risk cleared\n"
+                        f"Back to normal levels."
+                    )
+                except Exception:
+                    pass
+
+        if changed or not risk_path.exists():
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            risk_path.write_text(json.dumps(current))
+    except Exception:
+        pass
+
     return data
 
 
@@ -1837,6 +1883,44 @@ def farm_stop() -> dict:
     except (ValueError, OSError) as exc:
         FARM_PID_FILE.unlink(missing_ok=True)
         return {"status": "not_running", "detail": str(exc)}
+
+
+@app.post("/farm/bot/{bot_id}/close_position", dependencies=[Depends(_require_api_key)])
+def farm_bot_close_position(bot_id: str) -> dict:
+    """
+    Write a close_position command to the bot's command file.
+    The bot subprocess picks this up on its next poll cycle and closes the open option.
+    """
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+
+    data_dir = bot_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cmd_path = data_dir / "bot_commands.json"
+
+    record = {
+        "command":   "close_position",
+        "timestamp": datetime.utcnow().isoformat(),
+        "source":    "emergency_close",
+    }
+    cmd_path.write_text(json.dumps(record))
+
+    try:
+        import notifier as _notifier
+        pos_path = data_dir / "current_position.json"
+        pos = (_read_json(pos_path) or {}) if pos_path.exists() else {}
+        opt  = (pos.get("type") or "option").replace("short_", "").upper()
+        strike = pos.get("strike", "?")
+        _notifier._send(
+            f"🛑 <b>Emergency Close — {bot_id}</b>\n"
+            f"Short {opt} @ ${strike:,} — close command sent.\n"
+            f"Bot will execute the buy-back on its next cycle."
+        )
+    except Exception:
+        pass
+
+    return {"ok": True, "bot_id": bot_id, "command": "close_position"}
 
 
 class AssignConfigRequest(BaseModel):

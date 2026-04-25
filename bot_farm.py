@@ -183,6 +183,54 @@ def _readiness_to_dict(report: ReadinessReport) -> dict:
     }
 
 
+# ── Position risk helper ──────────────────────────────────────────────────────
+
+def _position_risk_level(pos: dict) -> str:
+    """
+    Compute risk level for an open short option position.
+
+    Returns 'ok', 'caution', or 'danger'.
+
+    Caution triggers (any one sufficient):
+      - BTC spot within 8% of strike (put: spot < strike + 8%; call: spot > strike - 8%)
+      - |delta| > 0.35 (option approaching ATM)
+      - Unrealized loss > 20% of premium collected
+
+    Danger triggers (any one sufficient):
+      - BTC spot has crossed the strike (option is ITM)
+      - |delta| > 0.45
+      - Unrealized loss > 50% of premium collected
+    """
+    strike   = pos.get("strike") or 0.0
+    spot     = pos.get("current_spot") or 0.0
+    delta    = abs(pos.get("current_delta") or 0.0)
+    pnl_usd  = pos.get("unrealized_pnl_usd") or 0.0
+    premium  = pos.get("premium_collected") or 0.0
+    opt_type = (pos.get("type") or "").lower()
+
+    if strike <= 0 or spot <= 0:
+        return "ok"
+
+    loss_pct = (-pnl_usd / premium * 100) if premium > 0 else 0.0  # positive = losing
+
+    if "put" in opt_type:
+        distance_pct = (spot - strike) / strike * 100  # negative means ITM
+        itm = distance_pct < 0
+        near = distance_pct < 8
+    elif "call" in opt_type:
+        distance_pct = (strike - spot) / strike * 100  # negative means ITM
+        itm = distance_pct < 0
+        near = distance_pct < 8
+    else:
+        return "ok"
+
+    if itm or delta > 0.45 or loss_pct > 50:
+        return "danger"
+    if near or delta > 0.35 or loss_pct > 20:
+        return "caution"
+    return "ok"
+
+
 # ── BotProcess ────────────────────────────────────────────────────────────────
 
 class BotProcess:
@@ -379,6 +427,7 @@ class BotProcess:
         # Check for an open position (lightweight read of current_position.json)
         has_open_position = False
         open_position_summary: dict = {}
+        position_risk = "ok"
         try:
             pos_path = self.bot_dir / "data" / "current_position.json"
             if pos_path.exists():
@@ -387,12 +436,17 @@ class BotProcess:
                 if pos.get("open"):
                     has_open_position = True
                     open_position_summary = {
-                        "type":     pos.get("type"),
-                        "strike":   pos.get("strike"),
-                        "expiry":   pos.get("expiry"),
-                        "dte":      pos.get("days_to_expiry"),
-                        "pnl_usd":  pos.get("unrealized_pnl_usd"),
+                        "type":             pos.get("type"),
+                        "strike":           pos.get("strike"),
+                        "expiry":           pos.get("expiry"),
+                        "dte":              pos.get("days_to_expiry"),
+                        "pnl_usd":          pos.get("unrealized_pnl_usd"),
+                        "pnl_pct":          pos.get("unrealized_pnl_pct"),
+                        "current_spot":     pos.get("current_spot"),
+                        "current_delta":    pos.get("current_delta"),
+                        "premium_collected": pos.get("premium_collected"),
                     }
+                    position_risk = _position_risk_level(pos)
         except Exception:
             pass
 
@@ -411,6 +465,7 @@ class BotProcess:
             "readiness":            _readiness_to_dict(report),
             "has_open_position":    has_open_position,
             "open_position":        open_position_summary if has_open_position else None,
+            "position_risk":        position_risk,
         }
 
 
