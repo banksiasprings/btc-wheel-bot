@@ -598,38 +598,52 @@ export default function Farm() {
       return
     }
     if (draggingId !== botId) return
-    e.preventDefault()  // prevent scroll while dragging
+    e.preventDefault()
 
-    // Throttle: skip if last swap was < 120ms ago
+    // Throttle — also gives CSS transition (200ms) time to settle before next swap
     const now = Date.now()
-    if (now - lastSwapRef.current < 120) return
+    if (now - lastSwapRef.current < 200) return
 
     const touch = e.touches[0]
     const order = liveOrderRef.current
+    const fromIdx = order.indexOf(botId)
+    if (fromIdx === -1) return
 
-    // Find the non-dragged card whose centre is closest to the finger
-    let bestId = botId
-    let bestDist = Infinity
-    for (const id of order) {
-      if (id === botId) continue
-      const ref = cardRefs.current[id]
-      if (!ref) continue
-      const rect = ref.getBoundingClientRect()
-      const dist = Math.abs(touch.clientY - (rect.top + rect.height / 2))
-      if (dist < bestDist) { bestDist = dist; bestId = id }
+    // Only ever look at the immediately adjacent card (no jumping multiple slots).
+    // Use directional thresholds: to go UP the finger must clear the midpoint of the
+    // card above; to go DOWN it must clear the midpoint of the card below.
+    // This prevents the ping-pong where "closest centre" keeps toggling when the
+    // finger sits between two positions.
+    const above = fromIdx > 0 ? order[fromIdx - 1] : null
+    const below = fromIdx < order.length - 1 ? order[fromIdx + 1] : null
+
+    let swapTargetIdx = -1
+
+    if (above) {
+      const ref = cardRefs.current[above]
+      if (ref) {
+        const rect = ref.getBoundingClientRect()
+        const mid  = rect.top + rect.height / 2
+        if (touch.clientY < mid) swapTargetIdx = fromIdx - 1
+      }
     }
 
-    if (bestId !== botId) {
-      const fromIdx = order.indexOf(botId)
-      const toIdx   = order.indexOf(bestId)
-      if (fromIdx !== -1 && toIdx !== -1 && fromIdx !== toIdx) {
-        const newOrder = [...order]
-        newOrder.splice(fromIdx, 1)
-        newOrder.splice(toIdx, 0, botId)
-        liveOrderRef.current = newOrder
-        lastSwapRef.current  = now
-        setBotOrder(newOrder)
+    if (swapTargetIdx === -1 && below) {
+      const ref = cardRefs.current[below]
+      if (ref) {
+        const rect = ref.getBoundingClientRect()
+        const mid  = rect.top + rect.height / 2
+        if (touch.clientY > mid) swapTargetIdx = fromIdx + 1
       }
+    }
+
+    if (swapTargetIdx !== -1) {
+      const newOrder = [...order]
+      newOrder.splice(fromIdx, 1)
+      newOrder.splice(swapTargetIdx, 0, botId)
+      liveOrderRef.current = newOrder
+      lastSwapRef.current  = now
+      setBotOrder(newOrder)
     }
   }
 
@@ -780,7 +794,7 @@ export default function Farm() {
               onTouchMove={e => handleCardTouchMove(e, bot.id)}
               onTouchEnd={e => endDrag(e)}
               onTouchCancel={() => endDrag()}
-              className={`transition-all duration-150 ${
+              className={`transition-all duration-200 ${
                 draggingId === bot.id
                   ? 'opacity-70 scale-[0.97] shadow-2xl relative z-10'
                   : draggingId
