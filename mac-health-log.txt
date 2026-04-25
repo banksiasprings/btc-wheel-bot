@@ -1,12 +1,3 @@
-  osascript        0.0%  4440K
-  mdworker_shared  0.0%  2468K
-Memory: 2769 MB free (pages free: 676159 x 4096), 28 GB total
-Disk: 855Gi total, 13Gi used, 701Gi available (2%)
-Thermal: N/A
-[TIDY 2026-04-25 09:04] Terminals: was 3, closed 0, now 3 | Quit: Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player | Skipped (unsaved check failed): TextEdit
-
-[HEALTH 2026-04-25 09:04]
-Uptime: up 13:44, 4 users, load averages: 1.00 0.77 0.63
 Top CPU processes:
   mdworker_shared  0.0%  2336K
   uncd             0.0%  1536K
@@ -498,3 +489,12 @@ Memory: 28GB total, ~488MB free pages, 7.9GB inactive+speculative (no compressor
 Disk: 855GB total, 13GB used, 701GB available (2% used)
 Thermal: N/A
 Alerts: None triggered
+[TIDY 2026-04-26 05:05] Terminals: was 3, closed 0, now 3 | Quit: Preview, TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, System Settings, Calendar
+[HEALTH 2026-04-26 05:05]
+Uptime: up 1 day, 9:45, 4 users, load averages: 1.48 1.21 1.06
+Top CPU processes: all idle (0.0% across top 10)
+Memory: ~601 MB free (+ ~7.9 GB inactive reclaimable), 28 GB total, no compressor usage
+Disk: 13Gi used / 700Gi available (855Gi total) — 2% used
+Thermal: N/A
+Alerts: None triggered
+

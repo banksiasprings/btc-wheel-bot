@@ -2008,7 +2008,9 @@ function StepAIReview({
 
       lines.push('## Config Being Reviewed')
       lines.push(`- **Name:** ${cfg?.name ?? selectedConfig}`)
-      lines.push(`- **Source:** ${cfg?.source ?? 'unknown'} (${cfg?.source === 'evolved' ? 'created by genetic evolution algorithm' : cfg?.source === 'manual' ? 'manually configured' : cfg?.source})`)
+      const src = cfg?.source ?? 'unknown'
+      const srcDesc = src === 'evolved' ? 'created by genetic evolution algorithm' : src === 'manual' ? 'manually configured' : src === 'promoted' ? 'promoted from paper to live' : src
+      lines.push(`- **Source:** ${src} (${srcDesc})`)
       if (cfg?.goal) lines.push(`- **Optimisation Goal:** ${cfg.goal}`)
       if (cfg?.notes) lines.push(`- **Notes / Intent:** ${cfg.notes}`)
       if (cfg?.fitness != null) lines.push(`- **Fitness Score:** ${cfg.fitness.toFixed(3)} (composite score from backtest)`)
@@ -2024,10 +2026,14 @@ function StepAIReview({
       if (p.max_equity_per_leg != null) lines.push(`- **Max Equity Per Leg:** ${((p.max_equity_per_leg as number) * 100).toFixed(0)}% of account per position`)
       if (p.max_open_legs != null)      lines.push(`- **Max Open Positions:** ${p.max_open_legs}`)
       if (p.collateral_buffer != null)  lines.push(`- **Collateral Buffer:** ${p.collateral_buffer}x (safety margin on collateral requirement)`)
+      if (p.min_free_equity_fraction != null) lines.push(`- **Min Free Equity Buffer:** ${((p.min_free_equity_fraction as number) * 100).toFixed(0)}% of account kept in reserve`)
       if (p.roll_enabled != null)       lines.push(`- **Roll Positions:** ${p.roll_enabled ? `Yes — rolls if DTE < ${p.roll_min_dte ?? '?'} days` : 'No'}`)
-      if (p.use_regime_filter != null)  lines.push(`- **Regime Filter:** ${p.use_regime_filter ? `Yes — uses ${p.regime_ma_days ?? 50}-day MA to detect bull/bear` : 'No'}`)
-      if (p.iv_dynamic_delta != null)   lines.push(`- **Dynamic Delta (IV-adjusted):** ${p.iv_dynamic_delta ? 'Yes' : 'No'}`)
-      if (p.ladder_enabled != null)     lines.push(`- **Ladder Entries:** ${p.ladder_enabled ? `Yes — ${p.ladder_legs ?? '?'} legs spread across strikes` : 'No'}`)
+      if (p.use_regime_filter != null)  lines.push(`- **Regime Filter:** ${p.use_regime_filter ? `Yes — uses ${p.regime_ma_days ?? 50}-day MA to avoid bear markets` : 'No — trades in all market conditions'}`)
+      if (p.iv_dynamic_delta != null)   lines.push(`- **Dynamic Delta (IV-adjusted):** ${p.iv_dynamic_delta ? 'Yes — widens strike distance when IV is high' : 'No — fixed delta regardless of IV'}`)
+      if (p.ladder_enabled != null)     lines.push(`- **Ladder Entries:** ${p.ladder_enabled ? `Yes — ${p.ladder_legs ?? '?'} legs spread across strikes` : 'No — single strike per trade'}`)
+      if (p.premium_fraction_of_spot != null) lines.push(`- **Min Premium Required:** ${((p.premium_fraction_of_spot as number) * 100).toFixed(2)}% of BTC spot price`)
+      if (p.approx_otm_offset != null)  lines.push(`- **OTM Offset:** ${((p.approx_otm_offset as number) * 100).toFixed(0)}% below spot (approximate strike search offset)`)
+      if (Object.keys(p).length === 0)  lines.push('- *(Parameters not available for this config — config may not have been loaded correctly)*')
       lines.push('')
 
       lines.push('## Backtest Results (12-month historical window)')

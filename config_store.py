@@ -81,13 +81,23 @@ def _config_summary_from_data(data: dict, yaml_file: Path) -> dict:
     backtest = data.get("backtest", {})
     params = {
         k: v for k, v in {
+            # Strategy
             "iv_rank_threshold":        strategy.get("iv_rank_threshold"),
             "target_delta_min":         strategy.get("target_delta_min"),
             "target_delta_max":         strategy.get("target_delta_max"),
             "min_dte":                  strategy.get("min_dte"),
             "max_dte":                  strategy.get("max_dte"),
+            "iv_dynamic_delta":         strategy.get("iv_dynamic_delta"),
+            "use_regime_filter":        strategy.get("use_regime_filter"),
+            # Sizing
             "max_equity_per_leg":       sizing.get("max_equity_per_leg"),
             "min_free_equity_fraction": sizing.get("min_free_equity_fraction"),
+            "max_open_legs":            sizing.get("max_open_legs"),
+            "collateral_buffer":        sizing.get("collateral_buffer"),
+            "ladder_enabled":           sizing.get("ladder_enabled"),
+            "ladder_legs":              sizing.get("ladder_legs"),
+            "regime_ma_days":           sizing.get("regime_ma_days"),
+            # Backtest
             "premium_fraction_of_spot": backtest.get("premium_fraction_of_spot"),
             "approx_otm_offset":        backtest.get("approx_otm_offset"),
             "starting_equity":          backtest.get("starting_equity"),
@@ -184,11 +194,17 @@ def save_config(
 def load_config_by_name(name: str) -> dict:
     """
     Load a named config as a dict, merged over the master config.yaml.
-    Raises FileNotFoundError if not found.
+    Falls back to farm/{name}/config.yaml for farm-managed bots.
+    Raises FileNotFoundError if not found in either location.
     """
     path = _config_path(name)
     if not path.exists():
-        raise FileNotFoundError(f"Named config not found: {name!r} (looked in {path})")
+        # Try farm directory as fallback (farm bots store config in farm/{name}/config.yaml)
+        farm_path = BASE_DIR / "farm" / name / "config.yaml"
+        if farm_path.exists():
+            path = farm_path
+        else:
+            raise FileNotFoundError(f"Named config not found: {name!r} (looked in {path} and {farm_path})")
 
     named_raw = yaml.safe_load(path.read_text()) or {}
 
@@ -198,6 +214,19 @@ def load_config_by_name(name: str) -> dict:
     # Merge named config OVER master so only overridden fields differ
     merged = _deep_merge(_master_config(), named_raw)
     merged["_meta"] = meta   # put meta back at top level
+
+    # Add a flat summary dict so API consumers (e.g. AI review) can read params
+    # without traversing nested sections.  Mirrors _config_summary_from_data.
+    summary = _config_summary_from_data(merged, path)
+    merged["name"]            = summary["name"]
+    merged["status"]          = summary["status"]
+    merged["source"]          = summary["source"]
+    merged["goal"]            = summary.get("goal")
+    merged["notes"]           = summary.get("notes", "")
+    merged["fitness"]         = summary.get("fitness")
+    merged["total_return_pct"] = summary.get("total_return_pct")
+    merged["sharpe"]          = summary.get("sharpe")
+    merged["params"]          = summary["params"]
 
     return merged
 
