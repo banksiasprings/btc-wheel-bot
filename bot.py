@@ -109,10 +109,11 @@ class WheelBot:
         self._force_close_position: bool = False
         self._state_path = _data_path("bot_state.json")
 
-        # Delta-hedging manager
+        # Delta-hedging manager — state_path per-bot so farm bots don't share state
         self._hedge = HedgeManager(
             paper=paper,
             rebalance_threshold=self._cfg.hedge.rebalance_threshold,
+            state_path=_data_path("hedge_state.json"),
         ) if self._cfg.hedge.enabled else None
 
         # AI Overseer
