@@ -306,13 +306,20 @@ export default function TradingView() {
       // Attach projection start to the last real candle
       hist[hist.length - 1].projected = lastClose
 
-      // Future candles
-      for (let i = 1; i <= 5; i++) {
+      // Extend ~30% of the selected window into the future (at least 3 candles).
+      // Also push far enough to include the expiry line if one exists.
+      const lookaheadCandles = Math.max(3, Math.round(days * 0.30))
+      const expiryTs = chartData.overlays?.expiry_ts
+      const minTsNeeded = expiryTs ? expiryTs + resSec : 0   // one candle past expiry
+      let i = 1
+      while (i <= lookaheadCandles || lastTime + i * resSec < minTsNeeded) {
         hist.push({
           time: lastTime + i * resSec,
           projected: Math.max(1, lastClose + slope * i),
           isFuture: true,
         })
+        i++
+        if (i > 365) break  // safety cap
       }
     }
 
