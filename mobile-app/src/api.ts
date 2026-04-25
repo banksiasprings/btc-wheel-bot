@@ -266,10 +266,10 @@ export const updateConfig = (config: Partial<BotConfig>) =>
     method: 'POST',
     body: JSON.stringify(config),
   })
-export const runOptimizer = (mode: string, param?: string, fitness_goal?: string, config_name?: string | null) =>
+export const runOptimizer = (mode: string, param?: string, fitness_goal?: string, config_name?: string | null, seed_config_name?: string | null) =>
   request<{ ok: boolean; pid: number; mode: string }>('/optimizer/run', {
     method: 'POST',
-    body: JSON.stringify({ mode, param, fitness_goal, config_name: config_name ?? undefined }),
+    body: JSON.stringify({ mode, param, fitness_goal, config_name: config_name ?? undefined, seed_config_name: seed_config_name ?? undefined }),
   })
 
 export const getBtcPrice = () => request<{ price: number; cached: boolean; age_sec: number }>('/market/btc_price')

@@ -619,6 +619,7 @@ class Optimizer:
         elite_keep: int = 4,
         mutation_rate: float = 0.3,
         seed_from_sweep: bool = False,
+        seed_genome: "ParamSet | None" = None,
         use_experience: bool = True,
         fitness_goal: str = "balanced",
     ) -> ParamSet:
@@ -644,6 +645,17 @@ class Optimizer:
 
         # Generation 0: random population (optionally seeded from sweep)
         population = [_random_genome() for _ in range(population_size)]
+
+        if seed_genome is not None:
+            # Seed from a known genome: keep it as elite[0], fill 60% of pop with
+            # tight mutations, keep 40% random for diversity.
+            seed_count = max(1, int(population_size * 0.60))
+            seeded = [_mutate(seed_genome, mutation_rate=0.15) for _ in range(seed_count - 1)]
+            population = [seed_genome] + seeded + population[seed_count:]
+            logger.info(
+                f"Seeded generation 0 from config: 1 exact + {seed_count - 1} tight "
+                f"mutations + {population_size - seed_count} random for diversity"
+            )
 
         if seed_from_sweep:
             sweep_path = self._results_dir / "sweep_results.json"
@@ -1532,6 +1544,8 @@ Examples:
     parser.add_argument("--no-experience", action="store_true", default=False,
                         help="Ignore experience.jsonl calibration (use pure backtest fitness)")
     parser.add_argument("--workers", type=int, default=None, help="Parallel worker processes")
+    parser.add_argument("--seed-config", dest="seed_config", type=str, default=None,
+                        help="Named config to seed evolution from (e.g. 'balanced_20260423_2346')")
     args = parser.parse_args()
 
     # Setup minimal logging
@@ -1553,12 +1567,41 @@ Examples:
 
     elif args.mode == "evolve":
         goal = args.fitness_goal
+
+        # Load seed genome from named config if provided
+        _seed_genome: "ParamSet | None" = None
+        _seed_config_name: str | None = args.seed_config
+        if _seed_config_name:
+            try:
+                from config_store import load_config_by_name as _load_cfg
+                _raw = _load_cfg(_seed_config_name)
+                _strat   = _raw.get("strategy", {})
+                _sizing  = _raw.get("sizing", {})
+                _bt      = _raw.get("backtest", {})
+                _seed_genome = ParamSet(
+                    iv_rank_threshold        = float(_strat.get("iv_rank_threshold",        0.50)),
+                    target_delta_min         = float(_strat.get("target_delta_min",          0.15)),
+                    target_delta_max         = float(_strat.get("target_delta_max",          0.30)),
+                    max_dte                  = float(_strat.get("max_dte",                   35)),
+                    min_dte                  = float(_strat.get("min_dte",                   5)),
+                    approx_otm_offset        = float(_bt.get("approx_otm_offset",            0.08)),
+                    max_equity_per_leg       = float(_sizing.get("max_equity_per_leg",       0.05)),
+                    premium_fraction_of_spot = float(_bt.get("premium_fraction_of_spot",     0.015)),
+                    min_free_equity_fraction = float(_sizing.get("min_free_equity_fraction", 0.25)),
+                    starting_equity          = float(_bt.get("starting_equity",              10000.0)),
+                )
+                logger.info(f"Seeding evolution from config: '{_seed_config_name}'")
+            except Exception as _seed_exc:
+                logger.warning(f"Could not load seed config '{_seed_config_name}': {_seed_exc} — starting from random")
+                _seed_genome = None
+
         best = opt.run_evolution(
             population_size=args.population,
             generations=args.generations,
             elite_keep=args.elite,
             mutation_rate=args.mutation,
             seed_from_sweep=args.seed_from_sweep,
+            seed_genome=_seed_genome,
             use_experience=use_exp,
             fitness_goal=goal,
         )
@@ -1628,14 +1671,15 @@ Examples:
                 params=_cfg_params,
                 source="evolved",
                 metadata={
-                    "fitness":      best_metrics.get("fitness"),
-                    "goal":         goal,
-                    "generations":  args.generations,
-                    "total_return": best_metrics.get("return_pct"),
-                    "sharpe":       best_metrics.get("sharpe"),
-                    "win_rate":     best_metrics.get("win_rate"),
-                    "drawdown":     best_metrics.get("drawdown"),
-                    "version":      _entry["version"],
+                    "fitness":         best_metrics.get("fitness"),
+                    "goal":            goal,
+                    "generations":     args.generations,
+                    "total_return":    best_metrics.get("return_pct"),
+                    "sharpe":          best_metrics.get("sharpe"),
+                    "win_rate":        best_metrics.get("win_rate"),
+                    "drawdown":        best_metrics.get("drawdown"),
+                    "version":         _entry["version"],
+                    "seeded_from":     _seed_config_name,  # None if fresh evolution
                 },
             )
             print(f"  Config store: saved as '{_cfg_name}'")

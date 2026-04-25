@@ -1215,7 +1215,8 @@ class OptimizerRunRequest(BaseModel):
     mode: str
     param: str | None = None
     fitness_goal: str = "balanced"
-    config_name: str | None = None   # named config to use as starting parameters
+    config_name: str | None = None        # named config to use as starting parameters
+    seed_config_name: str | None = None   # evolve: seed population from this config
 
 
 _VALID_OPT_MODES = {"sweep", "evolve", "walk_forward", "monte_carlo", "reconcile"}
@@ -1258,6 +1259,8 @@ def optimizer_run(body: OptimizerRunRequest) -> dict:
         cmd += ["--param", body.param]
     if body.mode == "evolve" and body.fitness_goal:
         cmd += ["--fitness-goal", body.fitness_goal]
+    if body.mode == "evolve" and body.seed_config_name:
+        cmd += ["--seed-config", body.seed_config_name]
 
     env = os.environ.copy()
     if body.config_name:
@@ -1276,6 +1279,8 @@ def optimizer_run(body: OptimizerRunRequest) -> dict:
     result: dict = {"ok": True, "pid": proc.pid}
     if body.config_name:
         result["config_name"] = body.config_name
+    if body.seed_config_name:
+        result["seed_config_name"] = body.seed_config_name
     return result
 
 
