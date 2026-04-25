@@ -120,16 +120,21 @@ function PositionCard({ data }: { data: ChartData }) {
 // ── Main TradingView ──────────────────────────────────────────────────────────
 
 export default function TradingView() {
-  const [days, setDays]           = useState(30)
-  const [botId, setBotId]         = useState<string | undefined>(undefined)
-  const [chartData, setChartData] = useState<ChartData | null>(null)
+  const [days, setDays]             = useState(30)
+  const [botId, setBotId]           = useState<string | undefined>(undefined)
+  const [chartData, setChartData]   = useState<ChartData | null>(null)
   const [farmStatus, setFarmStatus] = useState<FarmStatus | null>(null)
-  const [loading, setLoading]     = useState(true)
-  const [error, setError]         = useState<string | null>(null)
+  const [loading, setLoading]       = useState(true)
+  const [error, setError]           = useState<string | null>(null)
 
-  // Load farm status once to populate bot selector
+  // Load farm status once; auto-select first bot
   useEffect(() => {
-    getFarmStatus().then(setFarmStatus).catch(() => {})
+    getFarmStatus().then(fs => {
+      setFarmStatus(fs)
+      if (!botId && fs.bots.length > 0) {
+        setBotId(fs.bots[0].id)
+      }
+    }).catch(() => {})
   }, [])
 
   const load = useCallback(async () => {
@@ -217,35 +222,22 @@ export default function TradingView() {
           )}
         </div>
 
-        {/* Bot selector */}
+        {/* Bot selector dropdown */}
         {bots.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 mb-2 scrollbar-hide">
-            <button
-              onClick={() => setBotId(undefined)}
-              className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${
-                !botId
-                  ? 'bg-green-900/60 border-green-700 text-green-300'
-                  : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-              }`}
+          <div className="relative mb-2">
+            <select
+              value={botId ?? ''}
+              onChange={e => setBotId(e.target.value || undefined)}
+              className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 pr-8 text-sm text-white focus:outline-none focus:border-green-600"
             >
-              Live Bot
-            </button>
-            {bots.map(b => (
-              <button
-                key={b.id}
-                onClick={() => setBotId(b.id)}
-                className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border font-medium transition-colors ${
-                  botId === b.id
-                    ? 'bg-green-900/60 border-green-700 text-green-300'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${
-                  b.status === 'running' ? 'bg-green-400' : 'bg-slate-500'
-                }`} />
-                {b.name}
-              </button>
-            ))}
+              {bots.map(b => (
+                <option key={b.id} value={b.id}>
+                  {b.status === 'running' ? '🟢' : '🟡'} {b.name}
+                  {b.config_name ? ` — ${b.config_name}` : ''}
+                </option>
+              ))}
+            </select>
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▼</span>
           </div>
         )}
 
@@ -444,7 +436,7 @@ export default function TradingView() {
         {chartData?.config && (
           <div className="bg-card rounded-2xl border border-border p-4">
             <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">
-              {selectedBot ? `${selectedBot.name} — Config` : 'Live Config'}
+              {selectedBot ? `${selectedBot.name} — Config` : 'Config'}
             </p>
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               {[
