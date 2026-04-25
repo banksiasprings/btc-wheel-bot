@@ -92,7 +92,7 @@ FITNESS_WEIGHTS = {
 # ── Fitness scoring ────────────────────────────────────────────────────────────
 
 
-EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi")
+EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "daily_trader")
 
 
 def _fitness_for_goal(result: dict, goal: str) -> float:
@@ -121,6 +121,16 @@ def _fitness_for_goal(result: dict, goal: str) -> float:
             0.15 * win                                  # Win rate
         ) * activity_penalty
         return round(float(np.clip(score, 0.0, 1.0)), 4)
+    elif goal == "daily_trader":
+        # Optimise for frequent trading — useful for testing the full pipeline
+        # with real trade flow rather than waiting weeks for signals.
+        # Heavily rewards trade count; requires the strategy to at least
+        # break even (penalises losses but doesn't chase big returns).
+        num_trades = result.get("num_cycles", 0)
+        activity   = min(num_trades / 60.0, 1.0)          # saturates at ~60 trades per backtest period
+        profit_ok  = 1.0 if r >= 0 else max(0.0, 1.0 + r * 2)  # penalise losses gently
+        safety     = max(0.0, 1.0 - dd / 0.50)            # only hurts if drawdown > 50%
+        return activity * 3.0 + profit_ok * 1.0 + safety * 0.5
     else:  # "balanced"
         return (sharpe * 2) + (r * 3) + (win * 2) - (dd * 3)
 

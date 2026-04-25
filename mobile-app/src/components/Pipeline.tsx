@@ -17,13 +17,29 @@ import ConfigSelector from './ConfigSelector'
 
 type StepStatus = 'not_started' | 'in_progress' | 'complete' | 'locked'
 
-const EVOLVE_GOALS: { id: EvolveGoal; icon: string; label: string }[] = [
-  { id: 'balanced',    icon: '🎯', label: 'Balanced'    },
-  { id: 'max_yield',   icon: '🚀', label: 'Max Yield'   },
-  { id: 'safest',      icon: '🛡', label: 'Safest'      },
-  { id: 'sharpe',      icon: '⚖️', label: 'Sharpe'      },
-  { id: 'capital_roi', icon: '📊', label: 'Capital ROI' },
+const EVOLVE_GOALS: { id: EvolveGoal; icon: string; label: string; desc?: string }[] = [
+  { id: 'balanced',     icon: '🎯', label: 'Balanced'                                            },
+  { id: 'max_yield',    icon: '🚀', label: 'Max Yield'                                           },
+  { id: 'safest',       icon: '🛡', label: 'Safest'                                              },
+  { id: 'sharpe',       icon: '⚖️', label: 'Sharpe'                                              },
+  { id: 'capital_roi',  icon: '📊', label: 'Capital ROI'                                         },
+  { id: 'daily_trader', icon: '⚡', label: 'Daily Trader', desc: 'max trades · test the pipeline' },
 ]
+
+// Hardcoded "reckless" params for the Daily Trader quick-start preset.
+// Very low entry barriers = many signals = trade flow within hours not weeks.
+const DAILY_TRADER_PARAMS: Record<string, unknown> = {
+  iv_rank_threshold:        0.05,   // trade almost always
+  target_delta_min:         0.20,   // aggressive strikes
+  target_delta_max:         0.35,
+  approx_otm_offset:        0.05,
+  min_dte:                  1,      // enter same-day / next-day expiries
+  max_dte:                  7,      // weekly options only
+  max_equity_per_leg:       0.10,   // deploy up to 10% per trade
+  premium_fraction_of_spot: 0.002,  // accept tiny premiums
+  iv_rank_window_days:      30,     // short IV lookback
+  min_free_equity_fraction: 0.10,   // keep 10% buffer
+}
 
 const SWEEP_PARAMS: { key: string; label: string }[] = [
   { key: 'iv_rank_threshold',        label: 'IV Rank Threshold'  },
@@ -86,14 +102,18 @@ function StepEvolve({
   evolveAll: EvolveAllResults | null
   onSaved: (name: string) => void
 }) {
-  const [goal, setGoal]           = useState<EvolveGoal>('capital_roi')
-  const [launching, setLaunching] = useState(false)
-  const [launchMsg, setLaunchMsg] = useState('')
-  const [showSave, setShowSave]   = useState(false)
-  const [saveName, setSaveName]   = useState('')
-  const [saveNotes, setSaveNotes] = useState('')
-  const [saving, setSaving]       = useState(false)
-  const [saveMsg, setSaveMsg]     = useState('')
+  const [goal, setGoal]             = useState<EvolveGoal>('capital_roi')
+  const [launching, setLaunching]   = useState(false)
+  const [launchMsg, setLaunchMsg]   = useState('')
+  const [showSave, setShowSave]     = useState(false)
+  const [saveName, setSaveName]     = useState('')
+  const [saveNotes, setSaveNotes]   = useState('')
+  const [saving, setSaving]         = useState(false)
+  const [saveMsg, setSaveMsg]       = useState('')
+  // Quick preset
+  const [presetName, setPresetName] = useState('daily_trader_v1')
+  const [savingPreset, setSavingPreset] = useState(false)
+  const [presetMsg, setPresetMsg]   = useState('')
 
   const goalData    = evolveAll?.[goal]
   const hasData     = (goalData?.version ?? 0) > 0 && goalData?.current != null
@@ -141,6 +161,29 @@ function StepEvolve({
     }
   }
 
+  async function handleSavePreset() {
+    if (!presetName.trim()) return
+    setSavingPreset(true)
+    setPresetMsg('')
+    try {
+      await apiSaveConfig({
+        name: presetName.trim(),
+        source: 'evolved',
+        notes: 'Daily trader quick-start: low entry barriers, short DTE, aggressive deployment — use for pipeline testing',
+        fitness: null,
+        total_return_pct: null,
+        sharpe: null,
+        params: DAILY_TRADER_PARAMS,
+      })
+      setPresetMsg(`✅ Saved '${presetName.trim()}' — skip to Step 3 to start paper testing`)
+      onSaved(presetName.trim())
+    } catch (e) {
+      setPresetMsg(String(e))
+    } finally {
+      setSavingPreset(false)
+    }
+  }
+
   return (
     <div className={`bg-card rounded-2xl border overflow-hidden ${
       status === 'complete' ? 'border-green-800' : 'border-border'
@@ -173,7 +216,7 @@ function StepEvolve({
                 <button
                   key={g.id}
                   onClick={() => setGoal(g.id)}
-                  className={`rounded-xl p-2.5 text-left border text-xs transition-colors ${
+                  className={`rounded-xl p-2.5 text-left border transition-colors ${
                     idx === EVOLVE_GOALS.length - 1 && EVOLVE_GOALS.length % 2 !== 0
                       ? 'col-span-2'
                       : ''
@@ -183,7 +226,8 @@ function StepEvolve({
                       : 'bg-navy border-border text-slate-400 hover:border-slate-500'
                   }`}
                 >
-                  {g.icon} {g.label}
+                  <p className="text-xs font-medium">{g.icon} {g.label}</p>
+                  {g.desc && <p className="text-xs text-slate-500 mt-0.5">{g.desc}</p>}
                 </button>
               ))}
             </div>
@@ -204,6 +248,44 @@ function StepEvolve({
           >
             {launching ? 'Launching…' : `Run ${EVOLVE_GOALS.find(g => g.id === goal)?.label ?? ''} Evolution`}
           </button>
+
+          {/* ⚡ Quick Preset — skip evolution, get trade flow now */}
+          <div className="bg-navy rounded-xl px-3 py-3 space-y-2 border border-amber-900/50">
+            <div className="flex items-center gap-2">
+              <span className="text-base">⚡</span>
+              <div>
+                <p className="text-xs text-white font-semibold">Daily Trader Quick-Start</p>
+                <p className="text-xs text-slate-500">Skip evolution — drop in a ready-made reckless config to get real trade flow immediately.</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 bg-slate-900/60 rounded-lg px-3 py-2">
+              <span>IV threshold <span className="text-amber-400 font-mono">0.05</span></span>
+              <span>DTE <span className="text-amber-400 font-mono">1–7 days</span></span>
+              <span>Delta <span className="text-amber-400 font-mono">0.20–0.35</span></span>
+              <span>Equity/leg <span className="text-amber-400 font-mono">10%</span></span>
+            </div>
+            <input
+              type="text"
+              value={presetName}
+              onChange={e => setPresetName(e.target.value)}
+              placeholder="Config name…"
+              className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500"
+            />
+            {presetMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${
+                presetMsg.startsWith('✅')
+                  ? 'bg-green-950 border-green-800 text-green-300'
+                  : 'bg-red-950 border-red-800 text-red-300'
+              }`}>{presetMsg}</p>
+            )}
+            <button
+              onClick={handleSavePreset}
+              disabled={savingPreset || !presetName.trim()}
+              className="w-full py-2.5 rounded-xl bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-xs font-semibold"
+            >
+              {savingPreset ? 'Saving…' : 'Create Daily Trader Config →'}
+            </button>
+          </div>
 
           {/* Results summary + Save */}
           {hasData && cur && (
