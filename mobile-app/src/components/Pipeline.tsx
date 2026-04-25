@@ -145,12 +145,9 @@ function StepEvolve({
   const [saveNotes, setSaveNotes] = useState('')
   const [saving, setSaving]       = useState(false)
   const [saveMsg, setSaveMsg]     = useState('')
-  // Quick preset
-  const [presetName, setPresetName]     = useState('daily_trader_v1')
-  const [savingPreset, setSavingPreset] = useState(false)
-  const [presetMsg, setPresetMsg]       = useState('')
-  // Seed config (selective evolution) — UI hidden for now, backend still supports --seed-config
-  const [seedConfigName] = useState<string>('')
+  // Seed config (selective evolution)
+  const [seedConfigName, setSeedConfigName] = useState<string>('')
+  const [availableConfigs, setAvailableConfigs] = useState<NamedConfig[]>([])
 
   const goalData = evolveAll?.[goal]
   const hasData  = (goalData?.version ?? 0) > 0 && goalData?.current != null
@@ -176,6 +173,14 @@ function StepEvolve({
     }).catch(() => {})
   }, [open])
 
+
+  // Load available configs for seed picker
+  useEffect(() => {
+    if (!open) return
+    listConfigs(false).then(cs => {
+      setAvailableConfigs(cs.filter(c => c.status !== 'archived'))
+    }).catch(() => {})
+  }, [open])
 
   // Poll while running
   useEffect(() => {
@@ -257,29 +262,6 @@ function StepEvolve({
     }
   }
 
-  async function handleSavePreset() {
-    if (!presetName.trim()) return
-    setSavingPreset(true)
-    setPresetMsg('')
-    try {
-      await apiSaveConfig({
-        name: presetName.trim(),
-        source: 'evolved',
-        notes: 'Daily trader quick-start: low entry barriers, short DTE, aggressive deployment — use for pipeline testing',
-        fitness: null,
-        total_return_pct: null,
-        sharpe: null,
-        params: DAILY_TRADER_PARAMS,
-      })
-      setPresetMsg(`✅ Saved '${presetName.trim()}' — skip to Step 3 to start paper testing`)
-      onSaved(presetName.trim())
-    } catch (e) {
-      setPresetMsg(String(e))
-    } finally {
-      setSavingPreset(false)
-    }
-  }
-
   const winner = leaderboard?.top_genomes?.[0]
 
   return (
@@ -337,6 +319,27 @@ function StepEvolve({
             </div>
           </div>
 
+          {/* Seed config picker — optional selective evolution */}
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400 font-medium">Seed From Config <span className="text-slate-600">(optional)</span></p>
+            <p className="text-xs text-slate-600">Pick an existing config to focus the search near those parameters. Evolution still explores new territory — ~40% of the population starts random.</p>
+            <select
+              value={seedConfigName}
+              onChange={e => setSeedConfigName(e.target.value)}
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 appearance-none"
+            >
+              <option value="">— Start from scratch —</option>
+              {availableConfigs.map(c => (
+                <option key={c.name} value={c.name}>
+                  {c.name}{c.fitness != null ? ` · fit ${c.fitness.toFixed(2)}` : ''}{c.source === 'evolved' ? ' 🧬' : c.source === 'manual' ? ' ✍️' : ''}
+                </option>
+              ))}
+            </select>
+            {seedConfigName && (
+              <p className="text-xs text-amber-400">🧬 Seeding from <span className="font-mono">{seedConfigName}</span> — evolution will mutate around this baseline</p>
+            )}
+          </div>
+
           {launchErr && (
             <p className="text-xs px-3 py-2 rounded-lg border bg-red-950 border-red-800 text-red-300">{launchErr}</p>
           )}
@@ -346,7 +349,7 @@ function StepEvolve({
             disabled={launching}
             className="w-full bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
           >
-            {launching ? 'Launching…' : `Run ${goalMeta?.label ?? ''} Evolution`}
+            {launching ? 'Launching…' : seedConfigName ? `Evolve From '\${seedConfigName}'` : `Run \${goalMeta?.label ?? ''} Evolution`}
           </button>
 
           {/* Previous result summary */}
@@ -361,37 +364,6 @@ function StepEvolve({
               </div>
             </div>
           )}
-
-          {/* Quick preset */}
-          <div className="bg-navy rounded-xl px-3 py-3 space-y-2 border border-amber-900/50">
-            <div className="flex items-center gap-2">
-              <span className="text-base">⚡</span>
-              <div>
-                <p className="text-xs text-white font-semibold">Daily Trader Quick-Start</p>
-                <p className="text-xs text-slate-500">Skip evolution — hardcoded reckless config, trade flow within hours.</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-slate-500 bg-slate-900/60 rounded-lg px-3 py-2">
-              <span>IV threshold <span className="text-amber-400 font-mono">0.05</span></span>
-              <span>DTE <span className="text-amber-400 font-mono">1–7 days</span></span>
-              <span>Delta <span className="text-amber-400 font-mono">0.20–0.35</span></span>
-              <span>Equity/leg <span className="text-amber-400 font-mono">10%</span></span>
-            </div>
-            <input
-              type="text" value={presetName} onChange={e => setPresetName(e.target.value)}
-              placeholder="Config name…"
-              className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500"
-            />
-            {presetMsg && (
-              <p className={`text-xs px-3 py-2 rounded-lg border ${presetMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{presetMsg}</p>
-            )}
-            <button
-              onClick={handleSavePreset} disabled={savingPreset || !presetName.trim()}
-              className="w-full py-2.5 rounded-xl bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-xs font-semibold"
-            >
-              {savingPreset ? 'Saving…' : 'Create Daily Trader Config →'}
-            </button>
-          </div>
         </div>
       )}
 
