@@ -2086,6 +2086,97 @@ def get_farm_bot_state(bot_id: str) -> dict:
     }
 
 
+# ── Black Swan stress test ─────────────────────────────────────────────────────
+
+import threading as _threading
+
+_BLACK_SWAN_JOBS: dict[str, dict] = {}   # job_id → {status, config_name, started_at}
+_BLACK_SWAN_LOCK = _threading.Lock()
+
+
+class _BlackSwanRunRequest(BaseModel):
+    config_name: str
+    bot_id: str | None = None
+    skip_prereqs: bool = False
+
+
+@app.get("/black_swan/prereqs/{config_name}", dependencies=[Depends(_require_api_key)])
+def black_swan_prereqs(config_name: str):
+    """Check whether prerequisites are met before running the black swan test."""
+    import black_swan as _bs
+    met, missing = _bs.check_prerequisites(config_name)
+    return {"met": met, "missing": missing}
+
+
+@app.post("/black_swan/run", dependencies=[Depends(_require_api_key)])
+def black_swan_run(req: _BlackSwanRunRequest):
+    """
+    Start an async black-swan stress test for the given config.
+    Returns a job_id to poll with GET /black_swan/status/{job_id}.
+    Only one run per config_name is allowed at a time.
+    """
+    import uuid
+    import black_swan as _bs
+
+    # Reject duplicate runs for the same config
+    with _BLACK_SWAN_LOCK:
+        running = [
+            j for j in _BLACK_SWAN_JOBS.values()
+            if j["config_name"] == req.config_name and j["status"] == "running"
+        ]
+        if running:
+            return {"job_id": running[0]["job_id"], "status": "already_running"}
+
+        job_id = str(uuid.uuid4())[:8]
+        _BLACK_SWAN_JOBS[job_id] = {
+            "job_id":      job_id,
+            "config_name": req.config_name,
+            "status":      "running",
+            "started_at":  datetime.utcnow().isoformat() + "Z",
+            "error":       None,
+        }
+
+    def _worker():
+        try:
+            report = _bs.run_black_swan(
+                config_name=req.config_name,
+                bot_id=req.bot_id,
+                skip_prereq_check=req.skip_prereqs,
+            )
+            _bs.save_report(report)
+            with _BLACK_SWAN_LOCK:
+                _BLACK_SWAN_JOBS[job_id]["status"] = "done"
+                _BLACK_SWAN_JOBS[job_id]["verdict"] = report.verdict
+        except Exception as exc:
+            with _BLACK_SWAN_LOCK:
+                _BLACK_SWAN_JOBS[job_id]["status"] = "error"
+                _BLACK_SWAN_JOBS[job_id]["error"] = str(exc)[:300]
+
+    t = _threading.Thread(target=_worker, daemon=True)
+    t.start()
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.get("/black_swan/status/{job_id}", dependencies=[Depends(_require_api_key)])
+def black_swan_status(job_id: str):
+    """Poll the status of a black swan run."""
+    with _BLACK_SWAN_LOCK:
+        job = _BLACK_SWAN_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.get("/black_swan/results/{config_name}", dependencies=[Depends(_require_api_key)])
+def black_swan_results(config_name: str):
+    """Return the most recent black swan report for the given config."""
+    import black_swan as _bs
+    report = _bs.load_report(config_name)
+    if not report:
+        raise HTTPException(status_code=404, detail="No results found for this config")
+    return report
+
+
 # ── PWA static file serving ────────────────────────────────────────────────────
 _STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
 

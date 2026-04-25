@@ -605,3 +605,61 @@ export async function testConnection(): Promise<boolean> {
     return false
   }
 }
+
+// ── Black Swan stress test ─────────────────────────────────────────────────────
+
+export interface BlackSwanScenarioResult {
+  scenario_id: string
+  scenario_name: string
+  scenario_type: 'historical' | 'synthetic'
+  description: string
+  severity_weight: number
+  max_drawdown_pct: number
+  total_return_pct: number
+  num_trades: number
+  win_rate_pct: number
+  sharpe_ratio: number
+  drawdown_pass: boolean
+  return_pass: boolean
+  passed: boolean
+  max_drawdown_threshold: number
+  min_return_threshold: number | null
+  error: string
+  sim_days: number
+}
+
+export interface BlackSwanReport {
+  config_name: string
+  run_at: string
+  scenarios: BlackSwanScenarioResult[]
+  verdict: 'PASS' | 'PARTIAL' | 'FAIL' | 'BLOCKED' | 'UNKNOWN'
+  passed_count: number
+  failed_count: number
+  critical_failures: string[]
+  prereqs_met: boolean
+  prereqs_missing: string[]
+}
+
+export interface BlackSwanJobStatus {
+  job_id: string
+  config_name: string
+  status: 'running' | 'done' | 'error' | 'already_running'
+  started_at?: string
+  verdict?: string
+  error?: string | null
+}
+
+export const getBlackSwanPrereqs = (configName: string) =>
+  request<{ met: boolean; missing: string[] }>(`/black_swan/prereqs/${encodeURIComponent(configName)}`)
+
+export const runBlackSwan = (configName: string, skipPrereqs = false) =>
+  request<BlackSwanJobStatus>('/black_swan/run', {
+    method: 'POST',
+    body: JSON.stringify({ config_name: configName, skip_prereqs: skipPrereqs }),
+  })
+
+export const getBlackSwanStatus = (jobId: string) =>
+  request<BlackSwanJobStatus>(`/black_swan/status/${jobId}`)
+
+export const getBlackSwanResults = (configName: string) =>
+  request<BlackSwanReport>(`/black_swan/results/${encodeURIComponent(configName)}`)

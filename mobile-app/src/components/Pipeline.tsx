@@ -14,6 +14,8 @@ import {
   getEvolveResults, EvolveResults, EvolveGenome,
   getOptimizerRunning, WalkForwardResults, MonteCarloResults, getWalkForwardResults, getMonteCarloResults,
   getConfigDetail,
+  getBlackSwanPrereqs, runBlackSwan, getBlackSwanStatus, getBlackSwanResults,
+  BlackSwanReport, BlackSwanScenarioResult,
 } from '../api'
 import {
   LineChart, Line,
@@ -2192,6 +2194,304 @@ function StepAIReview({
   )
 }
 
+// ── Step 5.8 — Black Swan Stress Test ─────────────────────────────────────────
+
+const BS_SCENARIO_ICONS: Record<string, string> = {
+  black_thursday:  '🕳️',
+  bear_market_2022:'🐻',
+  ftx_collapse:    '💥',
+  bull_run_2021:   '🚀',
+  flatline:        '📉',
+  flash_crash:     '⚡',
+}
+
+function ScenarioCard({ r }: { r: BlackSwanScenarioResult }) {
+  const icon     = BS_SCENARIO_ICONS[r.scenario_id] ?? '🔬'
+  const passing  = r.passed && !r.error
+  const errored  = !!r.error
+
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 space-y-1.5 ${
+      errored  ? 'border-slate-700 bg-slate-900/50'
+      : passing  ? 'border-green-800 bg-green-950/40'
+      :            'border-red-800 bg-red-950/40'
+    }`}>
+      {/* header row */}
+      <div className="flex items-center gap-2">
+        <span className="text-base">{icon}</span>
+        <span className="flex-1 text-xs font-bold text-white">{r.scenario_name}</span>
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${
+          errored  ? 'border-slate-600 text-slate-400'
+          : passing  ? 'border-green-700 text-green-300 bg-green-900/50'
+          :            'border-red-700 text-red-300 bg-red-900/50'
+        }`}>
+          {errored ? 'ERROR' : passing ? '✓ PASS' : '✗ FAIL'}
+        </span>
+        {r.severity_weight === 5 && (
+          <span className="text-xs text-amber-400 font-bold" title="Critical gate">⚠ CRIT</span>
+        )}
+      </div>
+
+      {/* description */}
+      <p className="text-xs text-slate-500 leading-relaxed">{r.description}</p>
+
+      {errored ? (
+        <p className="text-xs text-red-400">{r.error}</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+          {/* drawdown row */}
+          <span className="text-slate-400">Max Drawdown</span>
+          <span className={r.drawdown_pass ? 'text-green-300' : 'text-red-300 font-semibold'}>
+            {r.max_drawdown_pct.toFixed(1)}%
+            <span className="text-slate-500 font-normal"> / {r.max_drawdown_threshold}% limit</span>
+          </span>
+          {/* return row */}
+          <span className="text-slate-400">Return</span>
+          <span className={r.return_pass ? 'text-green-300' : 'text-red-300 font-semibold'}>
+            {r.total_return_pct >= 0 ? '+' : ''}{r.total_return_pct.toFixed(1)}%
+            {r.min_return_threshold != null && (
+              <span className="text-slate-500 font-normal"> / min {r.min_return_threshold}%</span>
+            )}
+          </span>
+          {/* trades + sharpe */}
+          <span className="text-slate-400">Trades / Win</span>
+          <span className="text-slate-300">{r.num_trades} / {r.win_rate_pct.toFixed(0)}%</span>
+          <span className="text-slate-400">Sharpe</span>
+          <span className="text-slate-300">{r.sharpe_ratio.toFixed(2)}</span>
+          {r.sim_days > 0 && (
+            <>
+              <span className="text-slate-400">Days simulated</span>
+              <span className="text-slate-300">{r.sim_days}</span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StepBlackSwan({
+  open, onToggle, configs,
+}: {
+  open: boolean
+  onToggle: () => void
+  configs: NamedConfig[]
+}) {
+  const [selectedConfig, setSelectedConfig] = useState<string>('')
+  const [prereqs, setPrereqs]               = useState<{ met: boolean; missing: string[] } | null>(null)
+  const [running, setRunning]               = useState(false)
+  const [jobId, setJobId]                   = useState<string | null>(null)
+  const [report, setReport]                 = useState<BlackSwanReport | null>(null)
+  const [error, setError]                   = useState('')
+  const pollRef                             = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Pre-select first active config
+  useEffect(() => {
+    if (!open || selectedConfig) return
+    const first = configs.find(c => c.status !== 'archived')
+    if (first) setSelectedConfig(first.name)
+  }, [open, configs, selectedConfig])
+
+  // Check prereqs when config changes
+  useEffect(() => {
+    if (!selectedConfig) return
+    setPrereqs(null)
+    setReport(null)
+    setError('')
+    getBlackSwanPrereqs(selectedConfig)
+      .then(p => setPrereqs(p))
+      .catch(() => setPrereqs({ met: false, missing: ['Could not check prerequisites'] }))
+    // Try to load existing results
+    getBlackSwanResults(selectedConfig)
+      .then(r => setReport(r))
+      .catch(() => {}) // 404 is fine
+  }, [selectedConfig])
+
+  // Poll job status when running
+  useEffect(() => {
+    if (!jobId || !running) return
+    const poll = setInterval(async () => {
+      try {
+        const status = await getBlackSwanStatus(jobId)
+        if (status.status === 'done') {
+          clearInterval(poll)
+          setRunning(false)
+          setJobId(null)
+          const r = await getBlackSwanResults(selectedConfig)
+          setReport(r)
+        } else if (status.status === 'error') {
+          clearInterval(poll)
+          setRunning(false)
+          setJobId(null)
+          setError(status.error ?? 'Unknown error during run')
+        }
+      } catch {}
+    }, 3000)
+    pollRef.current = poll
+    return () => clearInterval(poll)
+  }, [jobId, running, selectedConfig])
+
+  async function handleRun() {
+    if (!selectedConfig) return
+    setError('')
+    setRunning(true)
+    try {
+      const job = await runBlackSwan(selectedConfig)
+      if (job.status === 'already_running') {
+        setJobId(job.job_id)
+      } else {
+        setJobId(job.job_id)
+      }
+    } catch (e) {
+      setRunning(false)
+      setError(String(e))
+    }
+  }
+
+  const activeConfigs   = configs.filter(c => c.status !== 'archived')
+  const canRun          = prereqs?.met && !running && !!selectedConfig
+  const verdictColor    = {
+    PASS:    'text-green-300 border-green-700 bg-green-950/60',
+    PARTIAL: 'text-amber-300 border-amber-700 bg-amber-950/60',
+    FAIL:    'text-red-300 border-red-700 bg-red-950/60',
+    BLOCKED: 'text-slate-400 border-slate-700 bg-slate-900/60',
+    UNKNOWN: 'text-slate-500 border-slate-700 bg-slate-900/40',
+  }[report?.verdict ?? 'UNKNOWN'] ?? 'text-slate-500 border-slate-700 bg-slate-900/40'
+
+  return (
+    <div className="bg-card rounded-2xl border border-amber-900 overflow-hidden">
+      <button className="w-full flex items-center gap-3 px-4 py-3 text-left" onClick={onToggle}>
+        <span className="text-xl">🦢</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-white uppercase tracking-wide">Black Swan Test</span>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {report
+              ? `Last run: ${report.verdict} · ${report.passed_count}/${report.scenarios.length} scenarios passed`
+              : 'Stress-test against 6 extreme market scenarios'}
+          </p>
+        </div>
+        {report && (
+          <span className={`text-xs font-bold px-2 py-0.5 rounded-full border mr-1 ${verdictColor}`}>
+            {report.verdict}
+          </span>
+        )}
+        <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          <p className="text-xs text-slate-500 leading-relaxed">
+            Runs the config's strategy against 4 real historical crisis periods and 2 synthetic extremes — each with different pass/fail thresholds. A <span className="text-amber-400">critical</span> failure (⚠ CRIT) blocks Go Live.
+          </p>
+
+          {/* Config selector */}
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400 font-medium">Select Config to Test</p>
+            <select
+              value={selectedConfig}
+              onChange={e => setSelectedConfig(e.target.value)}
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-600 appearance-none"
+            >
+              <option value="">— Choose a config —</option>
+              {activeConfigs.map(c => (
+                <option key={c.name} value={c.name}>
+                  {c.name}{c.fitness != null ? ` · fit ${c.fitness.toFixed(2)}` : ''}{c.source === 'evolved' ? ' 🧬' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Prereqs */}
+          {prereqs && !prereqs.met && (
+            <div className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 space-y-1">
+              <p className="text-xs text-slate-400 font-semibold">🔒 Prerequisites not met</p>
+              {prereqs.missing.map((m, i) => (
+                <p key={i} className="text-xs text-slate-500">• {m}</p>
+              ))}
+            </div>
+          )}
+
+          {error && (
+            <p className="text-xs px-3 py-2 rounded-lg border bg-red-950 border-red-800 text-red-300">{error}</p>
+          )}
+
+          {/* Run button */}
+          <button
+            onClick={handleRun}
+            disabled={!canRun}
+            className="w-full bg-amber-800 hover:bg-amber-700 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
+          >
+            {running
+              ? '⏳ Running scenarios… (2–8 min)'
+              : '🦢 Run Black Swan Test'}
+          </button>
+
+          {running && (
+            <div className="bg-navy border border-amber-900/50 rounded-xl px-3 py-2.5">
+              <p className="text-xs text-amber-300 font-semibold">Stress test running…</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Fetching historical BTC data from Deribit and running 6 full backtests. This takes 2–8 minutes depending on network speed.
+              </p>
+            </div>
+          )}
+
+          {/* Results */}
+          {report && !running && (
+            <div className="space-y-2">
+              {/* Verdict banner */}
+              <div className={`flex items-center gap-3 rounded-xl px-3 py-2.5 border ${verdictColor}`}>
+                <span className="text-2xl">
+                  {report.verdict === 'PASS' ? '✅' : report.verdict === 'PARTIAL' ? '⚠️' : report.verdict === 'FAIL' ? '🚫' : '🔒'}
+                </span>
+                <div className="flex-1">
+                  <p className="text-sm font-bold">
+                    {report.verdict === 'PASS'    && 'All scenarios passed — config is stress-test ready'}
+                    {report.verdict === 'PARTIAL' && `Partial pass — ${report.failed_count} scenario${report.failed_count > 1 ? 's' : ''} failed`}
+                    {report.verdict === 'FAIL'    && 'Critical failure — Go Live is blocked'}
+                    {report.verdict === 'BLOCKED' && 'Test blocked — prerequisites not met'}
+                  </p>
+                  <p className="text-xs opacity-70 mt-0.5">
+                    {report.passed_count}/{report.scenarios.length} scenarios passed ·
+                    Run: {new Date(report.run_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+
+              {/* Critical failures */}
+              {report.critical_failures.length > 0 && (
+                <div className="bg-red-950 border border-red-800 rounded-xl px-3 py-2">
+                  <p className="text-xs text-red-300 font-semibold">🚨 Critical failures — must fix before Go Live:</p>
+                  {report.critical_failures.map((f, i) => (
+                    <p key={i} className="text-xs text-red-400">• {f}</p>
+                  ))}
+                </div>
+              )}
+
+              {/* Scenario cards */}
+              <div className="space-y-2">
+                {report.scenarios.map(r => (
+                  <ScenarioCard key={r.scenario_id} r={r} />
+                ))}
+              </div>
+
+              {/* Legend */}
+              <div className="bg-navy rounded-xl px-3 py-2 space-y-1">
+                <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">About these tests</p>
+                <div className="text-xs text-slate-500 space-y-0.5">
+                  <p>⚠ <span className="text-amber-400">CRIT</span> scenarios have severity weight 5 — a single failure blocks Go Live</p>
+                  <p>Non-critical failures result in a <span className="text-amber-300">PARTIAL</span> verdict — proceed with caution</p>
+                  <p>Historical data is fetched live from Deribit's public API</p>
+                  <p>Synthetic scenarios use generated price paths with controlled IV</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Step 6 — Go Live ──────────────────────────────────────────────────────────
 
 function StepGoLive({
@@ -2474,6 +2774,14 @@ export default function Pipeline() {
         onToggle={() => toggle(55)}
         configs={configs}
         bots={bots}
+      />
+
+      <StepConnector />
+
+      <StepBlackSwan
+        open={openStep === 58}
+        onToggle={() => toggle(58)}
+        configs={configs}
       />
 
       <StepConnector />
