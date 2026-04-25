@@ -1,32 +1,3 @@
-  FolderActionsDis 0.0%
-  System Events    0.0%
-  mdworker_shared  0.0%
-  claude           0.0% 152M
-Memory: 314MB free (80437 pages free), 468380 pages in compressor
-Disk: 855Gi total, 13Gi used, 701Gi available (2% used)
-Thermal: N/A
-
-[TIDY 2026-04-24 13:34] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit
-[HEALTH 2026-04-24 13:34]
-Uptime: up 1 day, 22:35, 4 users, load averages: 2.54 1.97 1.88
-Top CPU processes:
-  tail 0.0% 1372K
-  top 0.0% 6668K
-  bash 0.0% 1392K
-  osascript 0.0% 4436K
-  claude 0.0% 169M
-Memory: 133MB free (28GB total, ~11.8GB active, ~11.7GB inactive, ~3.1GB wired)
-Disk: 855GB total, 13GB used, 701GB available (2%)
-Thermal: N/A
-
-[TIDY 2026-04-24 14:04] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit | Preview: 0 windows, left running
-[HEALTH 2026-04-24 14:05]
-Uptime: up 1 day, 23:05, 4 users, load averages: 3.99 2.25 1.92
-Top CPU processes:
-  tail 0.0% 1392K
-  top 0.0% 6696K
-  claude 0.0% 152M
-  mdworker_shared 0.0% 2276K
   FolderActionsDispatcher 0.0% 3856K
 Memory: 131MB free (33665 pages), 11.7GB inactive, 28GB total, compressor: 470655 pages
 Disk: 855GB total, 13GB used, 701GB available (2% used)
@@ -499,3 +470,31 @@ Disk: 855Gi total, 13Gi used, 701Gi available (2% used)
 Thermal: N/A
 
 [TIDY 2026-04-25 11:03] Terminals: was 3, closed 0, now 3 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player
+[HEALTH 2026-04-25 11:04]
+Uptime: 11:04  up 15:43, 4 users, load averages: 1.90 0.89 0.76
+Top CPU processes:
+  PID    COMMAND          %CPU MEM
+12029  tail             0.0  1356K
+12028  top              0.0  4760K
+12027  bash             0.0  1344K
+12026  osascript        0.0  4508K
+12017  FolderActionsDis 0.0  3944K
+Memory: 1748 MB free (pages free), ~7.4GB inactive+speculative
+Disk: Used: 13Gi / Available: 701Gi (2% used)
+Thermal: N/A (requires elevated privileges)
+Memory pressure: NORMAL (0 compressor pages, 28GB RAM in use)
+---
+[TIDY 2026-04-25 11:34] Terminals: was 3, closed 0, now 3 | Quit: Preview | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, QuickTime Player, TextEdit, Calendar, System Settings
+[HEALTH 2026-04-25 11:34]
+Uptime: 11:33  up 16:13, 4 users, load averages: 4.36 1.37 0.85
+Top CPU processes:
+  PID    COMMAND          %CPU MEM
+  12450  tail             0.0  1312K
+  12449  top              0.0  4756K
+  12448  bash             0.0  1356K
+  12447  osascript        0.0  4468K
+  12362  claude           0.0  157M
+Memory: 1755 MB free (449380 pages free)
+Disk: 13Gi used / 701Gi available (2% used)
+Thermal: N/A
+

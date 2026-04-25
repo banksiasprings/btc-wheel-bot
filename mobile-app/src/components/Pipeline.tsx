@@ -769,12 +769,14 @@ function ValidateTestCard({
 // ── Step 2 — Validate ─────────────────────────────────────────────────────────
 
 function StepValidate({
-  open, onToggle,
+  open, onToggle, configs,
 }: {
   open: boolean
   onToggle: () => void
+  configs: NamedConfig[]
 }) {
   type TestState = 'idle' | 'running' | 'done' | 'error'
+  const [selectedConfig, setSelectedConfig] = useState<string | null>(null)
   const [wfState, setWfState] = useState<TestState>('idle')
   const [mcState, setMcState] = useState<TestState>('idle')
   const [wfResults, setWfResults] = useState<WalkForwardResults | null>(null)
@@ -849,12 +851,12 @@ function StepValidate({
 
   async function startWF() {
     setWfState('running'); setWfElapsed(0)
-    try { await runOptimizer('walk_forward') } catch { setWfState('error') }
+    try { await runOptimizer('walk_forward', undefined, undefined, selectedConfig ?? undefined) } catch { setWfState('error') }
   }
 
   async function startMC() {
     setMcState('running'); setMcElapsed(0)
-    try { await runOptimizer('monte_carlo') } catch { setMcState('error') }
+    try { await runOptimizer('monte_carlo', undefined, undefined, selectedConfig ?? undefined) } catch { setMcState('error') }
   }
 
   const doneCount   = (wfState === 'done' ? 1 : 0) + (mcState === 'done' ? 1 : 0)
@@ -870,8 +872,12 @@ function StepValidate({
         <div className="flex-1 min-w-0">
           <span className="text-sm font-bold text-white uppercase tracking-wide">Step 2 · Validate</span>
           <p className="text-xs text-slate-400 mt-0.5">
-            {status === 'complete' ? 'Both tests passed · ready to paper trade'
-              : anyRunning ? 'Running validation…'
+            {status === 'complete'
+              ? `Both tests passed${selectedConfig ? ` · ${selectedConfig}` : ''}`
+              : anyRunning
+              ? `Running validation…${selectedConfig ? ` · ${selectedConfig}` : ''}`
+              : selectedConfig
+              ? selectedConfig
               : 'Walk-Forward · Monte Carlo'}
           </p>
         </div>
@@ -880,8 +886,16 @@ function StepValidate({
 
       {open && (
         <div className="px-4 pb-4 space-y-3">
+          <ConfigSelector
+            value={selectedConfig}
+            onChange={setSelectedConfig}
+            label="Config to validate"
+            showStats
+          />
           <p className="text-xs text-slate-500 -mt-1">
-            Both tests use the current best genome. Run Evolve (Step 1) first to generate one.
+            {selectedConfig
+              ? `Tests will run against the params saved in "${selectedConfig}".`
+              : 'Select a config above, or leave blank to test the current best genome.'}
           </p>
 
           <ValidateTestCard
@@ -2199,6 +2213,7 @@ export default function Pipeline() {
       <StepValidate
         open={openStep === 2}
         onToggle={() => toggle(2)}
+        configs={configs}
       />
 
       <StepConnector />

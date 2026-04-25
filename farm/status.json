@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-25T01:03:24.377100+00:00",
+  "updated_at": "2026-04-25T01:48:45.089059+00:00",
   "bots": [
     {
       "id": "roi-rest-1",
@@ -7,8 +7,8 @@
       "description": "Paper trading: ROI rest 1",
       "status": "running",
       "pid": 9156,
-      "uptime_hours": 3.78,
-      "days_running": 0.16,
+      "uptime_hours": 4.53,
+      "days_running": 0.19,
       "config_name": "ROI rest 1",
       "config_status": "paper",
       "config_summary": {
@@ -49,8 +49,8 @@
       "description": "Paper trading: balanced_20260423_2346",
       "status": "running",
       "pid": 9158,
-      "uptime_hours": 3.78,
-      "days_running": 0.16,
+      "uptime_hours": 4.53,
+      "days_running": 0.19,
       "config_name": "balanced_20260423_2346",
       "config_status": "paper",
       "config_summary": {
@@ -91,8 +91,8 @@
       "description": "Paper trading: bot_1",
       "status": "running",
       "pid": 9159,
-      "uptime_hours": 3.78,
-      "days_running": 0.16,
+      "uptime_hours": 4.53,
+      "days_running": 0.19,
       "config_name": "bot_1",
       "config_status": "paper",
       "config_summary": {
@@ -133,8 +133,8 @@
       "description": "Paper trading: bot_2",
       "status": "running",
       "pid": 9161,
-      "uptime_hours": 3.78,
-      "days_running": 0.16,
+      "uptime_hours": 4.53,
+      "days_running": 0.19,
       "config_name": "bot_2",
       "config_status": "paper",
       "config_summary": {
@@ -175,8 +175,8 @@
       "description": "Paper trading: daily trader V1",
       "status": "running",
       "pid": 11920,
-      "uptime_hours": 0.07,
-      "days_running": 0.0,
+      "uptime_hours": 0.82,
+      "days_running": 0.03,
       "config_name": "daily trader V1",
       "config_status": "paper",
       "config_summary": {
