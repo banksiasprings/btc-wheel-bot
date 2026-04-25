@@ -1,19 +1,25 @@
 _meta:
-  created_at: '2026-04-23T11:05:46.965854+00:00'
-  fitness: null
-  goal: null
-  name: aggressive
-  notes: 'Higher delta: more premium but more assignment risk'
-  source: manual
+  created_at: '2026-04-25T00:25:05.435874+00:00'
+  drawdown: -0.64
+  fitness: 2.9926
+  generations: 8
+  goal: daily_trader
+  name: daily_trader_20260425_0025
+  notes: ''
+  sharpe: -1.26
+  source: evolved
   status: draft
+  total_return: 3.7
+  version: 2
+  win_rate: 73.3
 backtest:
-  approx_otm_offset: 0.0338
+  approx_otm_offset: 0.1135
   lookback_months: 12
-  premium_fraction_of_spot: 0.0289
+  premium_fraction_of_spot: 0.0266
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 1000.0
+  starting_equity: 39593.6832
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -53,9 +59,9 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.0828
+  max_equity_per_leg: 0.0272
   max_open_legs: 1
-  min_free_equity_fraction: 0.1007
+  min_free_equity_fraction: 0.1645
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -65,9 +71,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.35
+  iv_rank_threshold: 0.2358
   liquidity_top_n: 100
-  max_dte: 37
-  min_dte: 3
-  target_delta_max: 0.4
-  target_delta_min: 0.2
+  max_dte: 34
+  min_dte: 8
+  target_delta_max: 0.2022
+  target_delta_min: 0.1318

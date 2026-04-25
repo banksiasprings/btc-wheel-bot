@@ -1,0 +1,2786 @@
+================================================================================
+  BTC WHEEL BOT — COMPLETE RECONSTRUCTION GUIDE
+  Plain-text format. Follow steps 1–280 sequentially.
+  All file contents are embedded verbatim between === BEGIN / END === markers.
+================================================================================
+
+TABLE OF CONTENTS
+-----------------
+PHASE 1  — Project scaffold & Python environment        Steps 1–20
+PHASE 2  — Configuration (config.yaml + config.py)     Steps 21–40
+PHASE 3  — Deribit client (deribit_client.py)           Steps 41–60
+PHASE 4  — Strategy engine (strategy.py)               Steps 61–75
+PHASE 5  — Risk manager (risk_manager.py)              Steps 76–90
+PHASE 6  — Notifications (notifier.py)                 Steps 91–100
+PHASE 7  — Bot engine (bot.py)                         Steps 101–115
+PHASE 8  — Backtester (backtester.py)                  Steps 116–130
+PHASE 9  — Optimizer / genetic algorithm (optimizer.py) Steps 131–145
+PHASE 10 — Config store (config_store.py)              Steps 146–160
+PHASE 11 — Bot farm (bot_farm.py + readiness_validator.py + farm_config.yaml) Steps 161–180
+PHASE 12 — FastAPI backend (api.py)                    Steps 181–200
+PHASE 13 — React PWA frontend (mobile-app/)            Steps 201–250
+PHASE 14 — Infrastructure & deployment                 Steps 251–280
+
+================================================================================
+PREREQUISITES
+================================================================================
+- macOS 13+ (Intel or Apple Silicon)
+- Python 3.11 installed at /usr/local/bin/python3.11
+  Install: brew install python@3.11
+- Node.js 20+ and npm
+  Install: brew install node
+- Git and GitHub CLI (gh)
+  Install: brew install git gh
+  Auth:    gh auth login
+- Cloudflare account (free) + domain registered in Cloudflare
+  This build uses: banksiaspringsfarm.com
+- Deribit account (testnet for paper, mainnet for live)
+  API keys from: https://test.deribit.com (testnet) or https://www.deribit.com
+- GitHub repo: banksiasprings/btc-wheel-bot (public)
+
+ENVIRONMENT VARIABLES (put in ~/.zshrc and in LaunchAgent plist):
+  DERIBIT_API_KEY=<your-testnet-api-key>
+  DERIBIT_API_SECRET=<your-testnet-api-secret>
+  DERIBIT_TESTNET=true
+  WHEEL_API_KEY=3f985cae37cbfb18da4acb92219ba077
+
+  Farm bots use two additional env vars:
+  WHEEL_BOT_CONFIG=<path-to-named-config.yaml>
+  WHEEL_BOT_DATA_DIR=<path-to-isolated-data-dir>
+
+================================================================================
+PHASE 1 — PROJECT SCAFFOLD & PYTHON ENVIRONMENT
+Steps 1–20
+================================================================================
+
+STEP 1 — Create project directory
+  mkdir -p ~/Documents/btc-wheel-bot
+  cd ~/Documents/btc-wheel-bot
+
+STEP 2 — Initialise git
+  git init
+  git remote add origin https://github.com/banksiasprings/btc-wheel-bot.git
+
+STEP 3 — Create Python virtual environment (optional but recommended)
+  /usr/local/bin/python3.11 -m venv .venv
+  source .venv/bin/activate
+
+STEP 4 — Create requirements.txt
+=== BEGIN FILE: requirements.txt ===
+aiohttp>=3.9
+loguru>=0.7
+numpy>=1.26
+pandas>=2.2
+pyyaml>=6.0
+python-dotenv>=1.0
+requests>=2.31
+scipy>=1.13
+matplotlib>=3.9
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+websockets>=12.0
+httpx>=0.27
+=== END FILE: requirements.txt ===
+
+STEP 5 — Install dependencies
+  pip install -r requirements.txt
+
+STEP 6 — Create .env file (NEVER commit this to git)
+=== BEGIN FILE: .env.example ===
+DERIBIT_API_KEY=your_key_here
+DERIBIT_API_SECRET=your_secret_here
+DERIBIT_TESTNET=true
+WHEEL_API_KEY=3f985cae37cbfb18da4acb92219ba077
+=== END FILE: .env.example ===
+
+  cp .env.example .env
+  # Edit .env with your real Deribit testnet API key and secret
+
+STEP 7 — Create .gitignore
+=== BEGIN FILE: .gitignore ===
+.env
+__pycache__/
+*.pyc
+.venv/
+data/
+farm/
+logs/
+*.log
+KILL_SWITCH
+*.bak
+.DS_Store
+node_modules/
+mobile-app/dist/
+mobile-app/.vite/
+=== END FILE: .gitignore ===
+
+STEP 8 — Create directory structure
+  mkdir -p data logs configs farm
+
+STEP 9 — Create main.py entry point
+=== BEGIN FILE: main.py ===
+"""main.py — BTC Wheel Bot entry point."""
+from __future__ import annotations
+import argparse
+import asyncio
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="BTC Wheel Bot")
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "live", "testnet", "backtest"],
+        default="paper",
+    )
+    args = parser.parse_args()
+
+    if args.mode == "backtest":
+        from backtester import Backtester
+        bt = Backtester()
+        results = bt.run()
+        print(f"\nBacktest complete: {results.num_cycles} cycles")
+        print(f"  Total return: {results.total_return_pct:.1f}%")
+        print(f"  Sharpe: {results.sharpe_ratio:.2f}")
+        print(f"  Win rate: {results.win_rate_pct:.1f}%")
+        print(f"  Max drawdown: {results.max_drawdown_pct:.1f}%")
+        return
+
+    from bot import WheelBot
+    paper = args.mode != "live"
+    bot = WheelBot(paper=paper)
+    asyncio.run(bot.run())
+
+if __name__ == "__main__":
+    main()
+=== END FILE: main.py ===
+
+STEP 10 — Create placeholder files to ensure imports work
+  touch ai_overseer.py hedge_manager.py order_tracker.py
+
+  NOTE: ai_overseer.py, hedge_manager.py, and order_tracker.py are supporting
+  modules. Create stubs if you don't have them:
+
+=== BEGIN FILE: ai_overseer.py ===
+"""ai_overseer.py — AI oversight stub (no LLM key = disabled)."""
+class AIOverSeer:
+    def is_enabled(self): return False
+    def build_brief(self, **kwargs): return {}
+    def check(self, brief): return True  # safe
+=== END FILE: ai_overseer.py ===
+
+=== BEGIN FILE: order_tracker.py ===
+"""order_tracker.py — Order tracking stub."""
+from dataclasses import dataclass
+from enum import Enum
+
+class OrderStatus(Enum):
+    FILLED = "filled"
+    TIMEOUT = "timeout"
+    FAILED = "failed"
+
+@dataclass
+class OrderRecord:
+    instrument_name: str = ""
+    filled_amount: float = 0.0
+    avg_fill_price: float = 0.0
+    slippage_btc: float = 0.0
+    elapsed_seconds: float = 0.0
+    filled_at: object = None
+    created_at: object = None
+    status: OrderStatus = OrderStatus.FILLED
+
+class OrderTracker:
+    def __init__(self, ws_client=None, on_fill=None): pass
+=== END FILE: order_tracker.py ===
+
+=== BEGIN FILE: hedge_manager.py ===
+"""hedge_manager.py — Delta hedge stub."""
+class HedgeManager:
+    def __init__(self, paper=True, rebalance_threshold=0.05):
+        self.position_btc = 0.0
+        self.realised_pnl_usd = 0.0
+        self._paper = paper
+    def net_delta_btc(self, opt_type, delta, contracts): return 0.0
+    def unrealised_pnl_usd(self, spot): return 0.0
+    def to_dict(self, spot): return None
+    def reset(self): self.position_btc = 0.0
+    async def rebalance(self, opt_type, delta, contracts, spot, ws_client=None): return 0.0
+    async def close_all(self, spot, ws_client=None): return 0.0
+=== END FILE: hedge_manager.py ===
+
+STEP 11 — Verify Python imports work
+  python3.11 -c "import yaml, loguru, numpy, pandas, fastapi, uvicorn; print('All imports OK')"
+
+CHECKPOINT PHASE 1:
+  python3.11 main.py --mode=paper
+  (Should fail gracefully because config.yaml doesn't exist yet — that's expected)
+
+================================================================================
+PHASE 2 — CONFIGURATION
+Steps 21–40
+================================================================================
+
+STEP 21 — Create config.yaml (master configuration file)
+=== BEGIN FILE: config.yaml ===
+backtest:
+  approx_otm_offset: 0.0338
+  lookback_months: 12
+  premium_fraction_of_spot: 0.0289
+  results_csv: data/backtest_trades.csv
+  results_image: backtest_results.png
+  risk_free_rate: 0.04
+  starting_equity: 1000.0
+  transaction_cost: 0.5
+deribit:
+  currency: BTC
+  request_timeout: 10
+  rest_url_mainnet: https://www.deribit.com/api/v2
+  rest_url_testnet: https://test.deribit.com/api/v2
+  testnet: true
+  ws_url_mainnet: wss://www.deribit.com/ws/api/v2
+  ws_url_testnet: wss://test.deribit.com/ws/api/v2
+execution:
+  order_confirm_timeout: 30
+  poll_interval: 60
+  slippage_tolerance: 0.005
+hedge:
+  enabled: true
+  rebalance_threshold: 0.05
+logging:
+  level: INFO
+  log_dir: logs
+  retention: 30 days
+  rotation: 1 day
+  trade_log_csv: data/trades.csv
+overseer:
+  check_interval_minutes: 60
+  drawdown_warning_threshold: 0.05
+  enabled: true
+  iv_spike_warning_threshold: 0.85
+risk:
+  kill_switch_file: KILL_SWITCH
+  max_adverse_delta: 0.4
+  max_daily_drawdown: 0.1
+  max_loss_per_leg: 0.02
+  roll_enabled: false
+  roll_min_dte: 3
+sizing:
+  collateral_buffer: 1.0
+  contract_size_btc: 0.1
+  ladder_enabled: false
+  ladder_legs: 2
+  max_equity_per_leg: 0.0828
+  max_open_legs: 1
+  min_free_equity_fraction: 0.1007
+  regime_ma_days: 50
+  use_regime_filter: false
+strategy:
+  expiry_execution_hour: 8
+  expiry_preference:
+  - weekly
+  - monthly
+  initial_cycle: put
+  iv_dynamic_delta: true
+  iv_rank_threshold: 0.701
+  liquidity_top_n: 100
+  max_dte: 37
+  min_dte: 3
+  target_delta_max: 0.4057
+  target_delta_min: 0.1883
+=== END FILE: config.yaml ===
+
+STEP 22 — Create config.py (typed configuration loader)
+=== BEGIN FILE: config.py ===
+"""
+config.py — Centralised configuration loader for BTC Wheel Bot.
+
+Loads settings from config.yaml, then overlays values from environment
+variables (via .env or system env).  Exposes a single typed Config object
+that every other module imports.
+
+Usage:
+    from config import cfg
+    print(cfg.strategy.iv_rank_threshold)
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
+
+import yaml
+from dotenv import load_dotenv
+
+# Load .env before reading environment variables
+load_dotenv()
+
+
+@dataclass
+class DeribitConfig:
+    testnet: bool
+    ws_url_testnet: str
+    ws_url_mainnet: str
+    rest_url_testnet: str
+    rest_url_mainnet: str
+    request_timeout: int
+    currency: str
+    api_key: str = ""
+    api_secret: str = ""
+
+    @property
+    def ws_url(self) -> str:
+        return self.ws_url_testnet if self.testnet else self.ws_url_mainnet
+
+    @property
+    def rest_url(self) -> str:
+        return self.rest_url_testnet if self.testnet else self.rest_url_mainnet
+
+
+@dataclass
+class StrategyConfig:
+    iv_rank_threshold: float
+    target_delta_min: float
+    target_delta_max: float
+    expiry_preference: list[str]
+    min_dte: int
+    max_dte: int
+    initial_cycle: Literal["put", "call"]
+    expiry_execution_hour: int
+    liquidity_top_n: int
+    iv_dynamic_delta: bool = False
+
+
+@dataclass
+class SizingConfig:
+    max_equity_per_leg: float
+    max_open_legs: int
+    collateral_buffer: float
+    contract_size_btc: float
+    min_free_equity_fraction: float = 0.25
+    use_regime_filter: bool = False
+    regime_ma_days: int = 50
+    ladder_enabled: bool = False
+    ladder_legs: int = 2
+
+
+@dataclass
+class RiskConfig:
+    max_adverse_delta: float
+    max_loss_per_leg: float
+    max_daily_drawdown: float
+    kill_switch_file: str
+    roll_enabled: bool = False
+    roll_min_dte: int = 3
+
+
+@dataclass
+class ExecutionConfig:
+    poll_interval: int
+    order_confirm_timeout: int
+    slippage_tolerance: float
+
+
+@dataclass
+class BacktestConfig:
+    starting_equity: float
+    lookback_months: int
+    transaction_cost: float
+    approx_otm_offset: float
+    premium_fraction_of_spot: float
+    risk_free_rate: float
+    results_image: str
+    results_csv: str
+
+
+@dataclass
+class HedgeConfig:
+    enabled: bool = True
+    rebalance_threshold: float = 0.05
+
+
+@dataclass
+class OverseerConfig:
+    enabled: bool
+    check_interval_minutes: int
+    drawdown_warning_threshold: float
+    iv_spike_warning_threshold: float
+
+
+@dataclass
+class LoggingConfig:
+    level: str
+    rotation: str
+    retention: str
+    log_dir: str
+    trade_log_csv: str
+
+
+@dataclass
+class Config:
+    deribit: DeribitConfig
+    strategy: StrategyConfig
+    sizing: SizingConfig
+    risk: RiskConfig
+    execution: ExecutionConfig
+    backtest: BacktestConfig
+    overseer: OverseerConfig
+    logging: LoggingConfig
+    hedge: HedgeConfig = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.hedge is None:
+            self.hedge = HedgeConfig()
+
+
+def _load_yaml(path: Path) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    with open(path) as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def load_config(yaml_path: str | Path | None = None) -> Config:
+    if yaml_path is None:
+        config_path = os.environ.get("WHEEL_BOT_CONFIG", None)
+        if config_path:
+            yaml_path = Path(config_path)
+        else:
+            yaml_path = Path(__file__).parent / "config.yaml"
+
+    raw = _load_yaml(Path(yaml_path))
+
+    d = raw["deribit"]
+    deribit_cfg = DeribitConfig(
+        testnet=os.getenv("DERIBIT_TESTNET", str(d["testnet"])).lower() == "true",
+        ws_url_testnet=d["ws_url_testnet"],
+        ws_url_mainnet=d["ws_url_mainnet"],
+        rest_url_testnet=d["rest_url_testnet"],
+        rest_url_mainnet=d["rest_url_mainnet"],
+        request_timeout=int(d["request_timeout"]),
+        currency=d["currency"],
+        api_key=os.getenv("DERIBIT_API_KEY", ""),
+        api_secret=os.getenv("DERIBIT_API_SECRET", ""),
+    )
+
+    s = raw["strategy"]
+    strategy_cfg = StrategyConfig(
+        iv_rank_threshold=float(s["iv_rank_threshold"]),
+        target_delta_min=float(s["target_delta_min"]),
+        target_delta_max=float(s["target_delta_max"]),
+        expiry_preference=list(s["expiry_preference"]),
+        min_dte=int(s["min_dte"]),
+        max_dte=int(s["max_dte"]),
+        initial_cycle=s["initial_cycle"],
+        expiry_execution_hour=int(s["expiry_execution_hour"]),
+        liquidity_top_n=int(s["liquidity_top_n"]),
+        iv_dynamic_delta=bool(s.get("iv_dynamic_delta", False)),
+    )
+
+    sz = raw["sizing"]
+    sizing_cfg = SizingConfig(
+        max_equity_per_leg=float(sz["max_equity_per_leg"]),
+        max_open_legs=int(sz["max_open_legs"]),
+        collateral_buffer=float(sz["collateral_buffer"]),
+        contract_size_btc=float(sz["contract_size_btc"]),
+        min_free_equity_fraction=float(sz.get("min_free_equity_fraction", 0.25)),
+        use_regime_filter=bool(sz.get("use_regime_filter", False)),
+        regime_ma_days=int(sz.get("regime_ma_days", 50)),
+        ladder_enabled=bool(sz.get("ladder_enabled", False)),
+        ladder_legs=int(sz.get("ladder_legs", 2)),
+    )
+
+    r = raw["risk"]
+    risk_cfg = RiskConfig(
+        max_adverse_delta=float(r["max_adverse_delta"]),
+        max_loss_per_leg=float(r["max_loss_per_leg"]),
+        max_daily_drawdown=float(r["max_daily_drawdown"]),
+        kill_switch_file=r["kill_switch_file"],
+        roll_enabled=bool(r.get("roll_enabled", False)),
+        roll_min_dte=int(r.get("roll_min_dte", 3)),
+    )
+
+    e = raw["execution"]
+    exec_cfg = ExecutionConfig(
+        poll_interval=int(e["poll_interval"]),
+        order_confirm_timeout=int(e["order_confirm_timeout"]),
+        slippage_tolerance=float(e["slippage_tolerance"]),
+    )
+
+    bt = raw["backtest"]
+    backtest_cfg = BacktestConfig(
+        starting_equity=float(bt["starting_equity"]),
+        lookback_months=int(bt["lookback_months"]),
+        transaction_cost=float(bt["transaction_cost"]),
+        approx_otm_offset=float(bt["approx_otm_offset"]),
+        premium_fraction_of_spot=float(bt["premium_fraction_of_spot"]),
+        risk_free_rate=float(bt["risk_free_rate"]),
+        results_image=bt["results_image"],
+        results_csv=bt["results_csv"],
+    )
+
+    ov = raw.get("overseer", {})
+    overseer_cfg = OverseerConfig(
+        enabled=bool(ov.get("enabled", True)),
+        check_interval_minutes=int(ov.get("check_interval_minutes", 60)),
+        drawdown_warning_threshold=float(ov.get("drawdown_warning_threshold", 0.05)),
+        iv_spike_warning_threshold=float(ov.get("iv_spike_warning_threshold", 0.85)),
+    )
+
+    lg = raw["logging"]
+    logging_cfg = LoggingConfig(
+        level=os.getenv("LOG_LEVEL", lg["level"]),
+        rotation=lg["rotation"],
+        retention=lg["retention"],
+        log_dir=lg["log_dir"],
+        trade_log_csv=lg["trade_log_csv"],
+    )
+
+    hg = raw.get("hedge", {})
+    hedge_cfg = HedgeConfig(
+        enabled=bool(hg.get("enabled", True)),
+        rebalance_threshold=float(hg.get("rebalance_threshold", 0.05)),
+    )
+
+    cfg_obj = Config(
+        deribit=deribit_cfg,
+        strategy=strategy_cfg,
+        sizing=sizing_cfg,
+        risk=risk_cfg,
+        execution=exec_cfg,
+        backtest=backtest_cfg,
+        overseer=overseer_cfg,
+        logging=logging_cfg,
+        hedge=hedge_cfg,
+    )
+
+    # Override data paths when running inside the bot farm
+    data_dir = os.environ.get("WHEEL_BOT_DATA_DIR", None)
+    if data_dir:
+        if hasattr(cfg_obj.logging, "trade_log_csv"):
+            cfg_obj.logging.trade_log_csv = os.path.join(
+                data_dir, os.path.basename(cfg_obj.logging.trade_log_csv)
+            )
+        if hasattr(cfg_obj.logging, "log_dir"):
+            cfg_obj.logging.log_dir = os.path.join(data_dir, "logs")
+        if hasattr(cfg_obj.backtest, "results_csv"):
+            cfg_obj.backtest.results_csv = os.path.join(
+                data_dir, os.path.basename(cfg_obj.backtest.results_csv)
+            )
+        if hasattr(cfg_obj.backtest, "results_image"):
+            cfg_obj.backtest.results_image = os.path.join(
+                data_dir, os.path.basename(cfg_obj.backtest.results_image)
+            )
+        if hasattr(cfg_obj.risk, "kill_switch_file"):
+            cfg_obj.risk.kill_switch_file = os.path.join(
+                data_dir, os.path.basename(cfg_obj.risk.kill_switch_file)
+            )
+
+    return cfg_obj
+
+
+# Module-level singleton — import this everywhere
+cfg: Config = load_config()
+=== END FILE: config.py ===
+
+CHECKPOINT PHASE 2:
+  python3.11 -c "from config import cfg; print(f'IV threshold: {cfg.strategy.iv_rank_threshold}')"
+  Expected output: IV threshold: 0.701
+
+================================================================================
+PHASE 3 — DERIBIT CLIENT
+Steps 41–60
+================================================================================
+
+STEP 41 — Create deribit_client.py
+  (File is ~619 lines. Key classes: Ticker, Instrument, AccountSummary,
+  ExchangePosition, DeribitPublicREST, DeribitPrivateREST, DeribitWebSocket,
+  DeribitClient)
+
+CRITICAL ARCHITECTURE NOTE:
+  - DeribitPublicREST: No auth, used for backtest + market data
+  - DeribitPrivateREST: OAuth2 client_credentials, used for live account sync
+  - DeribitWebSocket: Async, used for real-time data + order placement
+  - DeribitClient: Unified wrapper combining all three
+
+KEY METHODS:
+  DeribitPublicREST:
+    .get_instruments(currency, kind, expired) -> list[Instrument]
+    .get_ticker(instrument_name) -> Ticker | None
+    .get_historical_volatility(currency) -> list[tuple[int, float]]
+    .get_tradingview_chart_data(instrument, resolution, start, end) -> list[dict]
+
+  DeribitPrivateREST:
+    .get_account_summary(currency) -> AccountSummary
+    .get_positions(currency, kind) -> list[ExchangePosition]
+    .get_open_orders(currency, kind) -> list[dict]
+
+  DeribitWebSocket (async):
+    .connect() -> None
+    .authenticate() -> None
+    .subscribe(channels, callback) -> None
+    .sell_option(instrument, amount, order_type, price, label) -> dict
+    .buy_option(instrument, amount, order_type, price, label) -> dict
+    .close() -> None
+
+COPY the full deribit_client.py from source repo to this directory.
+File location: btc-wheel-bot/deribit_client.py
+
+STEP 42 — Verify Deribit connection (public endpoint, no auth needed)
+  python3.11 -c "
+from deribit_client import DeribitPublicREST
+rest = DeribitPublicREST()
+instruments = rest.get_instruments('BTC', 'option')
+print(f'Fetched {len(instruments)} BTC option instruments')
+"
+
+CHECKPOINT PHASE 3:
+  Should print: Fetched N BTC option instruments (N >= 100)
+
+================================================================================
+PHASE 4 — STRATEGY ENGINE
+Steps 61–75
+================================================================================
+
+STEP 61 — Create strategy.py
+  (File is ~413 lines. Key class: WheelStrategy)
+
+KEY CONCEPTS:
+  IV Rank = (current_iv - 52w_low) / (52w_high - 52w_low)
+  Uses last 365 daily data points from Deribit historical_volatility endpoint.
+
+  Dynamic delta: when iv_dynamic_delta=True, shifts target delta midpoint
+  linearly with IV rank. Low IV = conservative (sell far OTM), high IV = 
+  aggressive (sell closer ATM for more premium).
+
+  Wheel guard: strategy tracks _put_cycle_complete flag to prevent opening
+  a call leg before the put leg has settled.
+
+  Recovery call: after ITM put expiry, call leg targets strikes >= put_strike
+  to capture BTC recovery above the assignment price.
+
+KEY STATE on WheelStrategy:
+  ._current_cycle: "put" | "call"
+  ._put_cycle_complete: bool (False = stay in put mode)
+  ._last_put_was_itm: bool
+  ._last_put_strike: float
+
+KEY METHODS:
+  .calculate_iv_rank(iv_history) -> float (0-1)
+  .decide_cycle(last_cycle) -> "put" | "call"
+  .select_strike(instruments, tickers, cycle, underlying_price, iv_rank, ...) -> StrikeCandidate | None
+  .select_ladder_strikes(instruments, tickers, underlying_price, n_legs, iv_rank) -> list[StrikeCandidate]
+  .generate_signal(iv_history, instruments, tickers, underlying_price, last_cycle) -> OpenSignal | None
+
+COPY the full strategy.py from source repo to this directory.
+
+CHECKPOINT PHASE 4:
+  python3.11 -c "
+from strategy import WheelStrategy
+from deribit_client import DeribitPublicREST
+ws = WheelStrategy(DeribitPublicREST())
+iv_hist = DeribitPublicREST().get_historical_volatility('BTC')
+rank = ws.calculate_iv_rank(iv_hist)
+print(f'Current IV rank: {rank:.2%}')
+"
+
+================================================================================
+PHASE 5 — RISK MANAGER
+Steps 76–90
+================================================================================
+
+STEP 76 — Create risk_manager.py
+  (File is ~304 lines. Key class: RiskManager)
+
+KEY CONCEPTS:
+  - All pre-trade checks run in sequence; any failure blocks the trade
+  - Deribit contract: 1 contract = 1 BTC notional, min lot = 0.1 BTC
+  - Collateral per contract = strike (USD) — for cash-secured puts
+  - free_equity_fraction = fraction of total equity kept unencumbered
+
+SIZING FORMULA:
+  max_notional = equity_usd * max_equity_per_leg
+  raw_contracts = max_notional / strike_usd
+  contracts = floor(raw_contracts / 0.1) * 0.1  (minimum 0.1)
+
+CHECKS (run by full_pre_trade_check):
+  1. check_kill_switch() — KILL_SWITCH file must not exist
+  2. check_max_legs() — must be below max_open_legs
+  3. check_position_size() — must fit at least 0.1 contracts
+  4. check_collateral() — total collateral <= equity * collateral_buffer
+  5. check_free_margin() — free equity after trade >= equity * min_free_equity_fraction
+
+IN-TRADE CHECKS:
+  should_roll() — returns (True, "delta_breach"|"loss_breach") if triggered
+  check_drawdown() — daily peak-to-trough >= max_daily_drawdown halts trading
+
+COPY the full risk_manager.py from source repo to this directory.
+
+CHECKPOINT PHASE 5:
+  python3.11 -c "
+from risk_manager import RiskManager
+rm = RiskManager()
+contracts = rm.calculate_contracts(equity_usd=150000, strike_usd=85000)
+print(f'Contracts for 150k equity, 85k strike: {contracts}')
+assert rm.check_position_size(150000, 85000), 'Should pass'
+print('Risk manager OK')
+"
+
+================================================================================
+PHASE 6 — NOTIFICATIONS
+Steps 91–100
+================================================================================
+
+STEP 91 — Create notifier.py
+=== BEGIN FILE: notifier.py ===
+"""notifier.py — Telegram notification helper for BTC Wheel Bot."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+# Master notifier config (always present)
+_MASTER_CONFIG_PATH = Path(__file__).parent / "data" / "notifier_config.json"
+
+
+def _load() -> dict:
+    """
+    Load notifier config.
+    Farm bots set WHEEL_BOT_DATA_DIR to their own data directory.
+    Try {DATA_DIR}/notifier_config.json first, then fall back to the
+    master data/notifier_config.json so farm bots share the same
+    Telegram credentials without needing their own copy.
+    """
+    data_dir = os.environ.get("WHEEL_BOT_DATA_DIR", "")
+    if data_dir:
+        bot_cfg = Path(data_dir) / "notifier_config.json"
+        if bot_cfg.exists():
+            try:
+                return json.loads(bot_cfg.read_text())
+            except Exception:
+                pass
+    # Fallback to master config
+    try:
+        return json.loads(_MASTER_CONFIG_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def _send(text: str) -> None:
+    cfg = _load()
+    token = cfg.get("bot_token", "")
+    chat_id = cfg.get("chat_id", "")
+    if not token or not chat_id:
+        return
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def notify_bot_started(mode: str) -> None:
+    _send(f"🟢 <b>Bot started</b> — mode: <code>{mode}</code>")
+
+
+def notify_bot_stopped() -> None:
+    _send("🔴 <b>Bot stopped</b>")
+
+
+def notify_trade_opened(instrument: str, strike: float, premium_btc: float, dte: int) -> None:
+    _send(
+        f"📥 <b>Opened</b> {instrument}\n"
+        f"Strike: ${strike:,.0f}  •  Premium: {premium_btc:.5f} BTC  •  DTE: {dte}"
+    )
+
+
+def notify_trade_closed(instrument: str, pnl_usd: float, reason: str) -> None:
+    sign = "+" if pnl_usd >= 0 else ""
+    emoji = "✅" if pnl_usd >= 0 else "❌"
+    _send(
+        f"{emoji} <b>Closed</b> {instrument}\n"
+        f"P&L: {sign}${pnl_usd:,.2f}  •  Reason: {reason}"
+    )
+
+
+def notify_error(message: str) -> None:
+    _send(f"⚠️ <b>Bot error</b>\n{message[:300]}")
+=== END FILE: notifier.py ===
+
+STEP 92 — Set up Telegram bot (optional)
+  1. Message @BotFather on Telegram: /newbot
+  2. Follow prompts to get a bot_token
+  3. Message your bot to get a chat_id:
+     https://api.telegram.org/bot{TOKEN}/getUpdates
+  4. Configure via API settings tab OR create data/notifier_config.json:
+     {"bot_token": "...", "chat_id": "..."}
+
+CHECKPOINT PHASE 6:
+  python3.11 -c "import notifier; print('Notifier import OK')"
+
+================================================================================
+PHASE 7 — BOT ENGINE
+Steps 101–115
+================================================================================
+
+STEP 101 — bot.py overview
+  (File is ~1320 lines. Key class: WheelBot)
+
+ARCHITECTURE:
+  WheelBot.run() is the async top-level entry point.
+  60-second poll loop → _tick() → market data → strategy → position management.
+
+DATA FILES written by bot:
+  data/bot_state.json          — running status, heartbeat
+  data/current_position.json   — current open position
+  data/trades.csv              — closed trade log
+  data/equity_curve.json       — equity history for charts
+  data/tick_log.csv            — per-tick data for analysis
+  data/experience.jsonl        — adaptive learning records
+  bot_heartbeat.json           — cross-process heartbeat
+
+KEY STATE:
+  ._paper: bool            — paper mode (no real orders)
+  ._positions: list        — open positions
+  ._equity_usd: float      — current account equity in USD
+  ._strategy: WheelStrategy
+  ._risk: RiskManager
+  ._client: DeribitClient
+  ._hedge: HedgeManager    — delta hedge (BTC-PERPETUAL perp)
+  ._overseer: AIOverSeer   — optional LLM-based oversight
+
+FARM ISOLATION:
+  _DATA_DIR = os.environ.get("WHEEL_BOT_DATA_DIR", str(Path(__file__).parent / "data"))
+  All file writes use _data_path(filename) helper which resolves paths relative to _DATA_DIR.
+  This means farm bots write to farm/{slug}/data/ without touching main data/.
+
+FIRST-TRADE TELEGRAM ALERT:
+  When the bot opens its very first trade (trades.csv doesn't exist or is empty),
+  sends a special 🎉 FIRST TRADE FIRED! Telegram message including bot name,
+  instrument, strike, delta, IV rank, premium, and DTE.
+
+EXPIRY DETECTION (paper mode):
+  _check_expired_positions() runs every tick.
+  Parses expiry date from instrument name (BTC-25APR25-90000-P → 25APR25 = Apr 25 2025).
+  Sets expiry at 08:00 UTC (Deribit's standard settlement time).
+  After put expiry: _put_cycle_complete = True (unlocks call leg).
+  After call expiry: _put_cycle_complete = False (back to put mode).
+
+COPY the full bot.py from source repo to this directory.
+
+CHECKPOINT PHASE 7:
+  python3.11 main.py --mode=paper
+  (Should start the bot, fetch market data, and log IV rank)
+  Ctrl+C to stop after confirming it runs.
+
+================================================================================
+PHASE 8 — BACKTESTER
+Steps 116–130
+================================================================================
+
+STEP 116 — backtester.py overview
+  (File is ~906 lines. Key class: Backtester)
+
+ARCHITECTURE:
+  Simulates the wheel strategy over 12 months of historical Deribit data.
+  Uses Black-Scholes pricing (Deribit doesn't expose historical options chain).
+  IV from Deribit's own get_historical_volatility endpoint = real market IV.
+
+BLACK-SCHOLES FUNCTIONS:
+  bs_put_price(S, K, T, r, sigma) -> float   (USD)
+  bs_call_price(S, K, T, r, sigma) -> float  (USD)
+  bs_put_delta(S, K, T, r, sigma) -> float   (negative, e.g. -0.25)
+  bs_call_delta(S, K, T, r, sigma) -> float  (positive, e.g. +0.25)
+  strike_for_put_delta(S, target, T, r, sigma) -> float
+  strike_for_call_delta(S, target, T, r, sigma) -> float
+
+DERIBIT MARGIN FORMULA (embedded in backtester):
+  margin_per_contract = max(0.15 - OTM_pct, 0.10) × underlying × contracts × 0.1
+  where OTM_pct = (strike - spot) / spot for puts
+
+CAPITAL ROI METRICS (BacktestResults fields):
+  total_margin_deployed: float    — sum of all margin used across all cycles
+  avg_margin_utilization: float   — avg margin as % of starting equity
+  premium_on_margin: float        — total premium / total margin
+  min_viable_capital: float       — smallest equity during simulation
+  annualised_margin_roi: float    — annualised return scaled by margin efficiency
+
+WALK-FORWARD (in optimizer, not backtester):
+  75% in-sample / 25% out-of-sample split
+  Robustness score = OOS_return / IS_return (1.0 = perfect consistency)
+
+COPY the full backtester.py from source repo to this directory.
+
+CHECKPOINT PHASE 8:
+  python3.11 main.py --mode=backtest
+  (Should run backtest and print stats. Takes ~30s first time.)
+
+================================================================================
+PHASE 9 — OPTIMIZER / GENETIC ALGORITHM
+Steps 131–145
+================================================================================
+
+STEP 131 — optimizer.py overview
+  (File is ~1651 lines. Key classes: ParamSet, Optimizer)
+
+TWO MODES:
+  Sweep: vary ONE param at a time across its range, hold others at baseline.
+         python optimizer.py --mode sweep
+  Evolve: genetic algorithm over ALL params simultaneously.
+         python optimizer.py --mode evolve --generations 10 --population 20
+
+PARAMETER SPACE (ParamSet):
+  iv_rank_threshold:        (0.20, 0.80, step 0.05)
+  target_delta_min:         (0.10, 0.25, step 0.025)
+  target_delta_max:         (0.20, 0.45, step 0.025)
+  approx_otm_offset:        (0.03, 0.18, step 0.01)
+  max_dte:                  (7, 45, step 7)
+  min_dte:                  (2, 14, step 1)
+  max_equity_per_leg:       (0.02, 0.12, step 0.01)
+  premium_fraction_of_spot: (0.008, 0.030, step 0.002)
+  iv_rank_window_days:      (90, 365, step 30)
+  min_free_equity_fraction: (0.00, 0.40, step 0.05)
+  starting_equity:          (1000, 100000, step 5000)
+
+5 FITNESS GOALS:
+  balanced    — sharpe*2 + return*3 + win_rate*2 - drawdown*3
+  max_yield   — return*10 + win_rate*2
+  safest      — win_rate*5 - drawdown*10 + return*1
+  sharpe      — sharpe*3 + win_rate*1
+  capital_roi — 0.45*min(margin_roi,3)/3 + 0.25*min(sharpe,3)/3 + 0.15*(1-dd/0.30) + 0.15*win_rate
+                weighted by activity_penalty (penalises < 6 trades)
+
+BASE FITNESS FUNCTION (used for backward-compat):
+  fitness_score(results) = weighted sum of:
+    sharpe (0.35) + win_rate (0.25) + return (0.20) + drawdown_inverted (0.15) + cycles (0.05)
+  scaled to approximately [0, 10]
+
+EXPERIENCE CALIBRATION:
+  Reads data/experience.jsonl (written by bot._close_position on each trade close).
+  Blends historical fitness with real-trade performance.
+  Blend ratio by trade count: <10 = 80/20, 10-19 = 60/40, 20-29 = 50/50, 30+ = 30/70
+
+GENETIC ALGORITHM:
+  _random_genome() — random starting point within PARAM_RANGES
+  _mutate(params) — gaussian noise on random subset of params
+  _crossover(a, b) — uniform crossover (each field from a or b randomly)
+  Tournament selection: take top 50% by fitness, fill remainder with crossover/mutate
+
+OUTPUT FILES (written to data/optimizer/):
+  sweep_results.json
+  evolution_results.json
+  evolution_leaderboard.csv
+  best_genome_{goal}.yaml    — per-goal best config
+  walk_forward_results.json
+  monte_carlo_results.json
+  reconcile_results.json
+  evolve_history_{goal}.json — history of improvements over time
+
+COPY the full optimizer.py from source repo to this directory.
+
+STEP 132 — Add optimizer CLI invocation
+  # Run sweep (15-30 min):
+  python3.11 optimizer.py --mode sweep
+
+  # Run evolution (30-60 min, 5 generations, 10 population):
+  python3.11 optimizer.py --mode evolve --generations 5 --population 10 --goal balanced
+
+  # Run via API (recommended for mobile app triggering):
+  POST /optimizer/run  body: {"mode": "evolve", "fitness_goal": "capital_roi"}
+
+CHECKPOINT PHASE 9:
+  python3.11 -c "
+from optimizer import ParamSet, fitness_score, _fitness_for_goal
+p = ParamSet()
+print('ParamSet default:', p.iv_rank_threshold, p.target_delta_min)
+print('Optimizer import OK')
+"
+
+================================================================================
+PHASE 10 — NAMED CONFIG STORE
+Steps 146–160
+================================================================================
+
+STEP 146 — Create config_store.py
+=== BEGIN FILE: config_store.py ===
+"""
+config_store.py — Named configuration management.
+
+Configs are stored as YAML files in the configs/ directory.
+Each config has a name, metadata, and the full parameter set.
+
+Status lifecycle: draft -> validated -> paper -> ready -> live -> archived
+
+Usage:
+    from config_store import list_configs, save_config, load_config_by_name
+"""
+
+from __future__ import annotations
+
+import copy
+import re
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+BASE_DIR    = Path(__file__).parent
+CONFIGS_DIR = BASE_DIR / "configs"
+
+VALID_STATUSES = ("draft", "validated", "paper", "ready", "live", "archived")
+
+
+def _ensure_configs_dir() -> Path:
+    CONFIGS_DIR.mkdir(parents=True, exist_ok=True)
+    return CONFIGS_DIR
+
+
+def _master_config() -> dict:
+    """Return the master config.yaml as a dict."""
+    try:
+        return yaml.safe_load((BASE_DIR / "config.yaml").read_text()) or {}
+    except Exception:
+        return {}
+
+
+def _deep_merge(base: dict, overrides: dict) -> dict:
+    """Recursively merge overrides into a copy of base."""
+    import copy as _copy
+    result = _copy.deepcopy(base)
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(result.get(k), dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def _config_path(name: str) -> Path:
+    return CONFIGS_DIR / f"{name}.yaml"
+
+
+def _slugify(name: str) -> str:
+    """Convert a config name to a filesystem-safe slug."""
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "config"
+
+
+def _read_meta(yaml_file: Path) -> dict:
+    """Read _meta block from a config YAML file."""
+    try:
+        data = yaml.safe_load(yaml_file.read_text()) or {}
+        return data.get("_meta", {})
+    except Exception:
+        return {}
+
+
+def _config_summary_from_data(data: dict, yaml_file: Path) -> dict:
+    """Build the list-view summary dict from a loaded config data dict."""
+    meta     = data.get("_meta", {})
+    strategy = data.get("strategy", {})
+    sizing   = data.get("sizing", {})
+    backtest = data.get("backtest", {})
+    params = {
+        k: v for k, v in {
+            "iv_rank_threshold":        strategy.get("iv_rank_threshold"),
+            "target_delta_min":         strategy.get("target_delta_min"),
+            "target_delta_max":         strategy.get("target_delta_max"),
+            "min_dte":                  strategy.get("min_dte"),
+            "max_dte":                  strategy.get("max_dte"),
+            "max_equity_per_leg":       sizing.get("max_equity_per_leg"),
+            "min_free_equity_fraction": sizing.get("min_free_equity_fraction"),
+            "premium_fraction_of_spot": backtest.get("premium_fraction_of_spot"),
+            "approx_otm_offset":        backtest.get("approx_otm_offset"),
+            "starting_equity":          backtest.get("starting_equity"),
+        }.items() if v is not None
+    }
+    return {
+        "name":            meta.get("name", yaml_file.stem),
+        "slug":            yaml_file.stem,
+        "status":          meta.get("status", "draft"),
+        "created_at":      meta.get("created_at"),
+        "source":          meta.get("source", "manual"),
+        "fitness":         meta.get("fitness"),
+        "goal":            meta.get("goal"),
+        "notes":           meta.get("notes", ""),
+        "total_return_pct": meta.get("total_return_pct"),
+        "sharpe":          meta.get("sharpe"),
+        "params":          params,
+    }
+
+
+def get_config_yaml_path(name: str) -> str:
+    return str(_config_path(name))
+
+
+def list_configs(include_archived: bool = False) -> list[dict]:
+    _ensure_configs_dir()
+    configs: list[dict] = []
+    for yaml_file in sorted(CONFIGS_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(yaml_file.read_text()) or {}
+            summary = _config_summary_from_data(data, yaml_file)
+            if not include_archived and summary.get("status") == "archived":
+                continue
+            configs.append(summary)
+        except Exception:
+            continue
+    return configs
+
+
+def save_config(
+    name: str,
+    params: dict,
+    source: str = "manual",
+    metadata: dict | None = None,
+    status: str = "draft",
+) -> dict:
+    _ensure_configs_dir()
+    metadata = metadata or {}
+
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status {status!r}. Must be one of: {VALID_STATUSES}")
+
+    meta: dict[str, Any] = {
+        "name":       name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source":     source,
+        "status":     status,
+        "fitness":    metadata.get("fitness"),
+        "goal":       metadata.get("goal"),
+        "notes":      metadata.get("notes", ""),
+    }
+    for k, v in metadata.items():
+        if k not in meta:
+            meta[k] = v
+
+    merged = _deep_merge(_master_config(), params)
+    merged["_meta"] = meta
+
+    path = _config_path(name)
+    with open(path, "w") as f:
+        yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
+
+    return merged
+
+
+def load_config_by_name(name: str) -> dict:
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r} (looked in {path})")
+
+    named_raw = yaml.safe_load(path.read_text()) or {}
+    meta = named_raw.pop("_meta", {})
+    merged = _deep_merge(_master_config(), named_raw)
+    merged["_meta"] = meta
+    return merged
+
+
+def set_status(name: str, status: str) -> dict:
+    if status not in VALID_STATUSES:
+        raise ValueError(f"Invalid status {status!r}. Must be one of: {VALID_STATUSES}")
+
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r}")
+
+    data = yaml.safe_load(path.read_text()) or {}
+    data.setdefault("_meta", {})["status"] = status
+
+    with open(path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+
+    return _config_summary_from_data(data, path)
+
+
+def rename_config(old_name: str, new_name: str) -> dict:
+    old_path = _config_path(old_name)
+    if not old_path.exists():
+        raise FileNotFoundError(f"Named config not found: {old_name!r}")
+
+    new_path = _config_path(new_name)
+    if new_path.exists():
+        raise ValueError(f"Config {new_name!r} already exists")
+
+    data = yaml.safe_load(old_path.read_text()) or {}
+    data.setdefault("_meta", {})["name"] = new_name
+
+    with open(new_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+
+    old_path.unlink()
+    return _config_summary_from_data(data, new_path)
+
+
+def update_config_notes(name: str, notes: str) -> dict:
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r}")
+
+    data = yaml.safe_load(path.read_text()) or {}
+    data.setdefault("_meta", {})["notes"] = notes
+
+    with open(path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+
+    return _config_summary_from_data(data, path)
+
+
+def update_config_params(name: str, params: dict) -> dict:
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r}")
+
+    data = yaml.safe_load(path.read_text()) or {}
+    meta = data.pop("_meta", {})
+    merged_params = _deep_merge(data, params)
+    merged_params["_meta"] = meta
+
+    with open(path, "w") as f:
+        yaml.dump(merged_params, f, default_flow_style=False, allow_unicode=True)
+
+    return _config_summary_from_data(merged_params, path)
+
+
+def duplicate_config(name: str, new_name: str) -> dict:
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r}")
+
+    new_path = _config_path(new_name)
+    if new_path.exists():
+        raise ValueError(f"Config {new_name!r} already exists")
+
+    data = yaml.safe_load(path.read_text()) or {}
+    data.setdefault("_meta", {}).update({
+        "name":       new_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source":     "duplicated",
+        "status":     "draft",
+    })
+
+    with open(new_path, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+
+    return _config_summary_from_data(data, new_path)
+
+
+def archive_config(name: str) -> dict:
+    return set_status(name, "archived")
+
+
+def delete_config(name: str) -> bool:
+    path = _config_path(name)
+    if not path.exists():
+        return False
+
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+        status = data.get("_meta", {}).get("status", "draft")
+        if status == "live":
+            raise ValueError(f"Cannot delete config {name!r} while status is 'live'. Archive it first.")
+    except ValueError:
+        raise
+    except Exception:
+        pass
+
+    path.unlink()
+    return True
+
+
+def get_paper_configs() -> list[dict]:
+    """Return all configs with status == 'paper' — used by farm supervisor."""
+    _ensure_configs_dir()
+    results: list[dict] = []
+    for yaml_file in sorted(CONFIGS_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(yaml_file.read_text()) or {}
+            meta = data.get("_meta", {})
+            if meta.get("status") == "paper":
+                summary = _config_summary_from_data(data, yaml_file)
+                summary["config_path"] = str(yaml_file)
+                summary["slug"] = _slugify(meta.get("name", yaml_file.stem))
+                results.append(summary)
+        except Exception:
+            continue
+    return results
+
+
+def promote_to_live(name: str, starting_equity: float) -> dict:
+    """
+    Copy a named config to config.yaml (the live bot config).
+    - Forces testnet=false (live trading only)
+    - Sets starting_equity to the provided value
+    - Backs up current config.yaml to config.yaml.bak
+    - Sets the promoted config's status to 'live'
+    - Archives any previously 'live' config
+    - Logs the promotion event
+    """
+    import json as _json
+
+    path = _config_path(name)
+    if not path.exists():
+        raise FileNotFoundError(f"Named config not found: {name!r}")
+
+    live_path = BASE_DIR / "config.yaml"
+    bak_path  = BASE_DIR / "config.yaml.bak"
+
+    if live_path.exists():
+        shutil.copy2(live_path, bak_path)
+    bak_path_str = str(bak_path) if live_path.exists() else None
+
+    named_raw = yaml.safe_load(path.read_text()) or {}
+    named_raw.pop("_meta", None)
+
+    current_live = yaml.safe_load(live_path.read_text()) if live_path.exists() else {}
+    new_live = _deep_merge(current_live or {}, named_raw)
+
+    # Force mainnet — never allow testnet in live
+    new_live.setdefault("deribit", {})["testnet"] = False
+    new_live.setdefault("backtest", {})["starting_equity"] = starting_equity
+
+    with open(live_path, "w") as f:
+        yaml.dump(new_live, f, default_flow_style=False, allow_unicode=True)
+
+    # Archive any previously live configs
+    for yaml_file in sorted(CONFIGS_DIR.glob("*.yaml")):
+        if yaml_file == path:
+            continue
+        try:
+            d = yaml.safe_load(yaml_file.read_text()) or {}
+            if d.get("_meta", {}).get("status") == "live":
+                d["_meta"]["status"] = "archived"
+                with open(yaml_file, "w") as f:
+                    yaml.dump(d, f, default_flow_style=False, allow_unicode=True)
+        except Exception:
+            pass
+
+    full_named = yaml.safe_load(path.read_text()) or {}
+    if "_meta" in full_named:
+        full_named["_meta"]["source"] = "promoted"
+        full_named["_meta"]["status"] = "live"
+        full_named["_meta"]["promoted_at"] = datetime.now(timezone.utc).isoformat()
+    with open(path, "w") as f:
+        yaml.dump(full_named, f, default_flow_style=False, allow_unicode=True)
+
+    log_entry = {
+        "timestamp":               datetime.now(timezone.utc).isoformat(),
+        "config_name":             name,
+        "starting_equity":         starting_equity,
+        "previous_config_backup_path": bak_path_str,
+    }
+    log_path = BASE_DIR / "data" / "promotion_log.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    existing_log: list = []
+    if log_path.exists():
+        try:
+            existing_log = _json.loads(log_path.read_text())
+        except Exception:
+            pass
+    existing_log.insert(0, log_entry)
+    log_path.write_text(_json.dumps(existing_log, indent=2))
+
+    return {"config": new_live, "promotion_log": log_entry}
+
+
+# Maps genome field names to (config_section, config_key)
+GENOME_TO_CONFIG: dict[str, tuple[str, str]] = {
+    "iv_rank_threshold":        ("strategy", "iv_rank_threshold"),
+    "target_delta_min":         ("strategy", "target_delta_min"),
+    "target_delta_max":         ("strategy", "target_delta_max"),
+    "max_dte":                  ("strategy", "max_dte"),
+    "min_dte":                  ("strategy", "min_dte"),
+    "max_equity_per_leg":       ("sizing",   "max_equity_per_leg"),
+    "min_free_equity_fraction": ("sizing",   "min_free_equity_fraction"),
+    "premium_fraction_of_spot": ("backtest", "premium_fraction_of_spot"),
+    "approx_otm_offset":        ("backtest", "approx_otm_offset"),
+    "starting_equity":          ("backtest", "starting_equity"),
+}
+
+
+def genome_to_params(genome: dict) -> dict:
+    """Convert a flat genome dict to a nested config params dict."""
+    params: dict = {}
+    for genome_key, (section, config_key) in GENOME_TO_CONFIG.items():
+        if genome_key in genome:
+            params.setdefault(section, {})[config_key] = genome[genome_key]
+    return params
+=== END FILE: config_store.py ===
+
+CHECKPOINT PHASE 10:
+  mkdir -p configs
+  python3.11 -c "
+from config_store import save_config, list_configs, set_status
+save_config('test-config', {}, source='manual', status='draft')
+configs = list_configs()
+print(f'Configs: {[c[\"name\"] for c in configs]}')
+set_status('test-config', 'paper')
+print('Config store OK')
+"
+
+
+================================================================================
+PHASE 11 — BOT FARM
+Steps 161–180
+================================================================================
+
+STEP 161 — Create readiness_validator.py
+=== BEGIN FILE: readiness_validator.py ===
+"""
+readiness_validator.py — Go/no-go checklist for bot farm bots.
+
+8 checks. Only a bot passing all 8 is considered ready to promote to live.
+
+Usage:
+    from readiness_validator import validate_bot
+    report = validate_bot("farm/bot_0", thresholds={})
+    print(report.recommendation)
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_THRESHOLDS: dict[str, float] = {
+    "min_trades":                   20,
+    "min_days":                     30,
+    "min_sharpe":                   0.8,
+    "max_drawdown":                 0.15,
+    "min_win_rate":                 0.55,
+    "min_walk_forward_robustness":  0.75,
+    "min_reconcile_accuracy":       0.80,
+}
+
+
+@dataclass
+class ReadinessReport:
+    bot_id: str
+    ready: bool
+    checks_passed: int
+    total_checks: int
+    checks: dict[str, bool]
+    metrics: dict[str, float]
+    recommendation: str   # "READY FOR LIVE" | "KEEP TESTING" | "FAILED — REVIEW CONFIG"
+    blocking_issues: list[str] = field(default_factory=list)
+
+
+def _read_trades_csv(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        with open(path, newline="") as f:
+            return list(csv.DictReader(f))
+    except Exception:
+        return []
+
+
+def _read_json(path: Path) -> Any:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _compute_metrics(trades: list[dict], starting_equity: float) -> dict[str, float]:
+    if not trades:
+        return {
+            "num_trades": 0, "win_rate": 0.0, "sharpe": 0.0,
+            "max_drawdown": 0.0, "total_return_pct": 0.0,
+            "current_equity": starting_equity, "starting_equity": starting_equity,
+            "days_running": 0.0,
+        }
+
+    num_trades = len(trades)
+    wins = sum(1 for t in trades if float(t.get("pnl_usd", 0) or 0) > 0)
+    win_rate = wins / num_trades if num_trades > 0 else 0.0
+    pnls = [float(t.get("pnl_usd", 0) or 0) for t in trades]
+
+    equity_after_values = []
+    for t in trades:
+        v = t.get("equity_after")
+        if v is not None:
+            try:
+                equity_after_values.append(float(v))
+            except (ValueError, TypeError):
+                pass
+
+    current_equity = equity_after_values[-1] if equity_after_values else starting_equity
+    total_return_pct = (
+        (current_equity - starting_equity) / starting_equity * 100
+        if starting_equity > 0 else 0.0
+    )
+
+    import math
+    returns = [p / starting_equity for p in pnls if starting_equity > 0]
+    if len(returns) >= 2:
+        mean_r = sum(returns) / len(returns)
+        variance = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
+        std_r = math.sqrt(variance)
+        periods_per_year = 120
+        sharpe = (mean_r * periods_per_year) / (std_r * math.sqrt(periods_per_year)) if std_r > 0 else 0.0
+    else:
+        sharpe = 0.0
+
+    max_drawdown = 0.0
+    if equity_after_values:
+        peak = starting_equity
+        for eq in equity_after_values:
+            if eq > peak:
+                peak = eq
+            dd = (peak - eq) / peak if peak > 0 else 0.0
+            if dd > max_drawdown:
+                max_drawdown = dd
+
+    timestamps = []
+    for t in trades:
+        ts_str = t.get("timestamp") or t.get("entry_date") or ""
+        if ts_str:
+            try:
+                ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                timestamps.append(ts)
+            except ValueError:
+                pass
+
+    days_running = 0.0
+    if len(timestamps) >= 2:
+        timestamps.sort()
+        days_running = (timestamps[-1] - timestamps[0]).total_seconds() / 86_400
+    elif timestamps:
+        now = datetime.now(timezone.utc)
+        days_running = (now - timestamps[0].replace(tzinfo=timezone.utc)
+                        if timestamps[0].tzinfo is None
+                        else now - timestamps[0]).total_seconds() / 86_400
+
+    return {
+        "num_trades":       float(num_trades),
+        "win_rate":         win_rate,
+        "sharpe":           round(sharpe, 4),
+        "max_drawdown":     round(max_drawdown, 4),
+        "total_return_pct": round(total_return_pct, 4),
+        "current_equity":   round(current_equity, 2),
+        "starting_equity":  round(starting_equity, 2),
+        "days_running":     round(days_running, 2),
+    }
+
+
+def validate_bot(
+    bot_dir: str | Path,
+    thresholds: dict[str, float] | None = None,
+    starting_equity: float = 10_000.0,
+) -> ReadinessReport:
+    bot_dir = Path(bot_dir)
+    bot_id = bot_dir.name
+    thr = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+
+    trades_path   = bot_dir / "data" / "trades.csv"
+    state_path    = bot_dir / "data" / "bot_state.json"
+    opt_dir       = bot_dir / "data" / "optimizer"
+    wf_path       = opt_dir / "walk_forward_results.json"
+    recon_path    = opt_dir / "reconcile_results.json"
+
+    bot_cfg_path = bot_dir / "config.yaml"
+    if bot_cfg_path.exists():
+        try:
+            import yaml
+            raw = yaml.safe_load(bot_cfg_path.read_text()) or {}
+            starting_equity = float(raw.get("backtest", {}).get("starting_equity", starting_equity))
+        except Exception:
+            pass
+
+    trades = _read_trades_csv(trades_path)
+    if not trades:
+        bt_path = bot_dir / "data" / "backtest_trades.csv"
+        trades = _read_trades_csv(bt_path)
+
+    metrics = _compute_metrics(trades, starting_equity)
+
+    wf_data = _read_json(wf_path)
+    wf_robustness: float | None = None
+    if wf_data and "robustness_score" in wf_data:
+        wf_robustness = float(wf_data["robustness_score"])
+
+    recon_data = _read_json(recon_path)
+    recon_accuracy: float | None = None
+    if recon_data and "metrics" in recon_data:
+        recon_accuracy = recon_data["metrics"].get("accuracy")
+        if recon_accuracy is not None:
+            recon_accuracy = float(recon_accuracy)
+
+    kill_switch_absent = not (bot_dir / "KILL_SWITCH").exists()
+
+    checks: dict[str, bool] = {}
+    blocking_issues: list[str] = []
+
+    checks["min_trades"] = metrics["num_trades"] >= thr["min_trades"]
+    if not checks["min_trades"]:
+        remaining = int(thr["min_trades"] - metrics["num_trades"])
+        blocking_issues.append(
+            f"Need {remaining} more closed trades (have {int(metrics['num_trades'])}, need {int(thr['min_trades'])})"
+        )
+
+    checks["min_days"] = metrics["days_running"] >= thr["min_days"]
+    if not checks["min_days"]:
+        remaining_days = thr["min_days"] - metrics["days_running"]
+        blocking_issues.append(
+            f"Need {remaining_days:.0f} more days running (have {metrics['days_running']:.1f}d, need {thr['min_days']:.0f}d)"
+        )
+
+    checks["sharpe"] = metrics["sharpe"] >= thr["min_sharpe"]
+    if not checks["sharpe"]:
+        blocking_issues.append(
+            f"Sharpe ratio too low ({metrics['sharpe']:.2f}, need >= {thr['min_sharpe']:.2f})"
+        )
+
+    checks["drawdown"] = metrics["max_drawdown"] < thr["max_drawdown"]
+    if not checks["drawdown"]:
+        blocking_issues.append(
+            f"Max drawdown too high ({metrics['max_drawdown']*100:.1f}%, limit {thr['max_drawdown']*100:.0f}%)"
+        )
+
+    checks["win_rate"] = metrics["win_rate"] >= thr["min_win_rate"]
+    if not checks["win_rate"]:
+        blocking_issues.append(
+            f"Win rate too low ({metrics['win_rate']*100:.1f}%, need >= {thr['min_win_rate']*100:.0f}%)"
+        )
+
+    if wf_robustness is not None:
+        checks["walk_forward"] = wf_robustness >= thr["min_walk_forward_robustness"]
+        if not checks["walk_forward"]:
+            blocking_issues.append(
+                f"Walk-forward robustness too low ({wf_robustness:.2f}, need >= {thr['min_walk_forward_robustness']:.2f})"
+            )
+    else:
+        checks["walk_forward"] = False
+        blocking_issues.append("Walk-forward test not yet run — run optimizer walk_forward mode")
+
+    if recon_accuracy is not None:
+        checks["reconcile"] = recon_accuracy >= thr["min_reconcile_accuracy"]
+        if not checks["reconcile"]:
+            blocking_issues.append(
+                f"Reconcile accuracy too low ({recon_accuracy*100:.1f}%, need >= {thr['min_reconcile_accuracy']*100:.0f}%)"
+            )
+    else:
+        checks["reconcile"] = False
+        blocking_issues.append("Reconciliation not yet run — run optimizer reconcile mode")
+
+    checks["no_kill_switch"] = kill_switch_absent
+    if not checks["no_kill_switch"]:
+        blocking_issues.append("KILL_SWITCH file is present — bot is halted")
+
+    checks_passed = sum(1 for v in checks.values() if v)
+    total_checks  = len(checks)
+    ready         = checks_passed == total_checks
+
+    if ready:
+        recommendation = "READY FOR LIVE"
+    elif checks_passed >= 6:
+        recommendation = "KEEP TESTING"
+    else:
+        recommendation = "FAILED — REVIEW CONFIG"
+
+    return ReadinessReport(
+        bot_id=bot_id,
+        ready=ready,
+        checks_passed=checks_passed,
+        total_checks=total_checks,
+        checks=checks,
+        metrics=metrics,
+        recommendation=recommendation,
+        blocking_issues=blocking_issues,
+    )
+
+
+def validate_all_bots(
+    farm_dir: str | Path,
+    thresholds: dict[str, float] | None = None,
+) -> list[ReadinessReport]:
+    farm_dir = Path(farm_dir)
+    reports: list[ReadinessReport] = []
+
+    if not farm_dir.exists():
+        return reports
+
+    bot_dirs = sorted(
+        [d for d in farm_dir.iterdir() if d.is_dir() and d.name.startswith("bot_")],
+        key=lambda d: d.name,
+    )
+
+    for bot_dir in bot_dirs:
+        report = validate_bot(bot_dir, thresholds=thresholds)
+        reports.append(report)
+
+    return reports
+=== END FILE: readiness_validator.py ===
+
+STEP 162 — Create farm_config.yaml
+=== BEGIN FILE: farm_config.yaml ===
+farm:
+  status_interval_seconds: 60
+  data_dir: farm
+
+bots:
+  - id: bot_0
+    name: "Balanced Evolved"
+    description: "Evolved config (balanced goal) — fitness 4.96, 22% return, Sharpe 1.44"
+    base_config: configs/balanced_20260423_2346.yaml
+    overrides:
+      strategy:
+        iv_rank_threshold: 0.25
+
+  - id: bot_1
+    name: "Balanced"
+    description: "Default balanced config"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        iv_rank_threshold: 0.25
+      backtest:
+        starting_equity: 10000.0
+
+  - id: bot_2
+    name: "Aggressive"
+    description: "Higher delta, lower IV threshold — more trades"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        iv_rank_threshold: 0.25
+        target_delta_min: 0.20
+        target_delta_max: 0.40
+      backtest:
+        starting_equity: 10000.0
+
+  - id: bot_3
+    name: "Capital ROI"
+    description: "Evolved config optimising for minimum capital ROI"
+    base_config: config.yaml
+    overrides:
+      strategy:
+        iv_rank_threshold: 0.25
+      sizing:
+        max_equity_per_leg: 0.08
+        min_free_equity_fraction: 0.10
+      backtest:
+        starting_equity: 5000.0
+
+readiness_thresholds:
+  min_trades: 20
+  min_days: 30
+  min_sharpe: 0.8
+  max_drawdown: 0.15
+  min_win_rate: 0.55
+  min_walk_forward_robustness: 0.75
+  min_reconcile_accuracy: 0.80
+=== END FILE: farm_config.yaml ===
+
+NOTE: farm_config.yaml specifies LEGACY bots.
+New bots are discovered dynamically from configs/ with status='paper'.
+The iv_rank_threshold overrides are set to 0.25 to generate trades faster
+in a low-IV market environment (current IV rank ~13% in April 2026).
+
+STEP 163 — Copy bot_farm.py from source repo
+  (File is ~604 lines. Key classes: BotProcess, BotFarm)
+
+KEY ARCHITECTURE:
+  BotFarm.run() is the main supervisor loop.
+  Every 60s: _sync_paper_bots() scans configs/ for status='paper'.
+  BotProcess.start() spawns python main.py --mode=paper in a subprocess.
+  Each bot gets:
+    WHEEL_BOT_CONFIG = <path-to-named-config.yaml>
+    WHEEL_BOT_DATA_DIR = farm/{slug}/data/
+  
+  setup_dir() creates:
+    farm/{slug}/                  — bot root
+    farm/{slug}/data/             — trades, state, equity curve
+    farm/{slug}/logs/             — bot log file
+    farm/{slug}/config.yaml       — merged local config (for readiness_validator)
+    
+  IMPORTANT: setup_dir() preserves existing _meta block so config_name
+  persists across restarts. Previous bug: _meta was being overwritten.
+
+STEP 164 — Start the farm for the first time
+  python3.11 bot_farm.py
+  (Supervisor loop starts, discovers paper configs, starts bots)
+
+STEP 165 — Start/stop farm via API
+  POST /farm/start   — starts bot_farm.py as a subprocess
+  POST /farm/stop    — sends SIGTERM to farm process
+  GET  /farm/status  — returns all bot metrics and readiness scores
+
+CHECKPOINT PHASE 11:
+  python3.11 -c "
+from readiness_validator import validate_bot, ReadinessReport
+import tempfile, os
+from pathlib import Path
+td = Path(tempfile.mkdtemp()) / 'test_bot'
+td.mkdir()
+(td / 'data').mkdir()
+report = validate_bot(td)
+print(f'Checks: {report.checks_passed}/{report.total_checks}')
+print(f'Recommendation: {report.recommendation}')
+"
+
+================================================================================
+PHASE 12 — FASTAPI BACKEND
+Steps 181–200
+================================================================================
+
+STEP 181 — api.py overview
+  (File is ~1835 lines. Routes are ALL registered BEFORE the catch-all static
+  file serve route — this is critical or API calls return HTML.)
+
+KEY STRUCTURE:
+  - API key authentication via X-API-Key header on all endpoints
+  - Key loaded from WHEEL_API_KEY env var, auto-generated to .env if missing
+  - CORS: allow_origins=["*"], allow_credentials=True, allow_methods=["*"]
+  - Static file serving at the end (catch-all /{full_path:path})
+
+ROUTE GROUPS:
+  GET  /health               — health check (no auth)
+  GET  /status               — bot running status + heartbeat
+  GET  /market/btc_price     — BTC spot price (cached 30s from Deribit)
+  GET  /position             — current open position
+  GET  /hedge                — delta-hedge state
+  GET  /equity               — equity curve
+  GET  /trades               — closed trade list
+  GET  /config               — current config params
+  POST /config               — update config params
+  GET  /config/presets       — all preset configs
+  POST /config/load_preset   — activate a preset
+  GET  /config/history       — config change history
+
+  POST /controls/start       — start bot (clear kill switch)
+  POST /controls/stop        — stop bot (create kill switch, body: {"confirm": "STOP_BOT"})
+  POST /controls/close_position — force-close current position (body: {"confirm": "CLOSE_POSITION"})
+  POST /controls/set_mode    — switch paper/live mode
+
+  GET  /optimizer/summary    — backtest summary, MC, WF, reconcile
+  GET  /optimizer/sweep_results    — parameter sweep bar chart data
+  GET  /optimizer/evolve_results   — top 10 genomes leaderboard
+  GET  /optimizer/evolve_results_all — per-goal results with version history
+  GET  /optimizer/progress   — evolution in-progress status
+  GET  /optimizer/running    — whether optimizer is currently running
+  POST /optimizer/run        — start optimizer (mode, param, fitness_goal, config_name)
+
+  GET  /notifications/config  — Telegram notifier status
+  POST /notifications/setup   — configure Telegram bot token + chat_id
+  POST /notifications/test    — send test notification
+
+  GET  /farm/status           — farm status (all bots, metrics, readiness)
+  POST /farm/start            — start bot_farm.py
+  POST /farm/stop             — stop bot_farm.py
+  GET  /farm/bot/{bot_id}/trades — trades for a specific farm bot
+  GET  /farm/bot/{bot_id}/readiness — readiness report for a farm bot
+  POST /farm/bot/{bot_id}/assign-config — assign named config to a farm bot
+
+  GET  /configs                       — list named configs
+  GET  /configs/{name}               — get config detail
+  POST /configs                       — create new named config
+  PATCH /configs/{name}/status        — update status
+  PATCH /configs/{name}/rename        — rename config
+  PATCH /configs/{name}/notes         — update notes
+  PATCH /configs/{name}/params        — update params
+  POST /configs/{name}/duplicate      — duplicate config
+  POST /configs/{name}/archive        — archive config
+  DELETE /configs/{name}              — delete config
+  POST /configs/{name}/start-paper    — set status=paper (farm picks it up)
+  POST /configs/{name}/stop-paper     — set status=validated
+  POST /configs/{name}/promote        — promote to live (requires starting_equity)
+
+  GET  /chart/btc_history?days=N      — OHLCV candles + overlays for charting
+
+CRITICAL: All route handlers must be defined BEFORE the static file mount:
+  app.mount("/", StaticFiles(directory=..., html=True), name="static")
+
+COPY the full api.py from source repo to this directory.
+
+STEP 182 — Start the API server for testing
+  /usr/local/bin/python3.11 -m uvicorn api:app --host 0.0.0.0 --port 8765 --reload
+
+STEP 183 — Test a few endpoints
+  curl -H "X-API-Key: 3f985cae37cbfb18da4acb92219ba077" http://localhost:8765/health
+  curl -H "X-API-Key: 3f985cae37cbfb18da4acb92219ba077" http://localhost:8765/status
+  curl -H "X-API-Key: 3f985cae37cbfb18da4acb92219ba077" http://localhost:8765/configs
+
+CHECKPOINT PHASE 12:
+  All three curl commands should return JSON (not HTML).
+  If /status returns HTML, the catch-all route is intercepting — restart the server.
+
+================================================================================
+PHASE 13 — REACT PWA FRONTEND
+Steps 201–250
+================================================================================
+
+STEP 201 — Scaffold the mobile app
+  mkdir -p mobile-app
+  cd mobile-app
+  npm create vite@5.4.2 . --template react-ts
+  # If directory exists, accept overwrite for package.json but keep src/ files
+
+STEP 202 — Install dependencies
+  cd mobile-app
+  npm install
+  npm install -D tailwindcss@3.4.10 postcss autoprefixer vite-plugin-pwa workbox-window
+  npm install recharts lightweight-charts
+
+STEP 203 — Initialise Tailwind CSS
+  npx tailwindcss init -p
+
+STEP 204 — Write tailwind.config.js
+=== BEGIN FILE: mobile-app/tailwind.config.js ===
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        navy: '#0f172a',
+        card: '#1e293b',
+        border: '#334155',
+      },
+    },
+  },
+  plugins: [],
+}
+=== END FILE: mobile-app/tailwind.config.js ===
+
+STEP 205 — Write vite.config.ts
+=== BEGIN FILE: mobile-app/vite.config.ts ===
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
+
+export default defineConfig({
+  base: '/btc-wheel-bot/',
+  plugins: [
+    react(),
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['*.svg', '*.png', '*.ico', 'icons/*.png'],
+      manifest: {
+        name: 'Wheel Bot',
+        short_name: 'Wheel Bot',
+        description: 'BTC Wheel Strategy Bot Monitor',
+        theme_color: '#0f172a',
+        background_color: '#0f172a',
+        display: 'standalone',
+        start_url: '/btc-wheel-bot/',
+        scope: '/btc-wheel-bot/',
+        icons: [
+          {
+            src: '/btc-wheel-bot/icons/icon-192.png',
+            sizes: '192x192',
+            type: 'image/png',
+          },
+          {
+            src: '/btc-wheel-bot/icons/icon-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any maskable',
+          },
+          {
+            src: '/btc-wheel-bot/icons/apple-touch-icon.png',
+            sizes: '180x180',
+            type: 'image/png',
+          },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+        skipWaiting: true,
+        clientsClaim: true,
+      },
+    }),
+  ],
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+  },
+})
+=== END FILE: mobile-app/vite.config.ts ===
+
+STEP 206 — Write index.html
+=== BEGIN FILE: mobile-app/index.html ===
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Wheel Bot" />
+    <link rel="apple-touch-icon" href="/btc-wheel-bot/wheel-512.svg" />
+    <link rel="icon" type="image/svg+xml" href="/btc-wheel-bot/wheel-192.svg" />
+    <title>Wheel Bot</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+=== END FILE: mobile-app/index.html ===
+
+STEP 207 — Write src/index.css
+=== BEGIN FILE: mobile-app/src/index.css ===
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  background-color: #0f172a;
+  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Safe area insets for iOS notch */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+=== END FILE: mobile-app/src/index.css ===
+
+STEP 208 — Write src/main.tsx
+=== BEGIN FILE: mobile-app/src/main.tsx ===
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+=== END FILE: mobile-app/src/main.tsx ===
+
+STEP 209 — Write src/api.ts (complete API client)
+  COPY the full api.ts from source repo to mobile-app/src/api.ts
+  
+  KEY FACTS:
+    DEFAULT_API_URL = 'https://bot.banksiaspringsfarm.com'
+    DEFAULT_API_KEY = '3f985cae37cbfb18da4acb92219ba077'
+    
+  These are baked in so the app works without any setup screen configuration.
+  The api.ts file is ~516 lines and contains all TypeScript interfaces
+  and exported fetch functions for every API route.
+  
+  Key interfaces: StatusData, HedgeData, PositionData, EquityData, Trade,
+  OptimizerSummary, SweepResults, EvolveResults, EvolveGoalResult,
+  BotConfig, NamedConfig, FarmStatus, BotFarmEntry, ReadinessReport
+  
+  Key functions: getStatus, getPosition, getEquity, getTrades, getConfig,
+  startBot, stopBot, closePosition, setMode, getPresets, loadPreset,
+  updateConfig, runOptimizer, getBtcPrice, getFarmStatus, getBotReadiness,
+  listConfigs, getConfigDetail, saveConfig, setConfigStatus, renameConfig,
+  updateConfigNotes, updateConfigParams, duplicateConfig, archiveConfig,
+  deleteConfig, startPaperTesting, stopPaperTesting, assignBotConfig,
+  promoteConfig, testConnection
+
+STEP 210 — Write src/App.tsx (5-tab layout)
+=== BEGIN FILE: mobile-app/src/App.tsx ===
+import { useState, useEffect } from 'react'
+import SetupScreen from './components/SetupScreen'
+import Dashboard from './components/Dashboard'
+import Pipeline from './components/Pipeline'
+import Performance from './components/Performance'
+import Diagnostics from './components/Diagnostics'
+import Settings from './components/Settings'
+
+type Tab = 'dashboard' | 'pipeline' | 'performance' | 'diagnostics' | 'settings'
+
+const TAB_ICONS: Record<Tab, string> = {
+  dashboard:   '🏠',
+  pipeline:    '🗺',
+  performance: '📈',
+  diagnostics: '🔬',
+  settings:    '⚙',
+}
+
+const TAB_LABELS: Record<Tab, string> = {
+  dashboard:   'Dashboard',
+  pipeline:    'Pipeline',
+  performance: 'Performance',
+  diagnostics: 'Diagnostics',
+  settings:    'Settings',
+}
+
+const TABS: Tab[] = ['dashboard', 'pipeline', 'performance', 'diagnostics', 'settings']
+
+export default function App() {
+  const [isSetup, setIsSetup]   = useState(false)
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard')
+
+  useEffect(() => {
+    const url = localStorage.getItem('api_url')
+    const key = localStorage.getItem('api_key')
+    setIsSetup(!!(url && key))
+  }, [])
+
+  if (!isSetup) {
+    return <SetupScreen onSetupComplete={() => setIsSetup(true)} />
+  }
+
+  return (
+    <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
+      <main className="flex-1 overflow-y-auto">
+        {activeTab === 'dashboard'   && <Dashboard onNavigateTo={(tab) => setActiveTab(tab as Tab)} />}
+        {activeTab === 'pipeline'    && <Pipeline />}
+        {activeTab === 'performance' && <Performance />}
+        {activeTab === 'diagnostics' && <Diagnostics />}
+        {activeTab === 'settings'    && <Settings onLogout={() => setIsSetup(false)} />}
+      </main>
+
+      <nav className="flex-shrink-0 bg-card border-t border-border pb-safe">
+        <div className="flex">
+          {TABS.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 flex flex-col items-center py-3 text-xs transition-colors ${
+                activeTab === tab
+                  ? 'text-green-400'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <span className="text-xl mb-0.5">{TAB_ICONS[tab]}</span>
+              <span>{TAB_LABELS[tab]}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </div>
+  )
+}
+=== END FILE: mobile-app/src/App.tsx ===
+
+STEP 211 — Write src/components/SetupScreen.tsx
+=== BEGIN FILE: mobile-app/src/components/SetupScreen.tsx ===
+import { useState } from 'react'
+import { testConnection } from '../api'
+
+interface Props {
+  onSetupComplete: () => void
+}
+
+export default function SetupScreen({ onSetupComplete }: Props) {
+  const [url, setUrl] = useState(localStorage.getItem('api_url') ?? '')
+  const [key, setKey] = useState(localStorage.getItem('api_key') ?? '')
+  const [status, setStatus] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
+
+  async function handleSave() {
+    if (!url || !key) {
+      setStatus('error')
+      setErrorMsg('Both fields are required')
+      return
+    }
+    const cleanUrl = url.replace(/\/$/, '')
+    localStorage.setItem('api_url', cleanUrl)
+    localStorage.setItem('api_key', key)
+    setStatus('testing')
+    setErrorMsg('')
+    const ok = await testConnection()
+    if (ok) {
+      setStatus('ok')
+      setTimeout(onSetupComplete, 600)
+    } else {
+      setStatus('error')
+      setErrorMsg('Could not reach the API. Check the URL and key, then try again.')
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-navy flex flex-col items-center justify-center px-6 pt-safe">
+      <div className="mb-8 text-center">
+        <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-card flex items-center justify-center border border-border">
+          <span className="text-4xl text-green-400">hexagon</span>
+        </div>
+        <h1 className="text-2xl font-bold text-white">Wheel Bot</h1>
+        <p className="text-slate-400 text-sm mt-1">BTC Wheel Strategy Monitor</p>
+      </div>
+
+      <div className="w-full max-w-sm space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">API URL</label>
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://your-tunnel.trycloudflare.com"
+            className="w-full bg-card border border-border rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-green-500 text-sm"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-slate-300 mb-1.5">API Key</label>
+          <input
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="32-character hex key"
+            className="w-full bg-card border border-border rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none focus:border-green-500 text-sm font-mono"
+          />
+          <p className="text-xs text-slate-500 mt-1.5">
+            Found in .env as WHEEL_API_KEY
+          </p>
+        </div>
+
+        {status === 'error' && (
+          <div className="bg-red-950 border border-red-800 rounded-xl px-4 py-3 text-red-300 text-sm">
+            {errorMsg}
+          </div>
+        )}
+        {status === 'ok' && (
+          <div className="bg-green-950 border border-green-800 rounded-xl px-4 py-3 text-green-300 text-sm">
+            Connected! Loading...
+          </div>
+        )}
+
+        <button
+          onClick={handleSave}
+          disabled={status === 'testing'}
+          className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold py-3.5 rounded-xl transition-colors"
+        >
+          {status === 'testing' ? 'Testing connection...' : 'Save & Connect'}
+        </button>
+      </div>
+    </div>
+  )
+}
+=== END FILE: mobile-app/src/components/SetupScreen.tsx ===
+
+STEP 212 — Copy remaining large frontend components from source
+  The following components are 200-500+ lines each and must be copied verbatim:
+    mobile-app/src/components/Dashboard.tsx
+    mobile-app/src/components/Pipeline.tsx
+    mobile-app/src/components/Performance.tsx
+    mobile-app/src/components/Diagnostics.tsx
+    mobile-app/src/components/Settings.tsx
+    mobile-app/src/components/ConfigLibrary.tsx
+    mobile-app/src/components/ConfigSelector.tsx
+    mobile-app/src/components/InfoModal.tsx
+    mobile-app/src/components/SystemGuide.tsx
+    mobile-app/src/lib/glossary.ts
+
+COMPONENT DESCRIPTIONS:
+
+Dashboard.tsx (~350 lines):
+  - Fetches: status, position, equity, btcPrice, farmStatus, listConfigs
+  - Shows: active config badge, BTC price ticker, mode strip (paper/live/stopped)
+  - Farm summary strip: running bots count + avg win rate
+  - Position card: type, strike, DTE, delta, unrealized PnL, premium
+  - Quick actions: Start/Stop Bot, Force Close (with confirmation dialogs)
+  - Today stats row: equity, today PnL, total return
+  - Glossary info modals via InfoModal component
+  - onNavigateTo prop for cross-tab navigation
+
+Pipeline.tsx (~450 lines):
+  - 4-step stepper: Evolve → Validate → Paper → Go Live
+  - Step 1 (Evolve): ConfigSelector + 5 goal buttons + Run button
+    Saves evolved config with "Save as Config" dialog
+  - Step 2 (Validate): Runs walk_forward + monte_carlo + reconcile
+    Shows validation scores, unlocks Step 3
+  - Step 3 (Paper): Shows farm bot cards with readiness bars
+    Start/Stop paper testing per config
+  - Step 4 (Go Live): LOCKED until 8/8 readiness checks pass
+    Promote dialog requires $ amount + "I understand this is live" warning
+
+Performance.tsx (~300 lines):
+  - Bot selector pills: Live Bot + farm bots from FarmStatus
+  - Equity chart (recharts LineChart) for selected bot
+  - Metrics row: total return, Sharpe, win rate, max drawdown
+  - Trade list: filterable by selected bot, shows 50 most recent
+
+Diagnostics.tsx (~250 lines):
+  - Two sub-tabs: Sweep | Reconcile
+  - Sweep: horizontal bars per parameter showing fitness sensitivity
+    Labels: Sensitive⚡ (>0.5 delta), Moderate (>0.2), Flat
+  - Reconcile: accuracy score + premium RMSE/bias from reconcile_results.json
+
+Settings.tsx (~350 lines):
+  - API connection section (URL + Key inputs with test)
+  - Telegram notification setup (bot_token + chat_id)
+  - System guide (expandable markdown-style walkthrough)
+  - ConfigLibrary embedded at bottom
+  - Logout button
+
+ConfigLibrary.tsx (~250 lines):
+  - Full CRUD for named configs
+  - Status badges: draft/validated/paper/ready/live/archived
+  - Contextual action buttons per status
+  - Inline rename, notes edit
+  - Paper test controls, promote dialog
+
+ConfigSelector.tsx (~80 lines):
+  - Dropdown fetching GET /configs
+  - Source badge (evolved/manual/promoted)
+  - Inline fitness/return/sharpe stats
+
+InfoModal.tsx (~40 lines):
+  - Simple modal overlay with title, body text
+  - Used for glossary definitions throughout the app
+
+SystemGuide.tsx (~150 lines):
+  - Expandable step-by-step guide sections
+  - Covers: setup, paper trading, evolve, farm, go live
+
+lib/glossary.ts (~60 lines):
+  - GLOSSARY object mapping term names to {title, body} definitions
+  - Terms: IV Rank, IV Dynamic Delta, Delta, Wheel, DTE, Sharpe, Drawdown,
+    Win Rate, Regime Filter, Strike Ladder, Readiness Score, Collateral
+
+STEP 213 — Add placeholder stub components if source not available
+  Create each component file with a basic stub:
+  
+  For example, a minimal InfoModal.tsx:
+=== BEGIN FILE: mobile-app/src/components/InfoModal.tsx ===
+interface Props {
+  title: string
+  body: string
+  onClose: () => void
+}
+
+export default function InfoModal({ title, body, onClose }: Props) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4">
+      <div className="bg-card rounded-2xl p-6 w-full max-w-sm border border-border">
+        <h3 className="text-white font-semibold mb-2">{title}</h3>
+        <p className="text-slate-400 text-sm leading-relaxed">{body}</p>
+        <button
+          onClick={onClose}
+          className="mt-4 w-full bg-slate-700 text-white py-2.5 rounded-xl text-sm"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  )
+}
+=== END FILE: mobile-app/src/components/InfoModal.tsx ===
+
+=== BEGIN FILE: mobile-app/src/lib/glossary.ts ===
+export const GLOSSARY: Record<string, { title: string; body: string }> = {
+  ivRank: {
+    title: 'IV Rank',
+    body: 'IV Rank measures where current implied volatility sits relative to its 52-week range. 0% = historically cheap, 100% = historically expensive. The bot only sells options when IV rank is above the threshold (currently set to ensure fair premium collection).',
+  },
+  delta: {
+    title: 'Delta',
+    body: 'Delta measures how much an option price moves per $1 move in BTC. A put delta of -0.25 means the option gains $0.25 for every $1 BTC falls. Lower delta = further OTM = safer but less premium.',
+  },
+  wheel: {
+    title: 'Wheel Strategy',
+    body: 'Sell cash-secured puts → collect premium → if assigned (BTC falls below strike), sell covered calls on the position until called away. Each "leg" completes before the next begins.',
+  },
+  dte: {
+    title: 'DTE — Days to Expiry',
+    body: 'How many days until the option contract expires. The bot targets 7–37 DTE (configurable). Shorter DTE = faster premium collection but more frequent decisions. Longer DTE = more premium per contract but held longer.',
+  },
+  sharpe: {
+    title: 'Sharpe Ratio',
+    body: 'Risk-adjusted return. Sharpe = (average_return - risk_free_rate) / standard_deviation_of_returns. Higher is better. Above 1.0 is considered good, above 2.0 is excellent.',
+  },
+}
+=== END FILE: mobile-app/src/lib/glossary.ts ===
+
+STEP 214 — Build the app
+  cd mobile-app
+  npm run build
+  (Should produce dist/ folder with ~2MB of assets)
+
+STEP 215 — Test locally
+  npm run preview
+  Open http://localhost:4173/btc-wheel-bot/
+
+CHECKPOINT PHASE 13:
+  cd mobile-app && npm run build 2>&1 | tail -5
+  Should say: "dist/index.html  X.XX kB" with no errors.
+
+================================================================================
+PHASE 14 — INFRASTRUCTURE & DEPLOYMENT
+Steps 251–280
+================================================================================
+
+STEP 251 — GitHub Actions CI/CD workflow
+=== BEGIN FILE: .github/workflows/deploy-mobile.yml ===
+name: Deploy Mobile PWA
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile-app/**'
+      - '.github/workflows/deploy-mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: mobile-app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: mobile-app
+        run: npm ci
+
+      - name: Build
+        working-directory: mobile-app
+        run: npm run build
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: mobile-app/dist
+          publish_branch: gh-pages
+          force_orphan: true
+=== END FILE: .github/workflows/deploy-mobile.yml ===
+
+STEP 252 — Enable GitHub Pages
+  1. Go to repo Settings → Pages
+  2. Set Source: "Deploy from a branch"
+  3. Branch: gh-pages, Folder: / (root)
+  4. Save. App will be live at: https://banksiasprings.github.io/btc-wheel-bot/
+
+STEP 253 — Create macOS LaunchAgent for API server
+  Path: ~/Library/LaunchAgents/com.wheelbot.api.plist
+
+=== BEGIN FILE: ~/Library/LaunchAgents/com.wheelbot.api.plist ===
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wheelbot.api</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <string>api:app</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>8765</string>
+        <string>--reload</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/steven/Documents/btc-wheel-bot</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DERIBIT_API_KEY</key>
+        <string>YOUR_DERIBIT_TESTNET_KEY</string>
+        <key>DERIBIT_API_SECRET</key>
+        <string>YOUR_DERIBIT_TESTNET_SECRET</string>
+        <key>DERIBIT_TESTNET</key>
+        <string>true</string>
+        <key>WHEEL_API_KEY</key>
+        <string>3f985cae37cbfb18da4acb92219ba077</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/wheel_api.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wheel_api_err.log</string>
+</dict>
+</plist>
+=== END FILE: ~/Library/LaunchAgents/com.wheelbot.api.plist ===
+
+  Replace YOUR_DERIBIT_TESTNET_KEY and YOUR_DERIBIT_TESTNET_SECRET with real values.
+  Replace /Users/steven with your actual home directory.
+
+STEP 254 — Load the LaunchAgent
+  launchctl load ~/Library/LaunchAgents/com.wheelbot.api.plist
+  # Verify it's running:
+  curl http://localhost:8765/health
+  # Should return: {"status": "ok", "version": "1.0"}
+
+STEP 255 — Install Cloudflare Tunnel (cloudflared)
+  brew install cloudflare/cloudflare/cloudflared
+  cloudflared login
+  # Opens browser to link your Cloudflare account
+
+STEP 256 — Create the tunnel
+  cloudflared tunnel create btc-wheel-bot
+  # Note the tunnel ID from the output (format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
+
+STEP 257 — Add DNS record
+  cloudflared tunnel route dns btc-wheel-bot bot.banksiaspringsfarm.com
+  # OR use the Cloudflare dashboard: Zero Trust → Access → Tunnels → btc-wheel-bot → Configure
+
+STEP 258 — Create tunnel config
+  mkdir -p ~/.cloudflared
+=== BEGIN FILE: ~/.cloudflared/config.yml ===
+tunnel: a592905a-1918-437d-946b-4b0fe3d68e0c
+credentials-file: /Users/steven/.cloudflared/a592905a-1918-437d-946b-4b0fe3d68e0c.json
+
+ingress:
+  - hostname: bot.banksiaspringsfarm.com
+    service: http://localhost:8765
+  - service: http_status:404
+=== END FILE: ~/.cloudflared/config.yml ===
+
+  Replace tunnel ID with the one from Step 256.
+  Replace /Users/steven with your home directory.
+
+STEP 259 — Test the tunnel manually
+  cloudflared tunnel run btc-wheel-bot
+  # In a new terminal:
+  curl https://bot.banksiaspringsfarm.com/health
+  # Should return: {"status": "ok"}
+  Ctrl+C to stop
+
+STEP 260 — Create LaunchAgent for Cloudflare Tunnel (auto-start on boot)
+  Path: ~/Library/LaunchAgents/com.btcwheelbot.cloudflared.plist
+
+=== BEGIN FILE: ~/Library/LaunchAgents/com.btcwheelbot.cloudflared.plist ===
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.btcwheelbot.cloudflared</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/cloudflared</string>
+        <string>tunnel</string>
+        <string>run</string>
+        <string>btc-wheel-bot</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/cloudflared.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/cloudflared_err.log</string>
+</dict>
+</plist>
+=== END FILE: ~/Library/LaunchAgents/com.btcwheelbot.cloudflared.plist ===
+
+  NOTE: On Intel Mac, cloudflared may be at /usr/local/bin/cloudflared instead.
+  Check with: which cloudflared
+
+STEP 261 — Load the Cloudflare tunnel LaunchAgent
+  launchctl load ~/Library/LaunchAgents/com.btcwheelbot.cloudflared.plist
+
+STEP 262 — Verify end-to-end connectivity
+  curl -H "X-API-Key: 3f985cae37cbfb18da4acb92219ba077" https://bot.banksiaspringsfarm.com/status
+  # Should return JSON with bot_running status
+
+STEP 263 — Install app on iPhone
+  1. Open Safari on iPhone
+  2. Navigate to: https://banksiasprings.github.io/btc-wheel-bot/
+  3. Tap the Share button (square with arrow up)
+  4. Tap "Add to Home Screen"
+  5. Name it "Wheel Bot", tap Add
+  6. Open from home screen — it runs as a PWA (fullscreen, no browser bar)
+
+STEP 264 — First-time setup in app
+  The app has DEFAULT_API_URL and DEFAULT_API_KEY baked in.
+  On first launch, the setup screen appears.
+  Pre-filled URL: https://bot.banksiaspringsfarm.com
+  Enter API key: 3f985cae37cbfb18da4acb92219ba077
+  Tap "Save & Connect" — should say "Connected!"
+
+STEP 265 — Start the bot for the first time
+  In the Dashboard tab, tap "Start Bot".
+  Bot starts in paper mode (no real orders).
+  Green "Paper" pill should appear in the mode strip.
+  Wait for first poll tick (up to 60 seconds).
+
+STEP 266 — Run your first backtest
+  python3.11 main.py --mode=backtest
+  Results appear in data/backtest_results.png and data/backtest_trades.csv
+
+STEP 267 — Run your first evolution
+  python3.11 optimizer.py --mode evolve --generations 5 --population 10
+  OR via mobile app: Pipeline tab → Step 1 (Evolve) → Run
+
+STEP 268 — Create a named config from evolved results
+  In mobile app: Pipeline tab → Step 1 → save results as "MyConfig"
+  OR via CLI:
+    python3.11 -c "
+from config_store import save_config
+save_config('my-config', {
+  'strategy': {'iv_rank_threshold': 0.45, 'target_delta_min': 0.15, 'target_delta_max': 0.30},
+  'backtest': {'starting_equity': 10000.0}
+}, source='manual', status='draft')
+"
+
+STEP 269 — Paper test a config (starts farm bot)
+  Via mobile app: Settings → Config Library → [config] → Paper Test
+  OR via API:
+    curl -X POST -H "X-API-Key: ..." https://bot.banksiaspringsfarm.com/configs/my-config/start-paper
+
+STEP 270 — Monitor farm bots
+  Via mobile app: Performance tab → select a farm bot pill
+  OR: GET /farm/status
+
+STEP 271 — Readiness gate (all 8 checks must pass before going live)
+  Check 1: 20+ closed trades
+  Check 2: 30+ days running
+  Check 3: Sharpe >= 0.8
+  Check 4: Max drawdown < 15%
+  Check 5: Win rate >= 55%
+  Check 6: Walk-forward robustness >= 0.75
+  Check 7: Reconcile accuracy >= 80%
+  Check 8: No KILL_SWITCH file present
+
+STEP 272 — Promote to live (IRREVERSIBLE — use real Deribit mainnet keys)
+  1. Update LaunchAgent plist to use mainnet API keys
+  2. Set DERIBIT_TESTNET=false in the LaunchAgent
+  3. Via mobile app: Pipeline → Step 4 (Go Live)
+     Enter starting equity in USD, confirm "I understand this is live trading"
+  4. Bot restarts with mainnet config
+  5. Real orders will now be placed on Deribit mainnet
+
+STEP 273 — Monitor live trading
+  Telegram bot sends alerts for:
+    - Bot started/stopped
+    - Trade opened (strike, premium, DTE)
+    - Trade closed (P&L, reason)
+    - FIRST TRADE FIRED (special celebration message)
+    - Bot errors
+  
+  Mobile app Dashboard shows live position, delta, unrealized P&L.
+
+STEP 274 — Emergency kill switch
+  If anything looks wrong:
+    touch ~/Documents/btc-wheel-bot/KILL_SWITCH
+  Bot stops all new trades immediately on next tick (within 60 seconds).
+  To resume:
+    rm ~/Documents/btc-wheel-bot/KILL_SWITCH
+
+STEP 275 — Regular maintenance
+  Weekly: check equity curve in Performance tab
+  Monthly: re-run optimizer to update evolved configs
+  Check: data/tick_log.csv for IV rank history
+  Check: data/optimizer/evolve_history_{goal}.json for fitness trends
+
+================================================================================
+FINAL VERIFICATION CHECKLIST
+Steps 276–280
+================================================================================
+
+STEP 276 — Verify all Python files import cleanly
+  python3.11 -c "
+import config, deribit_client, strategy, risk_manager
+import notifier, config_store, readiness_validator
+import backtester, optimizer, bot_farm
+print('All Python imports OK')
+"
+
+STEP 277 — Verify API starts and all route groups respond
+  /usr/local/bin/python3.11 -m uvicorn api:app --host 0.0.0.0 --port 8765 &
+  sleep 3
+  KEY=3f985cae37cbfb18da4acb92219ba077
+  curl -s -H "X-API-Key: $KEY" http://localhost:8765/health | python3.11 -m json.tool
+  curl -s -H "X-API-Key: $KEY" http://localhost:8765/status | python3.11 -m json.tool
+  curl -s -H "X-API-Key: $KEY" http://localhost:8765/configs | python3.11 -m json.tool
+  curl -s -H "X-API-Key: $KEY" http://localhost:8765/farm/status | python3.11 -m json.tool
+  kill %1
+
+STEP 278 — Verify frontend builds without errors
+  cd mobile-app
+  npm run build
+  echo "Build exit code: $?"
+  ls -la dist/index.html
+
+STEP 279 — Verify Cloudflare tunnel works
+  curl -s -H "X-API-Key: 3f985cae37cbfb18da4acb92219ba077" \
+    https://bot.banksiaspringsfarm.com/health
+  # Expected: {"status": "ok", "version": "1.0"}
+
+STEP 280 — Full end-to-end smoke test
+  1. API server running (LaunchAgent loaded)
+  2. Cloudflare tunnel running (LaunchAgent loaded)
+  3. Open https://banksiasprings.github.io/btc-wheel-bot/ on iPhone
+  4. Setup screen pre-populated with default URL and key
+  5. Tap Save & Connect → "Connected!"
+  6. Dashboard shows BTC price, mode = stopped
+  7. Tap Start Bot → mode changes to "paper"
+  8. Wait 60s → position section appears (or shows "Flat" if IV rank below threshold)
+  9. Pipeline tab → Step 1 (Evolve) → select "Capital ROI" → Run
+  10. Diagnostics tab → Sweep tab shows parameter sensitivity bars
+
+================================================================================
+NOTES ON FILES NOT INCLUDED IN FULL VERBATIM FORM
+================================================================================
+
+The following files are very large (600-1835 lines) and must be copied
+verbatim from the source repository rather than reconstructed from this guide:
+
+  deribit_client.py  (~619 lines)  — Deribit REST/WebSocket client
+  strategy.py        (~413 lines)  — Wheel strategy with IV rank + dynamic delta
+  risk_manager.py    (~304 lines)  — Position sizing + pre-trade checks
+  bot.py             (~1320 lines) — Main async trading loop
+  backtester.py      (~906 lines)  — Historical simulation + Black-Scholes
+  optimizer.py       (~1651 lines) — Genetic algorithm + 5 fitness goals
+  bot_farm.py        (~604 lines)  — Supervisor for parallel bot farm
+  api.py             (~1835 lines) — FastAPI backend with 63+ routes
+
+  mobile-app/src/components/Dashboard.tsx    (~350 lines)
+  mobile-app/src/components/Pipeline.tsx     (~450 lines)
+  mobile-app/src/components/Performance.tsx  (~300 lines)
+  mobile-app/src/components/Diagnostics.tsx  (~250 lines)
+  mobile-app/src/components/Settings.tsx     (~350 lines)
+  mobile-app/src/components/ConfigLibrary.tsx (~250 lines)
+  mobile-app/src/components/ConfigSelector.tsx (~80 lines)
+  mobile-app/src/components/SystemGuide.tsx   (~150 lines)
+  mobile-app/src/api.ts                       (~516 lines)
+
+SOURCE REPOSITORY:
+  https://github.com/banksiasprings/btc-wheel-bot
+
+LIVE DEMO:
+  Mobile app: https://banksiasprings.github.io/btc-wheel-bot/
+  API:        https://bot.banksiaspringsfarm.com
+
+================================================================================
+END OF RECONSTRUCTION GUIDE
+Total steps: 280
+Files explicitly embedded: 20 (smaller/critical files)
+Files requiring source copy: 17 (large files — see notes above)
+================================================================================

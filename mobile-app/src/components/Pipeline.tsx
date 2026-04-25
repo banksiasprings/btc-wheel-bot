@@ -10,7 +10,14 @@ import {
   getSweepResults, SweepResults,
   getOptimizerSummary, OptimizerSummary,
   updateConfigParams,
+  getOptimizerProgress, EvolutionProgress,
+  getEvolveResults, EvolveResults, EvolveGenome,
 } from '../api'
+import {
+  LineChart, Line,
+  ScatterChart, Scatter,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
+} from 'recharts'
 import ConfigSelector from './ConfigSelector'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -50,6 +57,28 @@ const SWEEP_PARAMS: { key: string; label: string }[] = [
   { key: 'max_equity_per_leg',       label: 'Max Equity / Leg'   },
   { key: 'premium_fraction_of_spot', label: 'Premium Fraction'   },
 ]
+
+// Per-generation data point accumulated while evolution runs
+interface GenPoint { gen: number; bestFitness: number; genFitness: number }
+
+// Plain-English explanation of why the winner scored highest
+function goalExplainer(goal: EvolveGoal, w: EvolveGenome): string {
+  const ret = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`
+  switch (goal) {
+    case 'daily_trader':
+      return `Most active genome in the pool — ${w.num_cycles} trades over the backtest period. Low entry barriers mean frequent signals while keeping win rate at ${w.win_rate.toFixed(0)}% and drawdown under ${w.drawdown.toFixed(1)}%.`
+    case 'max_yield':
+      return `Pure return maximiser. ${ret(w.return_pct)} total return across ${w.num_cycles} trades. Sharpe ${w.sharpe.toFixed(2)} — the optimizer accepted higher risk in exchange for raw yield.`
+    case 'safest':
+      return `Capital preservation priority. ${w.win_rate.toFixed(0)}% win rate with only ${w.drawdown.toFixed(1)}% max drawdown. Returns ${ret(w.return_pct)} — steady income, minimal swings.`
+    case 'sharpe':
+      return `Best risk-adjusted performance. Sharpe ${w.sharpe.toFixed(2)} — the highest return per unit of volatility in the population. Drawdown held at ${w.drawdown.toFixed(1)}%.`
+    case 'capital_roi':
+      return `Capital efficiency winner. ${ret(w.return_pct)} return on deployed margin with Sharpe ${w.sharpe.toFixed(2)}. The optimizer balanced deployment aggressiveness against drawdown risk.`
+    default:
+      return `Balanced across return, risk, and win rate. ${ret(w.return_pct)} return, Sharpe ${w.sharpe.toFixed(2)}, ${w.win_rate.toFixed(0)}% win rate, ${w.drawdown.toFixed(1)}% max drawdown.`
+  }
+}
 
 // ── Helper components ─────────────────────────────────────────────────────────
 
@@ -102,58 +131,120 @@ function StepEvolve({
   evolveAll: EvolveAllResults | null
   onSaved: (name: string) => void
 }) {
-  const [goal, setGoal]             = useState<EvolveGoal>('capital_roi')
-  const [launching, setLaunching]   = useState(false)
-  const [launchMsg, setLaunchMsg]   = useState('')
-  const [showSave, setShowSave]     = useState(false)
-  const [saveName, setSaveName]     = useState('')
-  const [saveNotes, setSaveNotes]   = useState('')
-  const [saving, setSaving]         = useState(false)
-  const [saveMsg, setSaveMsg]       = useState('')
+  const [goal, setGoal]               = useState<EvolveGoal>('capital_roi')
+  const [view, setView]               = useState<'setup' | 'running' | 'results'>('setup')
+  const [launching, setLaunching]     = useState(false)
+  const [launchErr, setLaunchErr]     = useState('')
+  const [progress, setProgress]       = useState<EvolutionProgress | null>(null)
+  const [genHistory, setGenHistory]   = useState<GenPoint[]>([])
+  const [leaderboard, setLeaderboard] = useState<EvolveResults | null>(null)
+  // Save
+  const [saveName, setSaveName]   = useState('')
+  const [saveNotes, setSaveNotes] = useState('')
+  const [saving, setSaving]       = useState(false)
+  const [saveMsg, setSaveMsg]     = useState('')
   // Quick preset
-  const [presetName, setPresetName] = useState('daily_trader_v1')
+  const [presetName, setPresetName]     = useState('daily_trader_v1')
   const [savingPreset, setSavingPreset] = useState(false)
-  const [presetMsg, setPresetMsg]   = useState('')
+  const [presetMsg, setPresetMsg]       = useState('')
 
-  const goalData    = evolveAll?.[goal]
-  const hasData     = (goalData?.version ?? 0) > 0 && goalData?.current != null
-  const cur         = goalData?.current
-  const lastRunName = hasData
-    ? `${goal}_${new Date(goalData!.timestamp ?? '').toISOString().slice(0, 10).replace(/-/g, '')}`
+  const goalData = evolveAll?.[goal]
+  const hasData  = (goalData?.version ?? 0) > 0 && goalData?.current != null
+  const cur      = goalData?.current
+  const goalMeta = EVOLVE_GOALS.find(g => g.id === goal)
+
+  const totalGens  = progress?.total_generations ?? 8
+  const currentGen = progress?.generation ?? 0
+  const pct        = totalGens > 0 ? (currentGen / totalGens) * 100 : 0
+  const elapsed    = progress?.elapsed_sec ?? null
+  const elapsedStr = elapsed != null
+    ? `${Math.floor(elapsed / 60)}m ${Math.round(elapsed % 60)}s`
     : null
 
-  // Status
-  const status: StepStatus = hasData ? 'complete' : 'not_started'
+  const status: StepStatus = view === 'running' ? 'in_progress'
+    : hasData ? 'complete' : 'not_started'
+
+  // Detect if an evolution is already running on mount/open
+  useEffect(() => {
+    if (!open || view !== 'setup') return
+    getOptimizerProgress().then(p => {
+      if (p.running) setView('running')
+    }).catch(() => {})
+  }, [open])
+
+  // Poll while running
+  useEffect(() => {
+    if (view !== 'running') return
+    let cancelled = false
+
+    async function poll() {
+      try {
+        const p = await getOptimizerProgress()
+        if (cancelled) return
+        setProgress(p)
+
+        if (p.generation != null) {
+          setGenHistory(prev => {
+            if (prev.find(g => g.gen === p.generation)) return prev
+            return [...prev, {
+              gen: p.generation!,
+              bestFitness: +(p.best_fitness ?? 0).toFixed(4),
+              genFitness:  +(p.gen_best_fitness ?? 0).toFixed(4),
+            }]
+          })
+        }
+
+        if (!p.running && p.completed) {
+          const results = await getEvolveResults()
+          if (!cancelled) {
+            setLeaderboard(results)
+            const ts = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+            setSaveName(`${goal}_${ts}`)
+            setSaveMsg('')
+            setView('results')
+          }
+        }
+      } catch { /* ignore polling errors */ }
+    }
+
+    poll()
+    const id = setInterval(poll, 3_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [view, goal])
 
   async function handleRun() {
     setLaunching(true)
-    setLaunchMsg('')
+    setLaunchErr('')
+    setGenHistory([])
+    setProgress(null)
+    setLeaderboard(null)
     try {
-      const r = await runOptimizer('evolve', undefined, goal)
-      setLaunchMsg(`Started (PID ${r.pid}) — results will appear when done`)
+      await runOptimizer('evolve', undefined, goal)
+      setView('running')
     } catch (e) {
-      setLaunchMsg(String(e))
+      setLaunchErr(String(e))
     } finally {
       setLaunching(false)
     }
   }
 
-  async function handleSave() {
-    if (!saveName.trim() || !cur) return
+  async function handleSaveConfig() {
+    if (!saveName.trim()) return
+    const winner = leaderboard?.top_genomes?.[0]
     setSaving(true)
+    setSaveMsg('')
     try {
       await apiSaveConfig({
         name: saveName.trim(),
         source: 'evolved',
-        notes: saveNotes.trim() || undefined,
-        fitness: cur.fitness,
-        total_return_pct: cur.return_pct,
-        sharpe: cur.sharpe,
+        notes: saveNotes.trim() || `Evolved — goal: ${goal}`,
+        fitness: winner?.fitness ?? null,
+        total_return_pct: winner?.return_pct ?? null,
+        sharpe: winner?.sharpe ?? null,
         params: {},
       })
-      setSaveMsg(`✅ Saved as '${saveName.trim()}' — select it in Step 2 to validate`)
+      setSaveMsg(`✅ Saved as '${saveName.trim()}' — go to Step 2 to validate`)
       onSaved(saveName.trim())
-      setShowSave(false)
     } catch (e) {
       setSaveMsg(String(e))
     } finally {
@@ -184,31 +275,41 @@ function StepEvolve({
     }
   }
 
+  const winner = leaderboard?.top_genomes?.[0]
+
   return (
     <div className={`bg-card rounded-2xl border overflow-hidden ${
-      status === 'complete' ? 'border-green-800' : 'border-border'
+      status === 'complete' ? 'border-green-800'
+      : status === 'in_progress' ? 'border-amber-800'
+      : 'border-border'
     }`}>
-      <button
-        className="w-full flex items-center gap-3 px-4 py-3 text-left"
-        onClick={onToggle}
-      >
+      {/* ── Header (always visible) ── */}
+      <button className="w-full flex items-center gap-3 px-4 py-3 text-left" onClick={onToggle}>
         <StatusIcon status={status} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-white uppercase tracking-wide">Step 1 · Evolve</span>
+            {view === 'running' && (
+              <span className="text-xs text-amber-400 animate-pulse">running…</span>
+            )}
           </div>
           <p className="text-xs text-slate-400 mt-0.5">
-            {hasData
-              ? `Last: ${lastRunName} · Fitness ${cur!.fitness.toFixed(2)} · Return ${cur!.return_pct >= 0 ? '+' : ''}${cur!.return_pct.toFixed(1)}%`
+            {view === 'running'
+              ? `Gen ${currentGen}/${totalGens} · ${goalMeta?.label}`
+              : view === 'results' && winner
+              ? `🏆 Done — Fitness ${winner.fitness.toFixed(3)} · ${winner.return_pct >= 0 ? '+' : ''}${winner.return_pct.toFixed(1)}% · Sharpe ${winner.sharpe.toFixed(2)}`
+              : hasData && cur
+              ? `Last: ${goalMeta?.label} · Fitness ${cur.fitness.toFixed(2)} · ${cur.return_pct >= 0 ? '+' : ''}${cur.return_pct.toFixed(1)}%`
               : 'Find the best config via genetic evolution'}
           </p>
         </div>
         <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
       </button>
 
-      {open && (
+      {/* ── SETUP VIEW ── */}
+      {open && view === 'setup' && (
         <div className="px-4 pb-4 space-y-3">
-          {/* Goal selector */}
+          {/* Goal grid */}
           <div className="space-y-1.5">
             <p className="text-xs text-slate-400 font-medium">Fitness Goal</p>
             <div className="grid grid-cols-2 gap-2">
@@ -217,9 +318,7 @@ function StepEvolve({
                   key={g.id}
                   onClick={() => setGoal(g.id)}
                   className={`rounded-xl p-2.5 text-left border transition-colors ${
-                    idx === EVOLVE_GOALS.length - 1 && EVOLVE_GOALS.length % 2 !== 0
-                      ? 'col-span-2'
-                      : ''
+                    idx === EVOLVE_GOALS.length - 1 && EVOLVE_GOALS.length % 2 !== 0 ? 'col-span-2' : ''
                   } ${
                     goal === g.id
                       ? 'bg-amber-900 border-amber-600 text-white'
@@ -233,12 +332,8 @@ function StepEvolve({
             </div>
           </div>
 
-          {launchMsg && (
-            <p className={`text-xs px-3 py-2 rounded-lg border ${
-              launchMsg.startsWith('Started')
-                ? 'bg-green-950 border-green-800 text-green-300'
-                : 'bg-red-950 border-red-800 text-red-300'
-            }`}>{launchMsg}</p>
+          {launchErr && (
+            <p className="text-xs px-3 py-2 rounded-lg border bg-red-950 border-red-800 text-red-300">{launchErr}</p>
           )}
 
           <button
@@ -246,108 +341,226 @@ function StepEvolve({
             disabled={launching}
             className="w-full bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
           >
-            {launching ? 'Launching…' : `Run ${EVOLVE_GOALS.find(g => g.id === goal)?.label ?? ''} Evolution`}
+            {launching ? 'Launching…' : `Run ${goalMeta?.label ?? ''} Evolution`}
           </button>
 
-          {/* ⚡ Quick Preset — skip evolution, get trade flow now */}
+          {/* Previous result summary */}
+          {hasData && cur && (
+            <div className="bg-navy rounded-xl px-3 py-2.5 space-y-1">
+              <p className="text-xs text-slate-500 uppercase tracking-wide">Previous Run · {goalMeta?.label}</p>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <span>Fitness <span className="text-green-400 font-mono font-bold">{cur.fitness.toFixed(3)}</span></span>
+                <span>Return <span className={`font-mono font-bold ${cur.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{cur.return_pct >= 0 ? '+' : ''}{cur.return_pct.toFixed(1)}%</span></span>
+                <span>Sharpe <span className="text-white font-mono">{cur.sharpe.toFixed(2)}</span></span>
+                <span>Win <span className="text-white font-mono">{cur.win_rate.toFixed(0)}%</span></span>
+              </div>
+            </div>
+          )}
+
+          {/* Quick preset */}
           <div className="bg-navy rounded-xl px-3 py-3 space-y-2 border border-amber-900/50">
             <div className="flex items-center gap-2">
               <span className="text-base">⚡</span>
               <div>
                 <p className="text-xs text-white font-semibold">Daily Trader Quick-Start</p>
-                <p className="text-xs text-slate-500">Skip evolution — drop in a ready-made reckless config to get real trade flow immediately.</p>
+                <p className="text-xs text-slate-500">Skip evolution — hardcoded reckless config, trade flow within hours.</p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-500 bg-slate-900/60 rounded-lg px-3 py-2">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-slate-500 bg-slate-900/60 rounded-lg px-3 py-2">
               <span>IV threshold <span className="text-amber-400 font-mono">0.05</span></span>
               <span>DTE <span className="text-amber-400 font-mono">1–7 days</span></span>
               <span>Delta <span className="text-amber-400 font-mono">0.20–0.35</span></span>
               <span>Equity/leg <span className="text-amber-400 font-mono">10%</span></span>
             </div>
             <input
-              type="text"
-              value={presetName}
-              onChange={e => setPresetName(e.target.value)}
+              type="text" value={presetName} onChange={e => setPresetName(e.target.value)}
               placeholder="Config name…"
               className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-amber-500"
             />
             {presetMsg && (
-              <p className={`text-xs px-3 py-2 rounded-lg border ${
-                presetMsg.startsWith('✅')
-                  ? 'bg-green-950 border-green-800 text-green-300'
-                  : 'bg-red-950 border-red-800 text-red-300'
-              }`}>{presetMsg}</p>
+              <p className={`text-xs px-3 py-2 rounded-lg border ${presetMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{presetMsg}</p>
             )}
             <button
-              onClick={handleSavePreset}
-              disabled={savingPreset || !presetName.trim()}
+              onClick={handleSavePreset} disabled={savingPreset || !presetName.trim()}
               className="w-full py-2.5 rounded-xl bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white text-xs font-semibold"
             >
               {savingPreset ? 'Saving…' : 'Create Daily Trader Config →'}
             </button>
           </div>
+        </div>
+      )}
 
-          {/* Results summary + Save */}
-          {hasData && cur && (
-            <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
-              <div className="flex flex-wrap gap-3 text-xs">
-                <span>Fitness <span className="text-green-400 font-mono font-bold">{cur.fitness.toFixed(3)}</span></span>
-                <span>Return <span className={`font-mono font-bold ${cur.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {cur.return_pct >= 0 ? '+' : ''}{cur.return_pct.toFixed(1)}%
-                </span></span>
-                <span>Sharpe <span className="text-white font-mono">{cur.sharpe.toFixed(2)}</span></span>
-                <span>Win <span className="text-white font-mono">{cur.win_rate.toFixed(0)}%</span></span>
+      {/* ── RUNNING VIEW ── */}
+      {open && view === 'running' && (
+        <div className="px-4 pb-4 space-y-3">
+          {/* Header + progress bar */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-amber-400 font-semibold">{goalMeta?.icon} {goalMeta?.label} Evolution</span>
+              {elapsedStr && <span className="text-slate-500">{elapsedStr}</span>}
+            </div>
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Generation {currentGen} / {totalGens}</span>
+              <span>{currentGen > 0 ? `${Math.round(pct)}%` : 'Starting…'}</span>
+            </div>
+            <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-amber-500 rounded-full transition-all duration-1000"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Live fitness chart */}
+          {genHistory.length > 0 && (
+            <div>
+              <p className="text-xs text-slate-500 uppercase tracking-wide mb-1.5">Fitness per Generation</p>
+              <ResponsiveContainer width="100%" height={120}>
+                <LineChart data={genHistory} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="gen" tick={{ fontSize: 10, fill: '#64748b' }} tickCount={totalGens} />
+                  <YAxis hide domain={['auto', 'auto']} />
+                  <Tooltip
+                    contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#fff' }}
+                    formatter={(v: number, name: string) => [
+                      v.toFixed(4),
+                      name === 'bestFitness' ? 'Best (all time)' : 'This generation'
+                    ]}
+                  />
+                  <Line type="monotone" dataKey="bestFitness" stroke="#22c55e" strokeWidth={2} dot={{ r: 3, fill: '#22c55e' }} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="genFitness" stroke="#94a3b8" strokeWidth={1.5} dot={{ r: 2, fill: '#94a3b8' }} strokeDasharray="4 2" isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 text-xs text-slate-500 mt-1 px-1">
+                <span className="flex items-center gap-1"><span className="inline-block w-4 h-0.5 bg-green-500 rounded" />Best ever</span>
+                <span className="flex items-center gap-1"><span className="inline-block w-4 h-0.5 bg-slate-400 rounded" style={{ borderTop: '1px dashed' }} />This gen</span>
               </div>
-
-              {!showSave ? (
-                <button
-                  onClick={() => { setShowSave(true); setSaveName(lastRunName ?? ''); setSaveMsg('') }}
-                  className="w-full py-2 rounded-xl bg-green-800 hover:bg-green-700 text-green-200 text-xs font-semibold"
-                >
-                  Save as named config →
-                </button>
-              ) : (
-                <div className="space-y-2">
-                  <input
-                    type="text"
-                    value={saveName}
-                    onChange={e => setSaveName(e.target.value)}
-                    placeholder="Config name"
-                    className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
-                  />
-                  <input
-                    type="text"
-                    value={saveNotes}
-                    onChange={e => setSaveNotes(e.target.value)}
-                    placeholder="Notes (optional)"
-                    className="w-full bg-slate-900 border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleSave}
-                      disabled={saving || !saveName.trim()}
-                      className="flex-1 py-2 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-semibold"
-                    >
-                      {saving ? 'Saving…' : 'Save Config'}
-                    </button>
-                    <button
-                      onClick={() => setShowSave(false)}
-                      className="px-3 py-2 rounded-xl bg-slate-700 text-slate-300 text-sm"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                  {saveMsg && (
-                    <p className={`text-xs px-3 py-2 rounded-lg border ${
-                      saveMsg.startsWith('✅')
-                        ? 'bg-green-950 border-green-800 text-green-300'
-                        : 'bg-red-950 border-red-800 text-red-300'
-                    }`}>{saveMsg}</p>
-                  )}
-                </div>
-              )}
             </div>
           )}
+
+          {/* Current best stats */}
+          {progress?.best_fitness != null && (
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {[
+                { label: 'Fitness', value: progress.best_fitness.toFixed(3), color: 'text-amber-400' },
+                { label: 'Return',  value: progress.best_return_pct != null ? `${progress.best_return_pct >= 0 ? '+' : ''}${progress.best_return_pct.toFixed(1)}%` : '—', color: (progress.best_return_pct ?? 0) >= 0 ? 'text-green-400' : 'text-red-400' },
+                { label: 'Sharpe',  value: progress.best_sharpe?.toFixed(2) ?? '—', color: 'text-white' },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="bg-navy rounded-xl py-2">
+                  <p className="text-xs text-slate-500">{label}</p>
+                  <p className={`text-sm font-bold mt-0.5 ${color}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="text-xs text-slate-600 text-center">Results will appear automatically when done</p>
+        </div>
+      )}
+
+      {/* ── RESULTS VIEW ── */}
+      {open && view === 'results' && (
+        <div className="px-4 pb-4 space-y-3">
+
+          {/* Banner */}
+          <div className="bg-amber-900/30 border border-amber-700/50 rounded-xl px-3 py-2.5 flex items-center gap-3">
+            <span className="text-2xl">🏆</span>
+            <div>
+              <p className="text-sm font-bold text-amber-300">Evolution Complete</p>
+              <p className="text-xs text-slate-400">{goalMeta?.label} · {leaderboard?.total_evaluated ?? 0} genomes evaluated</p>
+            </div>
+          </div>
+
+          {/* Winner card */}
+          {winner && (
+            <div className="bg-navy rounded-xl px-3 py-3 space-y-2">
+              <p className="text-xs text-slate-400 uppercase tracking-wide font-medium">Winner Genome</p>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                {[
+                  { label: 'Fitness',   value: winner.fitness.toFixed(3),                                      color: 'text-amber-400' },
+                  { label: 'Return',    value: `${winner.return_pct >= 0 ? '+' : ''}${winner.return_pct.toFixed(1)}%`, color: winner.return_pct >= 0 ? 'text-green-400' : 'text-red-400' },
+                  { label: 'Sharpe',   value: winner.sharpe.toFixed(2),                                        color: 'text-white'     },
+                  { label: 'Win Rate', value: `${winner.win_rate.toFixed(0)}%`,                                color: 'text-white'     },
+                  { label: 'Max DD',   value: `-${winner.drawdown.toFixed(1)}%`,                               color: 'text-red-400'   },
+                  { label: 'Trades',   value: String(winner.num_cycles),                                       color: 'text-white'     },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="bg-slate-900/60 rounded-lg py-2">
+                    <p className="text-xs text-slate-500">{label}</p>
+                    <p className={`text-xs font-bold mt-0.5 ${color}`}>{value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Population scatter */}
+          {(leaderboard?.top_genomes?.length ?? 0) > 1 && (
+            <div>
+              <p className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-1.5">Population — top {leaderboard!.top_genomes.length} genomes</p>
+              <ResponsiveContainer width="100%" height={160}>
+                <ScatterChart margin={{ top: 4, right: 8, left: -16, bottom: 4 }}>
+                  <XAxis dataKey="return_pct" name="Return %" type="number" tick={{ fontSize: 10, fill: '#64748b' }} label={{ value: 'Return %', position: 'insideBottomRight', offset: 0, fontSize: 10, fill: '#64748b' }} />
+                  <YAxis dataKey="fitness" name="Fitness" type="number" tick={{ fontSize: 10, fill: '#64748b' }} />
+                  <Tooltip
+                    cursor={{ strokeDasharray: '3 3', stroke: '#334155' }}
+                    contentStyle={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#fff' }}
+                    formatter={(v: number, name: string) => [
+                      name === 'return_pct' ? `${v >= 0 ? '+' : ''}${v.toFixed(1)}%` : v.toFixed(3),
+                      name === 'return_pct' ? 'Return' : 'Fitness',
+                    ]}
+                  />
+                  {/* Winner highlighted in amber */}
+                  <Scatter data={leaderboard!.top_genomes.slice(0, 1)} fill="#f59e0b" r={7} name="Winner" />
+                  {/* Rest in green, semi-transparent */}
+                  <Scatter data={leaderboard!.top_genomes.slice(1)} fill="#22c55e" fillOpacity={0.45} r={4} name="Others" />
+                </ScatterChart>
+              </ResponsiveContainer>
+              <div className="flex gap-4 text-xs text-slate-500 mt-1 px-1">
+                <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400" />winner</span>
+                <span className="flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full bg-green-500 opacity-60" />others</span>
+              </div>
+            </div>
+          )}
+
+          {/* Why it won */}
+          {winner && (
+            <div className="bg-navy rounded-xl px-3 py-2.5">
+              <p className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-1">Why This Genome Won</p>
+              <p className="text-xs text-slate-300 leading-relaxed">{goalExplainer(goal, winner)}</p>
+            </div>
+          )}
+
+          {/* Save */}
+          <div className="space-y-2">
+            <p className="text-xs text-slate-400 font-medium">Save as Config</p>
+            <input
+              type="text" value={saveName} onChange={e => setSaveName(e.target.value)}
+              placeholder="Config name"
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
+            />
+            <input
+              type="text" value={saveNotes} onChange={e => setSaveNotes(e.target.value)}
+              placeholder="Notes (optional)"
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-green-500"
+            />
+            {saveMsg && (
+              <p className={`text-xs px-3 py-2 rounded-lg border ${saveMsg.startsWith('✅') ? 'bg-green-950 border-green-800 text-green-300' : 'bg-red-950 border-red-800 text-red-300'}`}>{saveMsg}</p>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveConfig} disabled={saving || !saveName.trim()}
+                className="flex-1 py-2.5 rounded-xl bg-green-700 hover:bg-green-600 disabled:opacity-40 text-white text-sm font-semibold"
+              >
+                {saving ? 'Saving…' : 'Save Config'}
+              </button>
+              <button
+                onClick={() => { setView('setup'); setGenHistory([]); setProgress(null); setLaunchErr('') }}
+                className="px-4 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm"
+              >
+                Run Again
+              </button>
+            </div>
+          </div>
+
         </div>
       )}
     </div>

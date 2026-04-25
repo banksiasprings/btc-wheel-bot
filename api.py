@@ -538,7 +538,7 @@ def get_evolve_results() -> dict:
 def get_evolve_results_all() -> dict:
     """Return per-goal evolution results with version history and delta vs previous run."""
     result: dict[str, dict] = {}
-    for goal in ("balanced", "max_yield", "safest", "sharpe", "capital_roi"):
+    for goal in ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "daily_trader"):
         genome = _read_yaml(OPT_DIR / f"best_genome_{goal}.yaml") or _read_yaml(OPT_DIR / "best_genome.yaml")
         ts = _evolve_goal_ts(goal)
 

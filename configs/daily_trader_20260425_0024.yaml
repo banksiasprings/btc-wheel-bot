@@ -1,19 +1,25 @@
 _meta:
-  created_at: '2026-04-23T11:18:18.025437+00:00'
-  fitness: null
-  goal: null
-  name: __test__
-  notes: test
-  source: manual
+  created_at: '2026-04-25T00:24:29.353350+00:00'
+  drawdown: -0.35
+  fitness: 3.1455
+  generations: 8
+  goal: daily_trader
+  name: daily_trader_20260425_0024
+  notes: ''
+  sharpe: -1.21
+  source: evolved
   status: draft
+  total_return: 3.9
+  version: 1
+  win_rate: 66.7
 backtest:
-  approx_otm_offset: 0.0338
+  approx_otm_offset: 0.0507
   lookback_months: 12
-  premium_fraction_of_spot: 0.0289
+  premium_fraction_of_spot: 0.0293
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 1000.0
+  starting_equity: 63999.9679
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -53,9 +59,9 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.0828
+  max_equity_per_leg: 0.02
   max_open_legs: 1
-  min_free_equity_fraction: 0.1007
+  min_free_equity_fraction: 0.0398
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -65,9 +71,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.42
+  iv_rank_threshold: 0.2105
   liquidity_top_n: 100
-  max_dte: 37
-  min_dte: 3
-  target_delta_max: 0.4057
-  target_delta_min: 0.1883
+  max_dte: 26
+  min_dte: 4
+  target_delta_max: 0.3935
+  target_delta_min: 0.1146
