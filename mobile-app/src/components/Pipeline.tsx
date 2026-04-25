@@ -13,6 +13,7 @@ import {
   getOptimizerProgress, EvolutionProgress,
   getEvolveResults, EvolveResults, EvolveGenome,
   getOptimizerRunning, WalkForwardResults, MonteCarloResults, getWalkForwardResults, getMonteCarloResults,
+  getConfigDetail,
 } from '../api'
 import {
   LineChart, Line,
@@ -1943,6 +1944,248 @@ function StepReconcile({
   )
 }
 
+// ── Step 5.5 — AI Review ──────────────────────────────────────────────────────
+
+function StepAIReview({
+  open, onToggle, configs, bots,
+}: {
+  open: boolean
+  onToggle: () => void
+  configs: NamedConfig[]
+  bots: BotFarmEntry[]
+}) {
+  const [selectedConfig, setSelectedConfig] = useState<string>('')
+  const [generating, setGenerating]         = useState(false)
+  const [copied, setCopied]                 = useState(false)
+  const [error, setError]                   = useState('')
+
+  // Pre-select the first non-archived config on open
+  useEffect(() => {
+    if (!open || selectedConfig) return
+    const first = configs.find(c => c.status !== 'archived')
+    if (first) setSelectedConfig(first.name)
+  }, [open, configs, selectedConfig])
+
+  async function handleGenerate() {
+    if (!selectedConfig) return
+    setGenerating(true)
+    setError('')
+    setCopied(false)
+    try {
+      // Fetch everything in parallel
+      const [detail, wf, mc] = await Promise.allSettled([
+        getConfigDetail(selectedConfig),
+        getWalkForwardResults(),
+        getMonteCarloResults(),
+      ])
+
+      const cfg    = detail.status === 'fulfilled' ? detail.value : configs.find(c => c.name === selectedConfig)
+      const wfData = wf.status === 'fulfilled' && wf.value?.available ? wf.value : null
+      const mcData = mc.status === 'fulfilled' && mc.value?.available ? mc.value : null
+
+      // Find bot running this config
+      const bot = bots.find(b => b.config_name === selectedConfig)
+      const m   = bot?.metrics
+      const r   = bot?.readiness
+
+      const p = cfg?.params as Record<string, unknown> | undefined ?? {}
+
+      const fmtPct = (v: number | null | undefined, dp = 1) =>
+        v == null ? 'N/A' : `${v >= 0 ? '+' : ''}${v.toFixed(dp)}%`
+      const fmtNum = (v: number | null | undefined, dp = 2) =>
+        v == null ? 'N/A' : v.toFixed(dp)
+
+      // ── Build the prompt ────────────────────────────────────────────────────
+      const lines: string[] = []
+
+      lines.push('# BTC Options Wheel Bot — AI Strategy Review')
+      lines.push('')
+      lines.push('## What This Bot Does')
+      lines.push('This is an automated options wheel strategy running on the Deribit crypto options exchange.')
+      lines.push('The strategy sells cash-secured PUT options to collect premium. If the put is assigned (BTC drops below the strike), the bot then sells covered CALL options to exit the position. This cycles continuously, collecting premium in both directions.')
+      lines.push('The bot runs on testnet (paper trading) and is being evaluated for promotion to live trading with real money.')
+      lines.push('')
+
+      lines.push('## Config Being Reviewed')
+      lines.push(`- **Name:** ${cfg?.name ?? selectedConfig}`)
+      lines.push(`- **Source:** ${cfg?.source ?? 'unknown'} (${cfg?.source === 'evolved' ? 'created by genetic evolution algorithm' : cfg?.source === 'manual' ? 'manually configured' : cfg?.source})`)
+      if (cfg?.goal) lines.push(`- **Optimisation Goal:** ${cfg.goal}`)
+      if (cfg?.notes) lines.push(`- **Notes / Intent:** ${cfg.notes}`)
+      if (cfg?.fitness != null) lines.push(`- **Fitness Score:** ${cfg.fitness.toFixed(3)} (composite score from backtest)`)
+      if (cfg?.total_return_pct != null) lines.push(`- **Backtest Return:** ${fmtPct(cfg.total_return_pct)}`)
+      if (cfg?.sharpe != null) lines.push(`- **Backtest Sharpe:** ${fmtNum(cfg.sharpe)}`)
+      lines.push('')
+
+      lines.push('## Strategy Parameters')
+      lines.push('*(These control how and when the bot trades)*')
+      if (p.iv_rank_threshold != null)  lines.push(`- **IV Rank Threshold:** ${p.iv_rank_threshold} — only enters trades when 1-year implied volatility rank is ≥ this value (0 = always trade, 1 = only trade at highest-ever IV)`)
+      if (p.target_delta_min != null)   lines.push(`- **Target Delta Range:** ${p.target_delta_min}–${p.target_delta_max} — how far out-of-the-money the option is (lower = more conservative, further OTM)`)
+      if (p.min_dte != null)            lines.push(`- **DTE Range:** ${p.min_dte}–${p.max_dte} days — days to expiry at trade entry`)
+      if (p.max_equity_per_leg != null) lines.push(`- **Max Equity Per Leg:** ${((p.max_equity_per_leg as number) * 100).toFixed(0)}% of account per position`)
+      if (p.max_open_legs != null)      lines.push(`- **Max Open Positions:** ${p.max_open_legs}`)
+      if (p.collateral_buffer != null)  lines.push(`- **Collateral Buffer:** ${p.collateral_buffer}x (safety margin on collateral requirement)`)
+      if (p.roll_enabled != null)       lines.push(`- **Roll Positions:** ${p.roll_enabled ? `Yes — rolls if DTE < ${p.roll_min_dte ?? '?'} days` : 'No'}`)
+      if (p.use_regime_filter != null)  lines.push(`- **Regime Filter:** ${p.use_regime_filter ? `Yes — uses ${p.regime_ma_days ?? 50}-day MA to detect bull/bear` : 'No'}`)
+      if (p.iv_dynamic_delta != null)   lines.push(`- **Dynamic Delta (IV-adjusted):** ${p.iv_dynamic_delta ? 'Yes' : 'No'}`)
+      if (p.ladder_enabled != null)     lines.push(`- **Ladder Entries:** ${p.ladder_enabled ? `Yes — ${p.ladder_legs ?? '?'} legs spread across strikes` : 'No'}`)
+      lines.push('')
+
+      lines.push('## Backtest Results (12-month historical window)')
+      if (cfg?.total_return_pct != null) lines.push(`- Total Return: ${fmtPct(cfg.total_return_pct)}`)
+      if (cfg?.sharpe != null)           lines.push(`- Sharpe Ratio: ${fmtNum(cfg.sharpe)}`)
+      if (cfg?.fitness != null)          lines.push(`- Composite Fitness: ${cfg.fitness.toFixed(3)}`)
+      if (!cfg?.total_return_pct && !cfg?.sharpe) lines.push('- No backtest data stored for this config')
+      lines.push('')
+
+      if (wfData) {
+        lines.push('## Walk-Forward Validation')
+        lines.push('*(Tests whether the strategy generalises to unseen data)*')
+        if (wfData.split) {
+          lines.push(`- In-sample period: ${wfData.split.is_start} → ${wfData.split.is_end} (${wfData.split.is_days} days training)`)
+          lines.push(`- Out-of-sample period: ${wfData.split.oos_start} → ${wfData.split.oos_end} (${wfData.split.oos_days} days blind test)`)
+        }
+        if (wfData.in_sample)     lines.push(`- In-sample:  Return ${fmtPct((wfData.in_sample as unknown as Record<string,number>).return_pct)}, Sharpe ${fmtNum((wfData.in_sample as unknown as Record<string,number>).sharpe)}`)
+        if (wfData.out_of_sample) lines.push(`- Out-of-sample: Return ${fmtPct((wfData.out_of_sample as unknown as Record<string,number>).return_pct)}, Sharpe ${fmtNum((wfData.out_of_sample as unknown as Record<string,number>).sharpe)}`)
+        if (wfData.robustness_score != null) lines.push(`- Robustness Score: ${(wfData.robustness_score * 100).toFixed(0)}%`)
+        if (wfData.verdict) lines.push(`- Verdict: ${wfData.verdict}`)
+        lines.push('')
+      }
+
+      if (mcData?.distributions) {
+        const d = mcData.distributions
+        lines.push('## Monte Carlo Simulation')
+        lines.push(`*(${mcData.n_runs ?? '?'} randomised runs over ${mcData.sim_months ?? '?'} months)*`)
+        lines.push(`- Probability of profit: ${mcData.prob_profit_pct?.toFixed(1) ?? 'N/A'}%`)
+        lines.push(`- Return  — median ${fmtPct(d.return_pct.p50)}, p5 ${fmtPct(d.return_pct.p5)}, p95 ${fmtPct(d.return_pct.p95)}`)
+        lines.push(`- Sharpe  — median ${fmtNum(d.sharpe.p50)}, p5 ${fmtNum(d.sharpe.p5)}, p95 ${fmtNum(d.sharpe.p95)}`)
+        lines.push(`- Max DD  — median ${fmtPct(d.max_drawdown.p50)}, worst ${fmtPct(d.max_drawdown.p5)}`)
+        lines.push('')
+      }
+
+      if (bot && m) {
+        lines.push('## Live Paper Trading (Deribit Testnet)')
+        lines.push(`- Days running: ${(m.days_running ?? 0).toFixed(1)}`)
+        lines.push(`- Total trades: ${m.num_trades ?? 0}`)
+        lines.push(`- Win rate: ${m.win_rate != null ? ((m.win_rate) * 100).toFixed(0) + '%' : 'N/A'}`)
+        lines.push(`- Total return: ${fmtPct(m.total_return_pct)}`)
+        lines.push(`- Sharpe: ${fmtNum(m.sharpe)}`)
+        lines.push(`- Max drawdown: ${fmtPct(m.max_drawdown)}`)
+        if (bot.has_open_position && bot.open_position) {
+          const pos = bot.open_position
+          lines.push(`- Current open position: ${pos.type?.toUpperCase() ?? 'PUT'} at $${pos.strike?.toLocaleString() ?? '?'} strike, ${pos.dte ?? '?'} days to expiry`)
+        }
+        lines.push('')
+      }
+
+      if (r) {
+        const CHECK_LABELS: Record<string, string> = {
+          min_trades: 'Min trades (≥10)', min_days: 'Min days (≥30)',
+          sharpe: 'Sharpe ≥ 0.8', drawdown: 'Drawdown < 15%',
+          win_rate: 'Win rate ≥ 55%', walk_forward: 'Walk-forward passed',
+          reconcile: 'Reconciliation passed', no_kill_switch: 'No kill switch active',
+        }
+        lines.push('## Pipeline Readiness Checklist')
+        lines.push(`Overall: ${r.score}/${r.total} checks passed${r.ready ? ' ✅ READY' : ' ❌ NOT READY'}`)
+        for (const [key, label] of Object.entries(CHECK_LABELS)) {
+          const passed = (r.checks as unknown as Record<string,boolean>)?.[key]
+          if (passed != null) lines.push(`- ${passed ? '✅' : '❌'} ${label}`)
+        }
+        lines.push('')
+      }
+
+      lines.push('---')
+      lines.push('## Review Request')
+      lines.push('Please provide:')
+      lines.push('1. **Parameter assessment** — are the settings reasonable for a BTC options wheel strategy? Are there any obvious misconfigurations?')
+      lines.push('2. **Goal alignment** — given the stated goal/intent above, do the parameters and results actually support that goal?')
+      lines.push('3. **Risk flags** — anything concerning in the metrics (e.g. too-good win rate suggesting insufficient data, high drawdown, low trade count)?')
+      lines.push('4. **Readiness verdict** — is this config ready for live trading with real money, or does it need more testing?')
+      lines.push('5. **Top 3 suggestions** — what would you change or test next?')
+
+      const text = lines.join('\n')
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 4000)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const activeConfigs = configs.filter(c => c.status !== 'archived')
+
+  return (
+    <div className="bg-card rounded-2xl border border-purple-900 overflow-hidden">
+      <button className="w-full flex items-center gap-3 px-4 py-3 text-left" onClick={onToggle}>
+        <span className="text-xl">🤖</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-bold text-white uppercase tracking-wide">AI Review</span>
+          <p className="text-xs text-slate-400 mt-0.5">Copy config data to paste into Claude, Grok, Gemini, or any AI</p>
+        </div>
+        <span className="text-slate-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 space-y-3">
+          <p className="text-xs text-slate-500">
+            Generates a structured prompt containing all config parameters, backtest results, walk-forward, Monte Carlo, and live paper trading data. Paste it into any AI to get an independent assessment.
+          </p>
+
+          <div className="space-y-1.5">
+            <p className="text-xs text-slate-400 font-medium">Select Config to Review</p>
+            <select
+              value={selectedConfig}
+              onChange={e => setSelectedConfig(e.target.value)}
+              className="w-full bg-navy border border-border rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 appearance-none"
+            >
+              <option value="">— Choose a config —</option>
+              {activeConfigs.map(c => (
+                <option key={c.name} value={c.name}>
+                  {c.name}{c.fitness != null ? ` · fit ${c.fitness.toFixed(2)}` : ''}{c.source === 'evolved' ? ' 🧬' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {error && (
+            <p className="text-xs px-3 py-2 rounded-lg border bg-red-950 border-red-800 text-red-300">{error}</p>
+          )}
+
+          <button
+            onClick={handleGenerate}
+            disabled={generating || !selectedConfig}
+            className="w-full bg-purple-800 hover:bg-purple-700 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
+          >
+            {generating ? 'Building prompt…' : copied ? '✅ Copied! Paste into your AI' : '📋 Generate & Copy Review Prompt'}
+          </button>
+
+          {copied && (
+            <p className="text-xs text-purple-300 text-center">
+              Prompt copied — paste it into Claude, Grok, Gemini, or any AI and ask for a strategy review.
+            </p>
+          )}
+
+          <div className="bg-navy rounded-xl px-3 py-2.5 space-y-1">
+            <p className="text-xs text-slate-500 uppercase tracking-wide font-medium">What's included in the prompt</p>
+            <div className="text-xs text-slate-400 space-y-0.5">
+              <p>✓ Strategy overview (what the wheel bot does)</p>
+              <p>✓ Config goal, intent, and source</p>
+              <p>✓ All strategy parameters with plain-English explanations</p>
+              <p>✓ Backtest fitness, return, and Sharpe</p>
+              <p>✓ Walk-forward results (if run)</p>
+              <p>✓ Monte Carlo distribution (if run)</p>
+              <p>✓ Live paper trading metrics (if bot is running this config)</p>
+              <p>✓ Pipeline readiness checklist</p>
+              <p>✓ Specific review questions for the AI</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Step 6 — Go Live ──────────────────────────────────────────────────────────
 
 function StepGoLive({
@@ -2216,6 +2459,15 @@ export default function Pipeline() {
         open={openStep === 5}
         onToggle={() => toggle(5)}
         configs={configs}
+      />
+
+      <StepConnector />
+
+      <StepAIReview
+        open={openStep === 55}
+        onToggle={() => toggle(55)}
+        configs={configs}
+        bots={bots}
       />
 
       <StepConnector />

@@ -5,7 +5,7 @@ _meta:
   name: bot_2
   notes: Migrated from farm/bot_2
   source: manual
-  status: paper
+  status: archived
 backtest:
   approx_otm_offset: 0.0338
   lookback_months: 12

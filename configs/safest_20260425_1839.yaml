@@ -1,25 +1,26 @@
 _meta:
-  created_at: '2026-04-23T23:46:41.514950+00:00'
-  drawdown: -3.35
-  fitness: 4.9647
-  generations: 3
-  goal: balanced
-  name: balanced_20260423_2346
+  created_at: '2026-04-25T18:39:45.801905+00:00'
+  drawdown: 0.0
+  fitness: 5.1832
+  generations: 8
+  goal: safest
+  name: safest_20260425_1839
   notes: ''
-  sharpe: 1.44
+  seeded_from: chaos-tester
+  sharpe: 1.64
   source: evolved
-  status: archived
-  total_return: 22.14
-  version: 2
-  win_rate: 76.2
+  status: draft
+  total_return: 19.32
+  version: 5
+  win_rate: 100.0
 backtest:
-  approx_otm_offset: 0.135
+  approx_otm_offset: 0.114
   lookback_months: 12
-  premium_fraction_of_spot: 0.0182
+  premium_fraction_of_spot: 0.0159
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 16998.8441
+  starting_equity: 83176.5488
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -59,9 +60,9 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.1003
+  max_equity_per_leg: 0.1135
   max_open_legs: 1
-  min_free_equity_fraction: 0.3154
+  min_free_equity_fraction: 0.4
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -71,9 +72,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.4766
+  iv_rank_threshold: 0.8
   liquidity_top_n: 100
   max_dte: 19
-  min_dte: 11
-  target_delta_max: 0.278
-  target_delta_min: 0.1692
+  min_dte: 5
+  target_delta_max: 0.401
+  target_delta_min: 0.1187

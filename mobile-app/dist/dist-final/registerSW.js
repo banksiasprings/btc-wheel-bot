@@ -1,1 +1,0 @@
-if('serviceWorker' in navigator) {window.addEventListener('load', () => {navigator.serviceWorker.register('/btc-wheel-bot/sw.js', { scope: '/btc-wheel-bot/' })})}

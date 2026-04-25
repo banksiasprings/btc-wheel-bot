@@ -1,25 +1,26 @@
 _meta:
-  created_at: '2026-04-23T23:46:41.514950+00:00'
-  drawdown: -3.35
-  fitness: 4.9647
-  generations: 3
-  goal: balanced
-  name: balanced_20260423_2346
+  created_at: '2026-04-25T04:26:23.175268+00:00'
+  drawdown: -3.32
+  fitness: 26.073
+  generations: 8
+  goal: max_yield
+  name: max yield V1
   notes: ''
-  sharpe: 1.44
+  sharpe: 2.44
   source: evolved
-  status: archived
-  total_return: 22.14
-  version: 2
-  win_rate: 76.2
+  status: paper
+  total_return: 242.07
+  version: 7
+  win_rate: 93.3
+approx_otm_offset: 0.03
 backtest:
-  approx_otm_offset: 0.135
+  approx_otm_offset: 0.1515
   lookback_months: 12
-  premium_fraction_of_spot: 0.0182
+  premium_fraction_of_spot: 0.0172
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 16998.8441
+  starting_equity: 1000.0
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -36,17 +37,24 @@ execution:
 hedge:
   enabled: true
   rebalance_threshold: 0.05
+iv_rank_threshold: 0.2
+iv_rank_window_days: 270
 logging:
   level: INFO
   log_dir: logs
   retention: 30 days
   rotation: 1 day
   trade_log_csv: data/trades.csv
+max_dte: 7
+max_equity_per_leg: 0.02
+min_dte: 2
+min_free_equity_fraction: 0
 overseer:
   check_interval_minutes: 60
   drawdown_warning_threshold: 0.05
   enabled: true
   iv_spike_warning_threshold: 0.85
+premium_fraction_of_spot: 0.008
 risk:
   kill_switch_file: KILL_SWITCH
   max_adverse_delta: 0.4
@@ -59,11 +67,12 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.1003
+  max_equity_per_leg: 0.0412
   max_open_legs: 1
-  min_free_equity_fraction: 0.3154
+  min_free_equity_fraction: 0.0
   regime_ma_days: 50
   use_regime_filter: false
+starting_equity: 1000
 strategy:
   expiry_execution_hour: 8
   expiry_preference:
@@ -71,9 +80,11 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.4766
+  iv_rank_threshold: 0.7467
   liquidity_top_n: 100
   max_dte: 19
-  min_dte: 11
-  target_delta_max: 0.278
-  target_delta_min: 0.1692
+  min_dte: 10
+  target_delta_max: 0.4115
+  target_delta_min: 0.1895
+target_delta_max: 0.375
+target_delta_min: 0.1

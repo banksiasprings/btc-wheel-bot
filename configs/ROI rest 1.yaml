@@ -6,7 +6,7 @@ _meta:
   notes: ''
   sharpe: 2.4
   source: evolved
-  status: paper
+  status: archived
   total_return_pct: 37.79
 backtest:
   approx_otm_offset: 0.0338
