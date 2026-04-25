@@ -250,7 +250,11 @@ export default function TradingView() {
   useEffect(() => {
     getFarmStatus().then(fs => {
       setFarmStatus(fs)
-      if (!botId && fs.bots.length > 0) setBotId(fs.bots[0].id)
+      if (!botId && fs.bots.length > 0) {
+        // Prefer the first bot that has an active open position, otherwise first bot
+        const withPos = fs.bots.find(b => b.has_open_position)
+        setBotId((withPos ?? fs.bots[0]).id)
+      }
     }).catch(() => {})
   }, [])
 
@@ -391,7 +395,7 @@ export default function TradingView() {
             >
               {bots.map(b => (
                 <option key={b.id} value={b.id}>
-                  {b.status === 'running' ? '🟢' : '🟡'} {b.name}{b.config_name ? ` — ${b.config_name}` : ''}
+                  {b.has_open_position ? '📋' : b.status === 'running' ? '🟢' : '🟡'} {b.name}{b.config_name ? ` — ${b.config_name}` : ''}{b.has_open_position && b.open_position?.strike ? ` (PUT $${(b.open_position.strike/1000).toFixed(0)}k)` : ''}
                 </option>
               ))}
             </select>

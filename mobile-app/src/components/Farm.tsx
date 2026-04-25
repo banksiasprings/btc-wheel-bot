@@ -126,7 +126,7 @@ function BotCard({ bot, onRefresh: _onRefresh }: { bot: BotFarmEntry; onRefresh:
         <div className="flex items-center gap-2.5 min-w-0">
           <StatusDot status={bot.status} />
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <p className="font-semibold text-white text-sm truncate">{bot.name}</p>
               <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${
                 configName === 'Unassigned'
@@ -135,6 +135,13 @@ function BotCard({ bot, onRefresh: _onRefresh }: { bot: BotFarmEntry; onRefresh:
               }`}>
                 {configName}
               </span>
+              {bot.has_open_position && bot.open_position && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 bg-green-900/60 text-green-300 border-green-700">
+                  📋 {bot.open_position.type?.replace('short_', '').toUpperCase() ?? 'PUT'} open
+                  {bot.open_position.strike ? ` $${(bot.open_position.strike/1000).toFixed(0)}k` : ''}
+                  {bot.open_position.dte != null ? ` · ${bot.open_position.dte}d` : ''}
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 truncate">{bot.description}</p>
           </div>

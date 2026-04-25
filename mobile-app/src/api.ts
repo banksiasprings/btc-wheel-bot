@@ -376,6 +376,14 @@ export interface BotFarmEntry {
   config_summary: Record<string, number | null>
   metrics: BotMetrics
   readiness: BotReadiness
+  has_open_position?: boolean
+  open_position?: {
+    type: string | null
+    strike: number | null
+    expiry: string | null
+    dte: number | null
+    pnl_usd: number | null
+  } | null
 }
 
 export interface FarmStatus {

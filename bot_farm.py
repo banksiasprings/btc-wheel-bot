@@ -376,19 +376,41 @@ class BotProcess:
         report  = validate_bot(self.bot_dir, self.thresholds, self.starting_equity)
         uptime  = self.uptime_hours()
 
+        # Check for an open position (lightweight read of current_position.json)
+        has_open_position = False
+        open_position_summary: dict = {}
+        try:
+            pos_path = self.bot_dir / "data" / "current_position.json"
+            if pos_path.exists():
+                import json as _json
+                pos = _json.loads(pos_path.read_text())
+                if pos.get("open"):
+                    has_open_position = True
+                    open_position_summary = {
+                        "type":     pos.get("type"),
+                        "strike":   pos.get("strike"),
+                        "expiry":   pos.get("expiry"),
+                        "dte":      pos.get("days_to_expiry"),
+                        "pnl_usd":  pos.get("unrealized_pnl_usd"),
+                    }
+        except Exception:
+            pass
+
         return {
-            "id":             self.bot_id,
-            "name":           self.name,
-            "description":    self.description,
-            "status":         self.status_str(),
-            "pid":            self.pid(),
-            "uptime_hours":   round(uptime, 2),
-            "days_running":   round(uptime / 24, 2),
-            "config_name":    self._current_config_name(),
-            "config_status":  self._current_config_status(),
-            "config_summary": self.config_summary,
-            "metrics":        metrics,
-            "readiness":      _readiness_to_dict(report),
+            "id":                   self.bot_id,
+            "name":                 self.name,
+            "description":          self.description,
+            "status":               self.status_str(),
+            "pid":                  self.pid(),
+            "uptime_hours":         round(uptime, 2),
+            "days_running":         round(uptime / 24, 2),
+            "config_name":          self._current_config_name(),
+            "config_status":        self._current_config_status(),
+            "config_summary":       self.config_summary,
+            "metrics":              metrics,
+            "readiness":            _readiness_to_dict(report),
+            "has_open_position":    has_open_position,
+            "open_position":        open_position_summary if has_open_position else None,
         }
 
 
