@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, ReferenceArea,
@@ -6,6 +6,7 @@ import {
 import {
   getChartData, ChartData, getFarmStatus, FarmStatus, BotFarmEntry,
 } from '../api'
+import { applyBotOrder } from '../lib/botOrder'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -368,7 +369,10 @@ export default function TradingView() {
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
-  const bots: BotFarmEntry[] = farmStatus?.bots ?? []
+  const bots: BotFarmEntry[] = useMemo(
+    () => applyBotOrder(farmStatus?.bots ?? []),
+    [farmStatus?.bots]
+  )
   const selectedBot = bots.find(b => b.id === botId)
   const o = chartData?.overlays
   const tradeCount = chartData?.trade_markers.length ?? 0

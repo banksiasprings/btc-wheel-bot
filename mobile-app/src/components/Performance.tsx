@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import {
   getFarmStatus,
@@ -7,6 +7,7 @@ import {
   FarmStatus,
   BotFarmEntry,
 } from '../api'
+import { sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
@@ -277,8 +278,11 @@ export default function Performance() {
   }
 
   const bots = farmStatus?.bots ?? []
-  // Sort by Sharpe descending (null last)
-  const sorted = [...bots].sort((a, b) => (b.metrics.sharpe ?? -Infinity) - (a.metrics.sharpe ?? -Infinity))
+  // Sort by Sharpe descending; custom drag order breaks ties (including when all bots have no data yet)
+  const sorted = useMemo(
+    () => sortBotsByMetric(bots, b => b.metrics.sharpe),
+    [bots]
+  )
 
   if (loading) return <div className="flex items-center justify-center h-64 text-slate-400">Loading…</div>
 

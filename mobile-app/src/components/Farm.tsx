@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getFarmStatus, startFarm, stopFarm, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
+import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
@@ -408,9 +409,8 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt }: { 
 // ── Leaderboard table ─────────────────────────────────────────────────────────
 
 function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
-  const sorted = [...bots].sort(
-    (a, b) => (b.metrics.total_return_pct ?? 0) - (a.metrics.total_return_pct ?? 0)
-  )
+  // Sort by return descending; custom drag order breaks ties
+  const sorted = sortBotsByMetric(bots, b => b.metrics.total_return_pct)
 
   return (
     <div className="bg-card rounded-2xl border border-border overflow-hidden">
@@ -549,12 +549,7 @@ export default function Farm() {
   const readyBots   = bots.filter(b => b.readiness.ready).length
 
   // ── Drag-to-reorder ──────────────────────────────────────────────────────────
-  const [botOrder, setBotOrder] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('farm_bot_order')
-      return saved ? JSON.parse(saved) : []
-    } catch { return [] }
-  })
+  const [botOrder, setBotOrder] = useState<string[]>(() => loadBotOrder())
   const [draggingId, setDraggingId]   = useState<string | null>(null)
   const cardRefs      = useRef<Record<string, HTMLDivElement | null>>({})
   const longPressRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -562,17 +557,7 @@ export default function Farm() {
   const lastSwapRef   = useRef<number>(0)       // throttle rapid swaps
   const didDragRef    = useRef(false)           // suppress expand-click after drag
 
-  const sortedBots = useMemo(() => {
-    if (botOrder.length === 0) return bots
-    return [...bots].sort((a, b) => {
-      const ia = botOrder.indexOf(a.id)
-      const ib = botOrder.indexOf(b.id)
-      if (ia === -1 && ib === -1) return 0
-      if (ia === -1) return 1
-      if (ib === -1) return -1
-      return ia - ib
-    })
-  }, [bots, botOrder])
+  const sortedBots = useMemo(() => applyBotOrder(bots, botOrder), [bots, botOrder])
 
   // Lock page scroll while dragging — React synthetic handlers are passive and
   // can't preventDefault, so we attach a native listener with passive:false.
@@ -653,7 +638,7 @@ export default function Farm() {
       if (e) e.preventDefault()  // prevent the synthesised click from toggling expand
       didDragRef.current = true
       setTimeout(() => { didDragRef.current = false }, 200)
-      localStorage.setItem('farm_bot_order', JSON.stringify(liveOrderRef.current))
+      saveBotOrder(liveOrderRef.current)
     }
     setDraggingId(null)
   }
