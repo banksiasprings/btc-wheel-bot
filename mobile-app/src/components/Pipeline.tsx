@@ -349,7 +349,7 @@ function StepEvolve({
             disabled={launching}
             className="w-full bg-amber-700 hover:bg-amber-600 disabled:opacity-40 text-white font-semibold py-3 rounded-xl text-sm"
           >
-            {launching ? 'Launching…' : seedConfigName ? `Evolve From '\${seedConfigName}'` : `Run \${goalMeta?.label ?? ''} Evolution`}
+            {launching ? 'Launching…' : seedConfigName ? `Evolve From '${seedConfigName}'` : `Run ${goalMeta?.label ?? ''} Evolution`}
           </button>
 
           {/* Previous result summary */}
