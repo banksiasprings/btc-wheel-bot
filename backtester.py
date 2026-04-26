@@ -139,6 +139,9 @@ class BacktestResults:
     premium_on_margin: float = 0.0       # total_premium / total_margin
     min_viable_capital: float = 0.0      # smallest equity that allowed a trade
     annualised_margin_roi: float = 0.0   # annualised return scaled by margin efficiency
+    # Activity metrics
+    trades_per_year: float = 0.0         # annualised trade frequency
+    avg_pnl_per_trade_usd: float = 0.0   # mean P&L per trade in USD
 
 
 # ── Backtester ─────────────────────────────────────────────────────────────────
@@ -732,6 +735,9 @@ class Backtester:
             if avg_margin_util > 0 else 0.0
         )
 
+        trades_per_year   = round(len(trades) / (n_days / 365.0), 1) if n_days > 0 and trades else 0.0
+        avg_pnl_per_trade = round(float(np.mean([t.pnl_usd for t in trades])), 2) if trades else 0.0
+
         return BacktestResults(
             trades=trades,
             equity_curve=list(eq),
@@ -751,6 +757,8 @@ class Backtester:
             premium_on_margin=round(premium_on_margin, 4),
             min_viable_capital=round(min_viable_capital, 2),
             annualised_margin_roi=round(annualised_margin_roi, 4),
+            trades_per_year=trades_per_year,
+            avg_pnl_per_trade_usd=avg_pnl_per_trade,
         )
 
     # ── Output ─────────────────────────────────────────────────────────────────
@@ -772,6 +780,8 @@ class Backtester:
             ["Lookback period",    f"{self._cfg.backtest.lookback_months} months"],
             ["Simulation days",    str(len(results.dates))],
             ["Total trades",       str(results.num_cycles)],
+            ["Trades per year",    f"{results.trades_per_year:.1f}"],
+            ["Avg P&L per trade",  f"${results.avg_pnl_per_trade_usd:+,.2f}"],
             ["Starting equity",    f"${results.starting_equity:,.2f}"],
             ["Ending equity",      f"${results.ending_equity:,.2f}"],
             ["Total return",       f"{results.total_return_pct:+.2f}%"],

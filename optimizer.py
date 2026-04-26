@@ -388,6 +388,8 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
             "premium_on_margin": results.premium_on_margin,
             "min_viable_capital": results.min_viable_capital,
             "avg_margin_utilization": results.avg_margin_utilization,
+            "trades_per_year": results.trades_per_year,
+            "avg_pnl_per_trade_usd": results.avg_pnl_per_trade_usd,
             "error": None,
         }
     except Exception as exc:
@@ -399,7 +401,8 @@ def _run_backtest_worker(args: tuple[int, ParamSet, pd.DataFrame, list, dict, in
             **{k: 0.0 for k in ["sharpe_ratio", "total_return_pct", "max_drawdown_pct",
                                   "win_rate_pct", "num_cycles", "ending_equity",
                                   "annualised_margin_roi", "premium_on_margin",
-                                  "min_viable_capital", "avg_margin_utilization"]},
+                                  "min_viable_capital", "avg_margin_utilization",
+                                  "trades_per_year", "avg_pnl_per_trade_usd"]},
         }
 
 
@@ -1631,11 +1634,14 @@ Examples:
                     _top = next(_reader, None)
                     if _top:
                         best_metrics = {
-                            "fitness":    round(float(_top.get("fitness", 0)), 4),
-                            "return_pct": round(float(_top.get("total_return_pct", 0)), 2),
-                            "sharpe":     round(float(_top.get("sharpe_ratio", 0)), 3),
-                            "win_rate":   round(float(_top.get("win_rate_pct", 0)), 1),
-                            "drawdown":   round(float(_top.get("max_drawdown_pct", 0)), 2),
+                            "fitness":              round(float(_top.get("fitness", 0)), 4),
+                            "return_pct":           round(float(_top.get("total_return_pct", 0)), 2),
+                            "sharpe":               round(float(_top.get("sharpe_ratio", 0)), 3),
+                            "win_rate":             round(float(_top.get("win_rate_pct", 0)), 1),
+                            "drawdown":             round(float(_top.get("max_drawdown_pct", 0)), 2),
+                            "num_cycles":           int(float(_top.get("num_cycles", 0))),
+                            "trades_per_year":      round(float(_top.get("trades_per_year", 0)), 1),
+                            "avg_pnl_per_trade_usd": round(float(_top.get("avg_pnl_per_trade_usd", 0)), 2),
                         }
         except Exception:
             pass

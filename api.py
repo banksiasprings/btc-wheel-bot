@@ -485,12 +485,14 @@ def get_evolve_results() -> dict:
                 for row in reader:
                     try:
                         rows.append({
-                            "fitness":    round(float(row.get("fitness", 0)), 4),
-                            "sharpe":     round(float(row.get("sharpe_ratio", 0)), 3),
-                            "return_pct": round(float(row.get("total_return_pct", 0)), 2),
-                            "win_rate":   round(float(row.get("win_rate_pct", 0)), 1),
-                            "drawdown":   round(float(row.get("max_drawdown_pct", 0)), 2),
-                            "num_cycles": int(float(row.get("num_cycles", 0))),
+                            "fitness":              round(float(row.get("fitness", 0)), 4),
+                            "sharpe":               round(float(row.get("sharpe_ratio", 0)), 3),
+                            "return_pct":           round(float(row.get("total_return_pct", 0)), 2),
+                            "win_rate":             round(float(row.get("win_rate_pct", 0)), 1),
+                            "drawdown":             round(float(row.get("max_drawdown_pct", 0)), 2),
+                            "num_cycles":           int(float(row.get("num_cycles", 0))),
+                            "trades_per_year":      round(float(row.get("trades_per_year", 0)), 1),
+                            "avg_pnl_per_trade_usd": round(float(row.get("avg_pnl_per_trade_usd", 0)), 2),
                         })
                     except (ValueError, TypeError):
                         continue
@@ -506,12 +508,14 @@ def get_evolve_results() -> dict:
             for b in all_bots:
                 try:
                     rows.append({
-                        "fitness":    round(float(b.get("fitness", 0)), 4),
-                        "sharpe":     round(float(b.get("sharpe_ratio", 0)), 3),
-                        "return_pct": round(float(b.get("total_return_pct", 0)), 2),
-                        "win_rate":   round(float(b.get("win_rate_pct", 0)), 1),
-                        "drawdown":   round(float(b.get("max_drawdown_pct", 0)), 2),
-                        "num_cycles": int(float(b.get("num_cycles", 0))),
+                        "fitness":              round(float(b.get("fitness", 0)), 4),
+                        "sharpe":               round(float(b.get("sharpe_ratio", 0)), 3),
+                        "return_pct":           round(float(b.get("total_return_pct", 0)), 2),
+                        "win_rate":             round(float(b.get("win_rate_pct", 0)), 1),
+                        "drawdown":             round(float(b.get("max_drawdown_pct", 0)), 2),
+                        "num_cycles":           int(float(b.get("num_cycles", 0))),
+                        "trades_per_year":      round(float(b.get("trades_per_year", 0)), 1),
+                        "avg_pnl_per_trade_usd": round(float(b.get("avg_pnl_per_trade_usd", 0)), 2),
                     })
                 except (ValueError, TypeError):
                     continue

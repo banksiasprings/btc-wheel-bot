@@ -364,6 +364,8 @@ function StepEvolve({
                 <span>Return <span className={`font-mono font-bold ${cur.return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>{cur.return_pct >= 0 ? '+' : ''}{cur.return_pct.toFixed(1)}%</span></span>
                 <span>Sharpe <span className="text-white font-mono">{cur.sharpe.toFixed(2)}</span></span>
                 <span>Win <span className="text-white font-mono">{cur.win_rate.toFixed(0)}%</span></span>
+                {cur.trades_per_year != null && <span>Trades/yr <span className="text-white font-mono">{cur.trades_per_year.toFixed(1)}</span></span>}
+                {cur.avg_pnl_per_trade_usd != null && <span>Avg P&L <span className={`font-mono ${cur.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400'}`}>${cur.avg_pnl_per_trade_usd >= 0 ? '+' : ''}{cur.avg_pnl_per_trade_usd.toFixed(0)}</span></span>}
               </div>
             </div>
           )}
@@ -462,6 +464,8 @@ function StepEvolve({
                   { label: 'Win Rate', value: `${winner.win_rate.toFixed(0)}%`,                                color: 'text-white'     },
                   { label: 'Max DD',   value: `-${winner.drawdown.toFixed(1)}%`,                               color: 'text-red-400'   },
                   { label: 'Trades',   value: String(winner.num_cycles),                                       color: 'text-white'     },
+                  ...(winner.trades_per_year != null ? [{ label: 'Trades/yr', value: winner.trades_per_year.toFixed(1), color: 'text-white' }] : []),
+                  ...(winner.avg_pnl_per_trade_usd != null ? [{ label: 'Avg P&L', value: `$${winner.avg_pnl_per_trade_usd >= 0 ? '+' : ''}${winner.avg_pnl_per_trade_usd.toFixed(0)}`, color: winner.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400' }] : []),
                 ].map(({ label, value, color }) => (
                   <div key={label} className="bg-slate-900/60 rounded-lg py-2">
                     <p className="text-xs text-slate-500">{label}</p>

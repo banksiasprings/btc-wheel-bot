@@ -96,6 +96,8 @@ export interface EvolveGenome {
   win_rate: number
   drawdown: number
   num_cycles: number
+  trades_per_year?: number
+  avg_pnl_per_trade_usd?: number
 }
 
 export interface EvolveResults {
@@ -113,6 +115,9 @@ export interface EvolveHistoryEntry {
   sharpe: number
   win_rate: number
   drawdown: number
+  num_cycles?: number
+  trades_per_year?: number
+  avg_pnl_per_trade_usd?: number
 }
 
 export interface EvolveGoalResult {
