@@ -9,6 +9,40 @@ import InfoModal from './InfoModal'
 import SystemGuide from './SystemGuide'
 import ConfigLibrary from './ConfigLibrary'
 
+// ── Collapsible section wrapper ────────────────────────────────────────────────
+
+function Section({
+  title, badge, defaultOpen = false, children,
+}: {
+  title: string
+  badge?: React.ReactNode
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      <button
+        className="w-full flex items-center justify-between px-4 py-3.5 text-left"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-white">{title}</p>
+          {badge}
+        </div>
+        <span className="text-slate-500 text-xs flex-shrink-0">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-border/40 px-4 pb-4 pt-3 space-y-3">
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main Settings ──────────────────────────────────────────────────────────────
+
 export default function Settings() {
   const [apiKey, setApiKey]               = useState(loadApiKey())
   const [configLibOpen, setConfigLibOpen] = useState(false)
@@ -89,11 +123,10 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-4 space-y-4 pb-4">
+    <div className="p-4 space-y-3 pb-6">
       <h1 className="text-lg font-bold text-white pt-2">Settings</h1>
 
       {showGuide && <SystemGuide onClose={() => setShowGuide(false)} />}
-
       {info && <InfoModal title={info.title} body={info.body} onClose={() => setInfo(null)} />}
 
       {saveStatus && (
@@ -108,9 +141,8 @@ export default function Settings() {
         </div>
       )}
 
-      {/* ── API Connection ───────────────────────────────────────────────── */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">API Connection</p>
+      {/* ── API Connection ──────────────────────────────────────────────────── */}
+      <Section title="API Connection" defaultOpen>
         <div className="bg-navy rounded-xl px-3 py-2.5">
           <p className="text-xs text-slate-500 mb-0.5">Server</p>
           <p className="text-xs text-slate-300 font-mono">{DEFAULT_URL}</p>
@@ -130,22 +162,27 @@ export default function Settings() {
         >
           Save & Test Connection
         </button>
-      </div>
+      </Section>
 
-      {/* ── Telegram Notifications ───────────────────────────────────────── */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">Telegram Notifications</p>
-        {notifierCfg?.configured ? (
+      {/* ── Telegram Notifications ──────────────────────────────────────────── */}
+      <Section
+        title="Telegram Notifications"
+        badge={
+          notifierCfg?.configured
+            ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-900 text-green-400 border border-green-800">✓ Active</span>
+            : <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-500 border border-border">Not set</span>
+        }
+      >
+        {notifierCfg?.configured && (
           <div className="bg-green-950 border border-green-800 rounded-xl px-3 py-2">
             <p className="text-xs text-green-300">
-              ✓ Configured — chat ID {notifierCfg.chat_id}
+              Chat ID {notifierCfg.chat_id}
               {notifierCfg.bot_token_hint && ` · token …${notifierCfg.bot_token_hint}`}
             </p>
           </div>
-        ) : (
-          <p className="text-xs text-slate-400">
-            Enter your Telegram bot token and chat ID to receive trade alerts.
-          </p>
+        )}
+        {!notifierCfg?.configured && (
+          <p className="text-xs text-slate-400">Enter your Telegram bot token and chat ID to receive trade alerts.</p>
         )}
         <div>
           <label className="text-xs text-slate-400 mb-1 block">Bot Token</label>
@@ -189,13 +226,13 @@ export default function Settings() {
             </button>
           )}
         </div>
-      </div>
+      </Section>
 
-      {/* ── Config Library ───────────────────────────────────────────────── */}
+      {/* ── Config Library ──────────────────────────────────────────────────── */}
       <div className="bg-card rounded-2xl border border-border overflow-hidden">
         <button
           onClick={() => setConfigLibOpen(o => !o)}
-          className="w-full flex items-center justify-between px-4 py-3 text-left"
+          className="w-full flex items-center justify-between px-4 py-3.5 text-left"
         >
           <p className="text-sm font-semibold text-white">Config Library</p>
           <span className="text-slate-500 text-xs">{configLibOpen ? '▲' : '▼'}</span>
@@ -207,9 +244,8 @@ export default function Settings() {
         )}
       </div>
 
-      {/* ── Trading Mode ─────────────────────────────────────────────────── */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-3">
-        <p className="text-sm font-semibold text-white">Trading Mode</p>
+      {/* ── Trading Mode ────────────────────────────────────────────────────── */}
+      <Section title="Trading Mode">
         <p className="text-xs text-slate-400">Switching modes takes effect on next bot restart.</p>
         <div className="grid grid-cols-2 gap-3">
           <button
@@ -225,38 +261,52 @@ export default function Settings() {
             ⚠ LIVE
           </button>
         </div>
-      </div>
+      </Section>
 
-      {/* ── Strategy Reference ───────────────────────────────────────────── */}
+      {/* ── Strategy Guide ──────────────────────────────────────────────────── */}
       <button
         onClick={() => setShowGuide(true)}
-        className="w-full flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3 text-left hover:border-slate-600 transition-colors"
+        className="w-full flex items-center gap-3 bg-card border border-border rounded-2xl px-4 py-3.5 text-left hover:border-slate-600 transition-colors"
       >
         <span className="text-xl">📖</span>
         <div>
-          <p className="text-white text-sm font-medium">View Strategy Guide</p>
-          <p className="text-slate-400 text-xs">How the bot executes trades — code + plain English</p>
+          <p className="text-white text-sm font-medium">Strategy & Architecture Guide</p>
+          <p className="text-slate-400 text-xs">How the bot works — pipeline, farm, risk controls</p>
         </div>
         <span className="ml-auto text-slate-500 text-sm">→</span>
       </button>
 
-      {/* ── App Info ─────────────────────────────────────────────────────── */}
-      <div className="bg-card rounded-2xl p-4 border border-border space-y-2">
-        <p className="text-sm font-semibold text-white">App Info</p>
-        <div className="space-y-1 text-xs text-slate-500">
-          <p>BTC Wheel Bot Mobile · 5-tab restructure</p>
+      {/* ── App Info ────────────────────────────────────────────────────────── */}
+      <Section title="App Info">
+        <div className="space-y-2 text-xs text-slate-400">
+          <div className="flex justify-between">
+            <span>App</span>
+            <span className="text-slate-300">BTC Wheel Bot</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Architecture</span>
+            <span className="text-slate-300">Farm · Pipeline · Black Swan</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Exchange</span>
+            <span className="text-slate-300">Deribit (BTC Options)</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Strategy</span>
+            <span className="text-slate-300">Wheel · Cash-Secured PUTs</span>
+          </div>
           <a
             href="https://github.com/banksiasprings/btc-wheel-bot"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-blue-400 hover:text-blue-300"
+            className="block text-blue-400 hover:text-blue-300 pt-1"
           >
             GitHub →
           </a>
         </div>
-      </div>
+      </Section>
 
-      {/* ── Mode switch confirm dialogs ───────────────────────────────────── */}
+      {/* ── Mode switch confirm dialogs ─────────────────────────────────────── */}
       {modeConfirm && pendingMode === 'live' && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
           <div className="bg-card border border-red-800 rounded-2xl p-6 w-full max-w-sm">
@@ -298,7 +348,6 @@ export default function Settings() {
           </div>
         </div>
       )}
-
     </div>
   )
 }
