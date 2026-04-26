@@ -24,6 +24,7 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import ConfigSelector from './ConfigSelector'
+import { useCurrency } from '../CurrencyContext'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -136,6 +137,8 @@ function StepEvolve({
   evolveAll: EvolveAllResults | null
   onSaved: (name: string) => void
 }) {
+  const { fmtAUDSigned } = useCurrency()
+  const fmtAvgPnl = (n: number) => fmtAUDSigned(n, 0)
   const [goal, setGoal]               = useState<EvolveGoal>('capital_roi')
   const [view, setView]               = useState<'setup' | 'running' | 'results'>('setup')
   const [launching, setLaunching]     = useState(false)
@@ -365,7 +368,7 @@ function StepEvolve({
                 <span>Sharpe <span className="text-white font-mono">{cur.sharpe.toFixed(2)}</span></span>
                 <span>Win <span className="text-white font-mono">{cur.win_rate.toFixed(0)}%</span></span>
                 {cur.trades_per_year != null && <span>Trades/yr <span className="text-white font-mono">{cur.trades_per_year.toFixed(1)}</span></span>}
-                {cur.avg_pnl_per_trade_usd != null && <span>Avg P&L <span className={`font-mono ${cur.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400'}`}>${cur.avg_pnl_per_trade_usd >= 0 ? '+' : ''}{cur.avg_pnl_per_trade_usd.toFixed(0)}</span></span>}
+                {cur.avg_pnl_per_trade_usd != null && <span>Avg P&L <span className={`font-mono ${cur.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400'}`}>{fmtAvgPnl(cur.avg_pnl_per_trade_usd)}</span></span>}
               </div>
             </div>
           )}
@@ -465,7 +468,7 @@ function StepEvolve({
                   { label: 'Max DD',   value: `-${winner.drawdown.toFixed(1)}%`,                               color: 'text-red-400'   },
                   { label: 'Trades',   value: String(winner.num_cycles),                                       color: 'text-white'     },
                   ...(winner.trades_per_year != null ? [{ label: 'Trades/yr', value: winner.trades_per_year.toFixed(1), color: 'text-white' }] : []),
-                  ...(winner.avg_pnl_per_trade_usd != null ? [{ label: 'Avg P&L', value: `$${winner.avg_pnl_per_trade_usd >= 0 ? '+' : ''}${winner.avg_pnl_per_trade_usd.toFixed(0)}`, color: winner.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400' }] : []),
+                  ...(winner.avg_pnl_per_trade_usd != null ? [{ label: 'Avg P&L', value: fmtAvgPnl(winner.avg_pnl_per_trade_usd), color: winner.avg_pnl_per_trade_usd >= 0 ? 'text-green-400' : 'text-red-400' }] : []),
                 ].map(({ label, value, color }) => (
                   <div key={label} className="bg-slate-900/60 rounded-lg py-2">
                     <p className="text-xs text-slate-500">{label}</p>
@@ -929,6 +932,7 @@ const CHECK_LABELS: Record<string, string> = {
 }
 
 function FarmBotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => void }) {
+  const { fmtAUD } = useCurrency()
   const [expanded, setExpanded]         = useState(false)
   const [assignConfig, setAssignConfig] = useState<string | null>(null)
   const [assigning, setAssigning]       = useState(false)
@@ -967,7 +971,7 @@ function FarmBotCard({ bot, onRefresh }: { bot: BotFarmEntry; onRefresh: () => v
     setPromoting(true)
     try {
       const res = await promoteConfig(assignConfig, equity)
-      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'} | Starting equity: $${equity.toLocaleString()}`)
+      setPromoteMsg(`✅ ${res.message ?? 'Promoted — live bot will restart'} | Starting equity: ${fmtAUD(equity)}`)
       setConfirmPromote(false)
       setStartingEquity('')
       onRefresh()
@@ -2506,6 +2510,7 @@ function StepGoLive({
   bots: BotFarmEntry[]
   configs: NamedConfig[]
 }) {
+  const { fmtAUD } = useCurrency()
   const readyConfigs = configs.filter(c => c.status === 'ready')
   // Also accept bots with readiness.ready for backward compat
   const readyBots    = bots.filter(b => b.readiness.ready)
@@ -2530,7 +2535,7 @@ function StepGoLive({
     setPromoteMsg('')
     try {
       const r = await promoteConfig(selectedConfig, equity)
-      setPromoteMsg(`✅ ${r.message ?? 'Promoted — live bot will restart'} | Starting equity: $${equity.toLocaleString()}`)
+      setPromoteMsg(`✅ ${r.message ?? 'Promoted — live bot will restart'} | Starting equity: ${fmtAUD(equity)}`)
       setConfirmOpen(false)
       setStartingEquity('')
     } catch (e) {

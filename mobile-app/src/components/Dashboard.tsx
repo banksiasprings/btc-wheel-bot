@@ -18,13 +18,11 @@ import {
   NamedConfig,
   PresetParams,
 } from '../api'
+import { useCurrency } from '../CurrencyContext'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
-function fmt$(n: number | undefined | null) {
-  if (n == null) return '—'
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
-}
+// fmt$ is now provided by useCurrency hook — see component body
 
 function fmtPct(n: number | undefined | null) {
   if (n == null) return '—'
@@ -110,6 +108,8 @@ function BlackSwanCard({
   btcPrice: number
   configParams: PresetParams
 }) {
+  const { fmtAUD } = useCurrency()
+  const fmt$ = (n: number | undefined | null) => n == null ? '—' : fmtAUD(n)
   const [open, setOpen] = useState(false)
 
   const isHypothetical = !position
@@ -246,6 +246,8 @@ function BlackSwanCard({
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 
 export default function Dashboard({ onNavigateTo }: Props) {
+  const { fmtAUD, fmtAUDSigned, rate } = useCurrency()
+  const fmt$ = (n: number | undefined | null) => n == null ? '—' : fmtAUD(n)
   const [status, setStatus]           = useState<StatusData | null>(null)
   const [position, setPosition]       = useState<PositionData | null>(null)
   const [equity, setEquity]           = useState<EquityData | null>(null)
@@ -344,7 +346,7 @@ export default function Dashboard({ onNavigateTo }: Props) {
         <h1 className="text-lg font-bold text-white">Dashboard</h1>
         {btcPrice != null && (
           <span className="text-sm font-mono text-slate-300">
-            ₿ {btcPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+            ₿ {fmtAUD(btcPrice)}
           </span>
         )}
       </div>
@@ -423,7 +425,7 @@ export default function Dashboard({ onNavigateTo }: Props) {
                 {position.type?.replace('_', ' ').toUpperCase()}
               </p>
               <p className="text-slate-400 text-sm">
-                Strike {position.strike?.toLocaleString()} · {position.days_to_expiry}d DTE
+                Strike {position.strike != null ? fmtAUD(position.strike) : '—'} · {position.days_to_expiry}d DTE
               </p>
               <p className="text-xs text-slate-500 mt-0.5">
                 {position.entry_date ? `Opened ${new Date(position.entry_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}` : ''}

@@ -6,6 +6,7 @@ import Performance from './components/Performance'
 import Settings from './components/Settings'
 import TradingView from './components/TradingView'
 import { hasCredentials } from './credentials'
+import { CurrencyProvider } from './CurrencyContext'
 
 type Tab = 'farm' | 'trading' | 'performance' | 'pipeline' | 'settings'
 
@@ -40,6 +41,7 @@ export default function App() {
   }
 
   return (
+    <CurrencyProvider>
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
         {activeTab === 'farm'        && <Farm />}
@@ -69,5 +71,6 @@ export default function App() {
         </div>
       </nav>
     </div>
+    </CurrencyProvider>
   )
 }
