@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { getTrades, Trade } from '../api'
 import InfoModal from './InfoModal'
 import { GLOSSARY } from '../lib/glossary'
-import { useCurrency } from '../CurrencyContext'
 
 type InfoEntry = { title: string; body: string }
 type Period = 'all' | '30d' | '7d'
@@ -16,6 +15,11 @@ function outcomeLabel(t: Trade): { text: string; color: string } {
     return { text: '✗ Assigned ITM', color: 'text-red-400' }
   }
   return { text: '⟳ Closed Early', color: 'text-amber-400' }
+}
+
+function fmt$(n: number) {
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function fmtDate(iso: string) {
@@ -33,8 +37,6 @@ function filterByPeriod(trades: Trade[], period: Period): Trade[] {
 }
 
 export default function Trades() {
-  const { fmtAUDSigned } = useCurrency()
-  const fmt$ = (n: number) => fmtAUDSigned(n, 2)
   const [trades, setTrades] = useState<Trade[]>([])
   const [period, setPeriod] = useState<Period>('all')
   const [loading, setLoading] = useState(true)

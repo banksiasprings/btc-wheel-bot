@@ -8,9 +8,13 @@ import {
   BotFarmEntry,
 } from '../api'
 import { sortBotsByMetric } from '../lib/botOrder'
-import { useCurrency } from '../CurrencyContext'
 
-// ── Formatting helpers — fmt$ injected from useCurrency in each component ───────
+// ── Formatting helpers ─────────────────────────────────────────────────────────
+
+function fmt$(n: number | undefined | null) {
+  if (n == null) return '—'
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+}
 
 function fmtPct(n: number | undefined | null, dec = 1) {
   if (n == null) return '—'
@@ -60,7 +64,6 @@ function buildEquityCurve(trades: Trade[], startingEquity: number | undefined): 
 // ── Trade list ─────────────────────────────────────────────────────────────────
 
 function TradeList({ trades, loading }: { trades: Trade[]; loading: boolean }) {
-  const { fmtAUDSigned } = useCurrency()
   if (loading) return <p className="text-slate-400 text-xs text-center py-4">Loading trades…</p>
   if (trades.length === 0) return (
     <p className="text-slate-500 text-xs text-center py-4">No trades yet — waiting for first signal.</p>
@@ -84,7 +87,7 @@ function TradeList({ trades, loading }: { trades: Trade[]; loading: boolean }) {
               </div>
               <div className="text-right">
                 <p className={`font-bold text-sm ${pnlColor}`}>
-                  {fmtAUDSigned(t.pnl_usd, 2)}
+                  {t.pnl_usd >= 0 ? '+' : ''}${Math.abs(t.pnl_usd).toFixed(2)}
                 </p>
                 <p className={`text-xs ${pnlColor}`}>
                   {t.pnl_btc >= 0 ? '+' : ''}{t.pnl_btc.toFixed(5)} BTC
@@ -112,8 +115,6 @@ function BotPerfCard({
   tradesLoading: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
-  const { fmtAUD } = useCurrency()
-  const fmt$ = (n: number | null | undefined) => n == null ? '—' : fmtAUD(n)
   const m = bot.metrics
   const color = BOT_COLORS[rank % BOT_COLORS.length]
 

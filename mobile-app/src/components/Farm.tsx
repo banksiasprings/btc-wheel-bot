@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
 import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
-import { useCurrency } from '../CurrencyContext'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
 
-// fmt$ is injected from useCurrency in each component below
+function fmt$(n: number | undefined | null) {
+  if (n == null) return '—'
+  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+}
 
 function fmtPct(n: number | undefined | null, decimals = 1) {
   if (n == null) return '—'
@@ -101,8 +103,6 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
   onClosePosition?: (bot: BotFarmEntry) => void
   closeMsgText?: string
 }) {
-  const { fmtAUD, fmtAUDSigned } = useCurrency()
-  const fmt$ = (n: number | undefined | null) => n == null ? '—' : fmtAUD(n)
   const [expanded, setExpanded]   = useState(false)
   const [promoteMsg, setPromoteMsg] = useState('')
   const [liveState, setLiveState]   = useState<BotLiveState | null>(null)
@@ -160,7 +160,7 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
                 return (
                   <span className={`text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 ${riskStyle}`}>
                     {riskIcon} {bot.open_position.type?.replace('short_', '').toUpperCase() ?? 'PUT'} open
-                    {bot.open_position.strike ? ` ${fmtAUD(bot.open_position.strike)}` : ''}
+                    {bot.open_position.strike ? ` $${(bot.open_position.strike/1000).toFixed(0)}k` : ''}
                     {bot.open_position.dte != null ? ` · ${bot.open_position.dte}d` : ''}
                   </span>
                 )
@@ -512,8 +512,6 @@ function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
 // ── Main Farm component ───────────────────────────────────────────────────────
 
 export default function Farm() {
-  const { fmtAUD } = useCurrency()
-  const fmt$ = (n: number | undefined | null) => n == null ? '—' : fmtAUD(n)
   const [farmStatus, setFarmStatus] = useState<FarmStatus | null>(null)
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState('')
@@ -813,9 +811,9 @@ export default function Farm() {
                 <div className="bg-slate-800 rounded-xl px-3 py-2.5 space-y-1">
                   <p className="text-xs text-slate-300">
                     <span className="text-slate-500">Position: </span>
-                    {(pos.type ?? 'Option').replace('short_', 'Short ').toUpperCase()} @ {fmtAUD(strike ?? 0)}
+                    {(pos.type ?? 'Option').replace('short_', 'Short ').toUpperCase()} @ ${(strike ?? 0).toLocaleString()}
                   </p>
-                  {spot != null && <p className="text-xs text-slate-300"><span className="text-slate-500">BTC Spot: </span>{fmtAUD(spot)}</p>}
+                  {spot != null && <p className="text-xs text-slate-300"><span className="text-slate-500">BTC Spot: </span>${spot.toLocaleString()}</p>}
                   {delta != null && <p className="text-xs text-slate-300"><span className="text-slate-500">Delta: </span>{delta.toFixed(3)}</p>}
                   {pnl != null && (
                     <p className={`text-xs font-semibold ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -874,7 +872,7 @@ export default function Farm() {
         <div className="flex items-center gap-2 bg-card border border-border rounded-2xl px-4 py-2.5">
           <span className="text-amber-400 text-lg font-bold">₿</span>
           <span className="text-white font-mono font-semibold text-sm">
-            {fmtAUD(btcPrice)}
+            {btcPrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
           </span>
           <span className="text-slate-500 text-xs ml-auto">BTC spot</span>
         </div>
