@@ -259,6 +259,7 @@ class WheelBot:
                     current_price=ep.mark_price,
                     entry_equity=reconcile_equity_usd,
                     expiry_ts=ep.expiry_ts,
+                    entry_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),  # best approx at reconcile time
                 )
                 self._positions.append(pos)
                 logger.info(
@@ -815,6 +816,7 @@ class WheelBot:
             expiry_ts=signal.expiry_ts,       # Phase 2: store expiry for DTE tracking
             iv_rank_at_entry=self._last_iv_rank,  # for trades.csv enrichment
             dte_at_entry=signal.dte,              # for trades.csv enrichment
+            entry_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),  # actual open date
         )
         # Check if this is the first trade this bot has ever made
         import csv as _csv_check
@@ -1155,7 +1157,7 @@ class WheelBot:
                     "strike": p.strike,
                     "contracts": p.contracts,
                     "expiry": expiry_str,
-                    "entry_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    "entry_date": p.entry_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                     "premium_collected": round(p.entry_price * p.contracts * spot, 2),
                     "current_spot": round(spot, 2),
                     "unrealized_pnl_usd": round(unrealized, 2),
