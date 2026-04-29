@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-04-25T19:19:10.382276+00:00",
+  "updated_at": "2026-04-29T06:33:28.010607+00:00",
   "bots": [
     {
       "id": "safest-v1",
       "name": "Safest V1",
       "description": "Paper trading: Safest V1",
-      "status": "error",
-      "pid": 25106,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30988,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "Safest V1",
       "config_status": "paper",
       "config_summary": {
@@ -43,16 +43,17 @@
         }
       },
       "has_open_position": false,
-      "open_position": null
+      "open_position": null,
+      "position_risk": "ok"
     },
     {
       "id": "capital-roi-v1",
       "name": "capital ROI V1",
       "description": "Paper trading: capital ROI V1",
-      "status": "error",
-      "pid": 25108,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30989,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "capital ROI V1",
       "config_status": "paper",
       "config_summary": {
@@ -87,16 +88,17 @@
         }
       },
       "has_open_position": false,
-      "open_position": null
+      "open_position": null,
+      "position_risk": "ok"
     },
     {
       "id": "chaos-hedged",
       "name": "chaos-hedged",
       "description": "Paper trading: chaos-hedged",
-      "status": "error",
-      "pid": 25109,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30992,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "chaos-hedged",
       "config_status": "paper",
       "config_summary": {
@@ -133,20 +135,25 @@
       "has_open_position": true,
       "open_position": {
         "type": "short_put",
-        "strike": 77000.0,
-        "expiry": "2026-04-27",
-        "dte": 1,
-        "pnl_usd": -3.87
-      }
+        "strike": 76500.0,
+        "expiry": "2026-04-29",
+        "dte": 0,
+        "pnl_usd": 61.67,
+        "pnl_pct": 0.81,
+        "current_spot": 77092.78,
+        "current_delta": 0.0489,
+        "premium_collected": 62.45
+      },
+      "position_risk": "caution"
     },
     {
       "id": "chaos-tester",
       "name": "chaos-tester",
       "description": "Paper trading: chaos-tester",
-      "status": "error",
-      "pid": 25111,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30993,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "chaos-tester",
       "config_status": "paper",
       "config_summary": {
@@ -183,20 +190,25 @@
       "has_open_position": true,
       "open_position": {
         "type": "short_put",
-        "strike": 76000.0,
-        "expiry": "2026-05-01",
-        "dte": 5,
-        "pnl_usd": -10.83
-      }
+        "strike": 76500.0,
+        "expiry": "2026-04-29",
+        "dte": 0,
+        "pnl_usd": 61.67,
+        "pnl_pct": 0.81,
+        "current_spot": 77090.2,
+        "current_delta": 0.0447,
+        "premium_collected": 62.44
+      },
+      "position_risk": "caution"
     },
     {
       "id": "daily-trader-v1",
       "name": "daily trader V1",
       "description": "Paper trading: daily trader V1",
-      "status": "error",
-      "pid": 25113,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30994,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "daily trader V1",
       "config_status": "paper",
       "config_summary": {
@@ -231,16 +243,17 @@
         }
       },
       "has_open_position": false,
-      "open_position": null
+      "open_position": null,
+      "position_risk": "ok"
     },
     {
       "id": "max-yield-v1",
       "name": "max yield V1",
       "description": "Paper trading: max yield V1",
-      "status": "error",
-      "pid": 25114,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30996,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "max yield V1",
       "config_status": "paper",
       "config_summary": {
@@ -275,16 +288,17 @@
         }
       },
       "has_open_position": false,
-      "open_position": null
+      "open_position": null,
+      "position_risk": "ok"
     },
     {
       "id": "sharpe-v1",
       "name": "sharpe V1",
       "description": "Paper trading: sharpe V1",
-      "status": "error",
-      "pid": 25115,
-      "uptime_hours": 0.0,
-      "days_running": 0.0,
+      "status": "running",
+      "pid": 30999,
+      "uptime_hours": 74.51,
+      "days_running": 3.1,
       "config_name": "sharpe V1",
       "config_status": "paper",
       "config_summary": {
@@ -319,7 +333,8 @@
         }
       },
       "has_open_position": false,
-      "open_position": null
+      "open_position": null,
+      "position_risk": "ok"
     }
   ]
 }

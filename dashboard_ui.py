@@ -853,6 +853,34 @@ def tab_paper() -> None:
                         metric_card("Unrealised P&L", f"${upnl:+,.0f}", upnl_col)
                     with pc6:
                         metric_card("Ann. Return", ann_str, ann_col)
+
+                    # ── Expiry proximity educational banner ───────────────────
+                    if dte <= 4:
+                        _exp_strike    = pos_data.get("strike", 0)
+                        _exp_strike_k  = f"${_exp_strike:,.0f}"
+                        _exp_entry_px  = pos_data.get("entry_price", 0)
+                        _exp_contracts = pos_data.get("contracts", 0)
+                        _exp_be        = round(_exp_strike - _exp_entry_px * _exp_contracts, 0) if _exp_contracts > 0 else 0
+                        _be_line       = f"\n\n**Break-even:** ${_exp_be:,.0f} — BTC needs to stay above this for the trade to be profitable." if _exp_be > 0 else ""
+                        _buf_pct       = ((btc_price - _exp_strike) / btc_price * 100) if btc_price > 0 and _exp_strike > 0 else 0
+                        _buf_line      = f"BTC is currently **{_buf_pct:.1f}% above** the strike." if _buf_pct >= 0 else f"⚠️ BTC is **{abs(_buf_pct):.1f}% below** the strike — the option is in the money."
+                        if dte <= 1:
+                            st.error(
+                                f"🚨 **Expiring today or tomorrow** — {_buf_line}\n\n"
+                                f"**If BTC stays above {_exp_strike_k} at expiry:** option expires worthless → full premium kept ✅\n\n"
+                                f"**If BTC is below {_exp_strike_k} at expiry:** assignment — bot buys BTC at {_exp_strike_k} (loss partially offset by premium) ❌"
+                                f"{_be_line}\n\n"
+                                f"*The bot handles this automatically. No action needed unless you want to close early.*"
+                            )
+                        else:
+                            st.warning(
+                                f"⏰ **{dte} days to expiry** — {_buf_line}\n\n"
+                                f"**Win scenario:** BTC stays above {_exp_strike_k} → option expires worthless, full premium profit ✅\n\n"
+                                f"**Loss scenario:** BTC falls below {_exp_strike_k} → assignment (bot buys BTC at strike) ❌"
+                                f"{_be_line}\n\n"
+                                f"*No action required. The bot monitors delta and loss thresholds and will roll or close if needed.*"
+                            )
+
                 else:
                     st.info("📭 No open position — bot is flat, watching for signals.")
 

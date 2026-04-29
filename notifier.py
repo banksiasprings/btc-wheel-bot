@@ -82,12 +82,24 @@ def notify_bot_stopped() -> None:
     _send(f"🔴 <b>{name}</b> stopped")
 
 
-def notify_trade_opened(instrument: str, strike: float, premium_btc: float, dte: int) -> None:
+def notify_trade_opened(
+    instrument: str,
+    strike: float,
+    premium_btc: float,
+    dte: int,
+    spot: float = 0.0,
+    breakeven: float = 0.0,
+) -> None:
     name = _bot_name()
+    buf_pct = ((spot - strike) / spot * 100) if spot > 0 and strike > 0 else 0.0
+    be_line = f"\nBreakeven: ${breakeven:,.0f}  •  Buffer to strike: {buf_pct:.1f}%" if breakeven > 0 and spot > 0 else ""
     _send(
         f"📥 <b>{name}</b> opened\n"
         f"<code>{instrument}</code>\n"
         f"Strike: ${strike:,.0f}  •  Premium: {premium_btc:.5f} BTC  •  DTE: {dte}"
+        f"{be_line}\n"
+        f"\n<i>✅ Win: BTC stays above ${strike:,.0f} at expiry → keep full premium\n"
+        f"❌ Risk: BTC falls below ${strike:,.0f} → bot buys BTC at strike (assignment)</i>"
     )
 
 
@@ -95,10 +107,21 @@ def notify_trade_closed(instrument: str, pnl_usd: float, reason: str) -> None:
     name = _bot_name()
     sign = "+" if pnl_usd >= 0 else ""
     emoji = "✅" if pnl_usd >= 0 else "❌"
+    reason_map = {
+        "expiry_settlement": "option expired naturally",
+        "delta_breach":      "delta limit breached — rolled/closed early to cap loss",
+        "loss_breach":       "loss limit reached — closed early to protect equity",
+        "manual":            "manually closed via app",
+        "kill_switch":       "kill switch triggered",
+        "roll":              "rolled to new position",
+    }
+    reason_plain = reason_map.get(reason, reason)
+    outcome = "Full premium kept as profit." if pnl_usd >= 0 else "Assignment or early close — premium partially offset the loss."
     _send(
         f"{emoji} <b>{name}</b> closed\n"
         f"<code>{instrument}</code>\n"
-        f"P&L: {sign}${pnl_usd:,.2f}  •  Reason: {reason}"
+        f"P&L: {sign}${pnl_usd:,.2f}  •  {reason_plain}\n"
+        f"<i>{outcome}</i>"
     )
 
 
@@ -111,9 +134,11 @@ def notify_drawdown_warning(drawdown_pct: float, equity_usd: float, bot_name: st
     name = bot_name or _bot_name()
     _send(
         f"🚨 <b>Drawdown Warning — {name}</b>\n"
-        f"Current drawdown: <b>{drawdown_pct:.1%}</b>\n"
-        f"Equity: ${equity_usd:,.0f}\n"
-        f"Trading halted. Delete KILL_SWITCH to resume."
+        f"Account is down <b>{drawdown_pct:.1%}</b> from its peak.\n"
+        f"Equity: ${equity_usd:,.0f}\n\n"
+        f"<i>The bot has halted new trades automatically to protect remaining capital. "
+        f"Any open positions will still run to their natural expiry — no immediate action needed. "
+        f"Once you've reviewed the situation, delete the KILL_SWITCH file (or use the app) to resume.</i>"
     )
 
 
@@ -121,8 +146,11 @@ def notify_high_iv_warning(iv_rank: float, bot_name: str = "") -> None:
     name = bot_name or _bot_name()
     _send(
         f"📈 <b>High IV Alert — {name}</b>\n"
-        f"IV rank: <b>{iv_rank:.1%}</b> — extreme volatility.\n"
-        f"New positions capped at 1 leg until IV normalises."
+        f"IV rank: <b>{iv_rank:.1%}</b> — extreme volatility detected.\n\n"
+        f"<i>IV rank measures how high options premiums are compared to the past year. "
+        f"At this level, premiums are very expensive — which is good for selling options, "
+        f"but also signals the market expects large price moves. "
+        f"The bot is capping new trades to 1 leg until IV settles back below 85%.</i>"
     )
 
 
@@ -131,30 +159,95 @@ def notify_position_risk(bot_name: str, risk_level: str, pos: dict) -> None:
     Sent when a bot's position crosses into 'caution' or 'danger'.
     Only called once per risk-level transition to avoid spam.
     """
-    strike  = pos.get("strike", 0)
-    spot    = pos.get("current_spot", 0)
-    pnl     = pos.get("unrealized_pnl_usd", 0)
-    delta   = pos.get("current_delta")
-    dte     = pos.get("dte") or pos.get("days_to_expiry", "?")
-    opt     = (pos.get("type") or "option").replace("short_", "").upper()
-    sign    = "+" if pnl >= 0 else ""
-    pnl_str = f"{sign}${pnl:,.0f}"
+    strike    = pos.get("strike", 0)
+    spot      = pos.get("current_spot", 0)
+    pnl       = pos.get("unrealized_pnl_usd", 0)
+    delta     = pos.get("current_delta")
+    dte       = pos.get("dte") or pos.get("days_to_expiry", "?")
+    opt       = (pos.get("type") or "option").replace("short_", "").upper()
+    breakeven = pos.get("breakeven", 0)
+    sign      = "+" if pnl >= 0 else ""
+    pnl_str   = f"{sign}${pnl:,.0f}"
+
+    buf_pct = ((spot - strike) / spot * 100) if spot > 0 and strike > 0 else 0.0
+    buf_str = f"BTC is {buf_pct:.1f}% above the strike." if buf_pct > 0 else f"BTC is {abs(buf_pct):.1f}% BELOW the strike — already ITM."
+    be_line = f"\nBreakeven: ${breakeven:,.0f}" if breakeven > 0 else ""
 
     if risk_level == "danger":
-        emoji = "🚨"
-        heading = f"DANGER — {bot_name} position is ITM or deep at risk"
-        action  = "Consider closing the position immediately from the app to limit losses."
+        emoji   = "🚨"
+        heading = f"DANGER — {bot_name} position at serious risk"
+        context = (
+            f"The PUT option strike is ${strike:,.0f}. {buf_str}\n"
+            f"If BTC stays below the strike at expiry, the bot will be assigned — forced to buy BTC at ${strike:,.0f}.{be_line}\n\n"
+            f"<b>Your options:</b>\n"
+            f"• Do nothing — the bot will manage the position automatically and may roll or close it\n"
+            f"• Use Emergency Close in the app to close the position now and lock in the current loss\n"
+            f"• Wait it out — BTC could recover before expiry (DTE: {dte} day{'s' if dte != 1 else ''})"
+        )
     else:
-        emoji = "⚠️"
+        emoji   = "⚠️"
         heading = f"Caution — {bot_name} position approaching strike"
-        action  = "Monitor closely. Use the Emergency Close button if conditions worsen."
+        context = (
+            f"The PUT option strike is ${strike:,.0f}. {buf_str}\n"
+            f"The option is still out of the money, but the buffer is shrinking.{be_line}\n\n"
+            f"<b>What this means:</b> BTC needs to keep falling before any real loss occurs. "
+            f"The bot is monitoring closely and will act if delta or loss thresholds are breached.\n\n"
+            f"<b>Your options:</b>\n"
+            f"• Do nothing — bot is monitoring and will act if needed\n"
+            f"• Watch the price — if BTC drops further, escalate to danger level\n"
+            f"• Use Emergency Close in the app if you want to exit now"
+        )
 
     delta_str = f"  •  Δ {delta:.3f}" if delta is not None else ""
     _send(
         f"{emoji} <b>{heading}</b>\n"
         f"Short {opt} @ ${strike:,.0f}  •  Spot ${spot:,.0f}{delta_str}\n"
-        f"P&L: {pnl_str}  •  DTE: {dte}\n"
-        f"{action}"
+        f"Unrealised P&L: {pnl_str}  •  DTE: {dte}\n\n"
+        f"{context}"
+    )
+
+
+def notify_expiry_approaching(
+    bot_name: str,
+    dte: int,
+    instrument: str,
+    strike: float,
+    spot: float,
+    breakeven: float = 0.0,
+    unrealized_pnl_usd: float = 0.0,
+) -> None:
+    """Sent when DTE drops to a key threshold (3 days, 1 day)."""
+    buf_pct = ((spot - strike) / spot * 100) if spot > 0 and strike > 0 else 0.0
+    otm_or_itm = "above" if buf_pct >= 0 else "below"
+    abs_buf = abs(buf_pct)
+
+    sign = "+" if unrealized_pnl_usd >= 0 else ""
+    pnl_str = f"{sign}${unrealized_pnl_usd:,.0f}"
+
+    if dte <= 1:
+        urgency = "🔴 <b>Expiring today</b>"
+        outlook = (
+            f"BTC is currently {abs_buf:.1f}% {otm_or_itm} the strike (${strike:,.0f}).\n"
+            f"<b>Most likely outcome:</b> "
+            + ("Option expires worthless — full premium kept ✅" if buf_pct >= 0
+               else f"Option is ITM — assignment likely unless BTC recovers above ${strike:,.0f} ❌")
+        )
+    else:
+        urgency = f"⏰ <b>{dte} days to expiry</b>"
+        outlook = (
+            f"BTC is {abs_buf:.1f}% {otm_or_itm} the strike (${strike:,.0f}).\n"
+            + ("The position is currently profitable — BTC needs to hold above the strike to keep the premium." if buf_pct >= 0
+               else f"BTC has fallen below the strike. It needs to recover above ${strike:,.0f} by expiry to avoid assignment.")
+        )
+
+    be_line = f"\nBreakeven: ${breakeven:,.0f}" if breakeven > 0 else ""
+    _send(
+        f"{urgency} — {bot_name}\n"
+        f"<code>{instrument}</code>\n"
+        f"Unrealised P&L: {pnl_str}{be_line}\n\n"
+        f"{outlook}\n\n"
+        f"<i>No action needed — the bot will handle expiry automatically. "
+        f"Use Emergency Close in the app only if you want to exit early.</i>"
     )
 
 

@@ -38,6 +38,24 @@ function fmtShort(ts: number, res: string) {
     : d.toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })
 }
 
+// Live countdown to expiry
+function fmtCountdown(expiryTs: number, refNow: number): string {
+  const msLeft = expiryTs * 1000 - refNow
+  if (msLeft <= 0) return 'Expired'
+  const totalMins = Math.floor(msLeft / 60_000)
+  const d = Math.floor(totalMins / 1440)
+  const h = Math.floor((totalMins % 1440) / 60)
+  const m = totalMins % 60
+  if (d >= 2) return `${d}d ${h}h left`
+  if (d === 1) return `1d ${h}h left`
+  if (h > 0) return `${h}h ${m}m left`
+  return `${m}m left`
+}
+
+function dteFromTs(expiryTs: number, refNow: number): number {
+  return Math.max(0, Math.ceil((expiryTs * 1000 - refNow) / 86_400_000))
+}
+
 // ── Trade dot — triangles pointing up (win) or down (loss) ───────────────────
 
 function TradeDot(props: any) {
@@ -166,16 +184,32 @@ function InfoPanelContent({
       break
     }
     case 'expiry': {
-      const expTs = o.expiry_ts!
+      const expTs  = o.expiry_ts!
       const strike = o.active_strike
-      icon = '📅'
-      color = 'text-slate-300'
-      title = `Expiry — ${fmtDate(expTs)}`
+      const be     = o.breakeven
+      const dLeft  = dteFromTs(expTs, Date.now())
+      const cd     = fmtCountdown(expTs, Date.now())
+      const bufPct = strike && currentPrice
+        ? ((currentPrice - strike) / currentPrice * 100).toFixed(1) : null
+      const beAbovePct = be && currentPrice
+        ? ((currentPrice - be) / currentPrice * 100).toFixed(1) : null
+
+      icon  = '📅'
+      color = dLeft <= 1 ? 'text-red-400' : (dLeft <= 3 ? 'text-amber-400' : 'text-violet-300')
+      title = `Expiry — ${fmtDate(expTs)}  (${cd})`
+
       body = [
-        `The active PUT option expires on this date.`,
-        `If BTC is above ${strike ? K(strike) : 'the strike'} on this day: the option expires worthless. The bot keeps the full premium and starts a new cycle.`,
-        `If BTC is below the strike: the option is exercised. The bot absorbs the loss (partially offset by premium) and may start a new cycle immediately or wait for better conditions.`,
-      ]
+        `This PUT option expires in ${dLeft > 0 ? `${dLeft} day${dLeft !== 1 ? 's' : ''}` : 'less than 24 hours'}. At expiry, one of two things happens:`,
+        `✅ WIN: BTC is above ${strike ? K(strike) : 'the strike'} — the option expires worthless. The bot keeps every dollar of premium collected as pure profit, then starts a new cycle.`,
+        `❌ LOSS: BTC is below ${strike ? K(strike) : 'the strike'} — the option is exercised ("assigned"). The bot is forced to buy BTC at ${strike ? K(strike) : 'the strike'} regardless of the market price. The premium collected upfront partially offsets this loss.`,
+        be
+          ? `📈 Break-even is ${K(be)}${beAbovePct ? ` — BTC is currently ${beAbovePct}% above that level` : ''}. Above ${K(be)}, the trade is profitable. Below it, losses exceed the premium collected.`
+          : '',
+        bufPct
+          ? `🛡️ Safety buffer: BTC is currently ${bufPct}% above the strike. It would need to fall ${bufPct}% just to put the trade at risk.`
+          : '',
+        `No action needed from you — the bot monitors this position automatically and will roll or close it if risk thresholds are hit.`,
+      ].filter(Boolean)
       break
     }
     case 'projection': {
@@ -271,6 +305,13 @@ export default function TradingView() {
   useEffect(() => { load() }, [load])
   useEffect(() => { const id = setInterval(load, 30_000); return () => clearInterval(id) }, [load])
 
+  // Live countdown — ticks every minute so the countdown stays fresh
+  const [countdownNow, setCountdownNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setCountdownNow(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
   // ── Build chart data ────────────────────────────────────────────────────────
 
   const allChartData: ChartPoint[] = (() => {
@@ -309,11 +350,14 @@ export default function TradingView() {
       // Attach projection start to the last real candle
       hist[hist.length - 1].projected = lastClose
 
-      // Extend ~30% of the selected window into the future (at least 3 candles).
-      // Also push far enough to include the expiry line if one exists.
-      const lookaheadCandles = Math.max(3, Math.round(days * 0.30))
+      // Extend into the future far enough to always show the expiry line.
+      // For the 7-day view (6h candles), the default 30% lookahead is only 18 hours —
+      // too short if expiry is several days out. Use 60% for short windows.
+      const lookaheadCandles = days <= 7
+        ? Math.max(8, Math.round(days * 0.60))   // 7d: at least 2 days of projection
+        : Math.max(3, Math.round(days * 0.30))
       const expiryTs = chartData.overlays?.expiry_ts
-      const minTsNeeded = expiryTs ? expiryTs + resSec : 0   // one candle past expiry
+      const minTsNeeded = expiryTs ? expiryTs + resSec * 2 : 0   // two candles past expiry
       let i = 1
       while (i <= lookaheadCandles || lastTime + i * resSec < minTsNeeded) {
         hist.push({
@@ -355,9 +399,19 @@ export default function TradingView() {
     return [Math.floor(mn - pad), Math.ceil(mx + pad)] as [number, number]
   })()
 
-  const xDomain = allChartData.length
-    ? [allChartData[0].time, allChartData[allChartData.length - 1].time] as [number, number]
-    : (['dataMin', 'dataMax'] as any)
+  // xDomain: always extend right edge to include expiry + breathing room
+  const xDomain: [number, number] | string[] = (() => {
+    if (!allChartData.length) return ['dataMin', 'dataMax']
+    const minX = allChartData[0].time
+    let maxX = allChartData[allChartData.length - 1].time
+    const expiryTs = chartData?.overlays?.expiry_ts
+    if (expiryTs && expiryTs > nowTs && nowTs > 0) {
+      // Right-pad by 12% of the historical window so the expiry label has room
+      const histSpan = Math.max(1, nowTs - minX)
+      maxX = Math.max(maxX, expiryTs + histSpan * 0.12)
+    }
+    return [minX, maxX]
+  })()
 
   // ── Chart click → info panel ────────────────────────────────────────────────
 
@@ -623,14 +677,23 @@ export default function TradingView() {
                     🔵 Entry Zone
                   </button>
                 )}
-                {o?.expiry_ts && (
-                  <button onClick={() => setInfoPanel(p => p?.type === 'expiry' ? null : { type: 'expiry' })}
-                    className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-colors ${
-                      infoPanel?.type === 'expiry' ? 'bg-violet-900/60 border-violet-600 text-violet-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-violet-300'
-                    }`}>
-                    📅 Expiry {fmtDate(o.expiry_ts).replace(',', '')}
-                  </button>
-                )}
+                {o?.expiry_ts && (() => {
+                  const cd   = fmtCountdown(o.expiry_ts, countdownNow)
+                  const dte  = dteFromTs(o.expiry_ts, countdownNow)
+                  const isUrgent = dte <= 3
+                  return (
+                    <button onClick={() => setInfoPanel(p => p?.type === 'expiry' ? null : { type: 'expiry' })}
+                      className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-colors ${
+                        infoPanel?.type === 'expiry'
+                          ? 'bg-violet-900/60 border-violet-600 text-violet-300'
+                          : isUrgent
+                            ? 'bg-red-900/40 border-red-700/60 text-red-300 animate-pulse'
+                            : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-violet-300'
+                      }`}>
+                      📅 {cd}
+                    </button>
+                  )
+                })()}
               </div>
             )}
           </div>
@@ -675,7 +738,39 @@ export default function TradingView() {
                 </div>
               )}
             </div>
-            {o.expiry_ts && <p className="text-xs text-slate-400">Expires {fmtDate(o.expiry_ts)}</p>}
+            {o.expiry_ts && (() => {
+              const cd  = fmtCountdown(o.expiry_ts, countdownNow)
+              const dte = dteFromTs(o.expiry_ts, countdownNow)
+              return (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-slate-400">Expires {fmtDate(o.expiry_ts)}</p>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                      dte <= 1 ? 'bg-red-900/50 text-red-300' :
+                      dte <= 3 ? 'bg-amber-900/50 text-amber-300' :
+                                 'bg-slate-700 text-slate-300'
+                    }`}>⏱ {cd}</span>
+                  </div>
+                  {dte <= 4 && (
+                    <div className={`rounded-xl px-3 py-2.5 text-xs leading-relaxed ${
+                      dte <= 1
+                        ? 'bg-red-900/40 border border-red-700/60 text-red-200'
+                        : 'bg-amber-900/40 border border-amber-700/60 text-amber-200'
+                    }`}>
+                      <p className="font-semibold mb-1">
+                        {dte <= 1 ? '🚨 Expiring today or tomorrow' : `⚠️ ${dte} days to expiry`}
+                      </p>
+                      <p>
+                        {o.active_strike
+                          ? `Win: BTC stays above ${K(o.active_strike)} → full premium kept. Loss: BTC falls below ${K(o.active_strike)} → assignment (bot buys BTC at strike, premium offsets part of the loss).`
+                          : 'Option is close to expiry. Tap the 📅 chip above for a full breakdown.'}
+                        {' '}No action needed — the bot handles this automatically.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
           </div>
         )}
 

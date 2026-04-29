@@ -109,6 +109,11 @@ class WheelBot:
         self._force_close_position: bool = False
         self._state_path = _data_path("bot_state.json")
 
+        # DTE alert tracking — set of thresholds already notified for current instrument
+        # Reset whenever the instrument changes (new trade opened).
+        self._dte_notified_instrument: str = ""
+        self._dte_notified_thresholds: set[int] = set()
+
         # Delta-hedging manager — state_path per-bot so farm bots don't share state
         self._hedge = HedgeManager(
             paper=paper,
@@ -1315,6 +1320,34 @@ class WheelBot:
             state_path.write_text(json.dumps(state))
         except Exception:
             pass  # non-critical
+
+        # ── DTE proximity alerts ─────────────────────────────────────────���────
+        try:
+            if pos_data and self._positions:
+                p = self._positions[0]
+                _instr = p.instrument_name
+                # Reset tracker if position changed (new instrument)
+                if _instr != self._dte_notified_instrument:
+                    self._dte_notified_instrument = _instr
+                    self._dte_notified_thresholds = set()
+                _dte_now = pos_data.get("dte", 0)
+                _spot = spot
+                _strike = p.strike
+                _be = round(_strike - p.entry_price * p.contracts, 0) if p.contracts > 0 else 0.0
+                _upnl = pos_data.get("unrealized_pnl_usd", 0)
+                _bot_name_str = os.path.basename(_DATA_DIR.rstrip("/")) if _DATA_DIR != str(Path(__file__).parent / "data") else "main"
+                for _threshold in (3, 1):
+                    if _dte_now <= _threshold and _threshold not in self._dte_notified_thresholds:
+                        self._dte_notified_thresholds.add(_threshold)
+                        try:
+                            notifier.notify_expiry_approaching(
+                                _bot_name_str, _dte_now, _instr,
+                                _strike, _spot, _be, _upnl
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            pass  # never let notification logic block the tick
 
         # ── Write current_position.json for mobile API ────────────────────────
         self._write_current_position(spot)
