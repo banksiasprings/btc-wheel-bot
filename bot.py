@@ -168,6 +168,12 @@ class WheelBot:
             # we don't reset a valid hedge that corresponds to a live open position.
             await self._sync_positions_from_exchange()
 
+        # Paper mode: reload any open position saved before the bot was stopped.
+        # Must run before the stale-hedge check below so the hedge is not reset
+        # if it corresponds to the reloaded position.
+        if self._paper:
+            self._load_paper_position()
+
         # If no open positions on startup, any persisted hedge state is orphaned
         # (e.g. bot was killed mid-session without closing the hedge).
         # Reset it so the equity calculation starts clean.
@@ -1153,6 +1159,13 @@ class WheelBot:
                 )
                 payload = {
                     "open": True,
+                    "instrument_name": p.instrument_name,   # needed for restart recovery
+                    "entry_price_btc": p.entry_price,       # needed for restart recovery
+                    "underlying_at_entry": p.underlying_at_entry,
+                    "entry_equity": p.entry_equity,
+                    "iv_rank_at_entry": round(p.iv_rank_at_entry, 4),
+                    "dte_at_entry": p.dte_at_entry,
+                    "expiry_ts": p.expiry_ts,
                     "type": f"short_{p.option_type}",
                     "strike": p.strike,
                     "contracts": p.contracts,
@@ -1170,6 +1183,58 @@ class WheelBot:
             (data_dir / "current_position.json").write_text(json.dumps(payload))
         except Exception:
             pass
+
+    def _load_paper_position(self) -> None:
+        """
+        On paper-mode startup, reload any open position that was saved to
+        current_position.json before the bot was stopped.
+
+        Without this, a restart after an expiry-day shutdown would lose the
+        position from memory — _check_expired_positions would see an empty list,
+        skip settlement, and open a fresh position without recording the trade.
+
+        Only runs in paper mode; live mode uses _sync_positions_from_exchange().
+        """
+        cp_path = _data_path("current_position.json")
+        if not cp_path.exists():
+            return
+        try:
+            data = json.loads(cp_path.read_text())
+        except Exception:
+            return
+        if not data.get("open"):
+            return
+        # Require the fields we added for restart recovery
+        instrument_name = data.get("instrument_name")
+        entry_price_btc = data.get("entry_price_btc")
+        if not instrument_name or entry_price_btc is None:
+            logger.warning(
+                "current_position.json is missing restart-recovery fields "
+                "(instrument_name / entry_price_btc) — cannot reload position. "
+                "This is expected for positions opened before v2 of this fix."
+            )
+            return
+        option_type = "put" if data.get("type", "").endswith("put") else "call"
+        pos = Position(
+            instrument_name=instrument_name,
+            strike=float(data.get("strike", 0)),
+            option_type=option_type,
+            entry_price=float(entry_price_btc),
+            underlying_at_entry=float(data.get("underlying_at_entry", 0)),
+            contracts=float(data.get("contracts", 0)),
+            current_delta=float(data.get("current_delta", 0)),
+            current_price=float(entry_price_btc),   # conservative: assume still at entry
+            entry_equity=float(data.get("entry_equity", self._cfg.backtest.starting_equity)),
+            expiry_ts=data.get("expiry_ts") or 0,
+            iv_rank_at_entry=float(data.get("iv_rank_at_entry", 0)),
+            dte_at_entry=int(data.get("dte_at_entry", 0)),
+            entry_date=data.get("entry_date", ""),
+        )
+        self._positions.append(pos)
+        logger.info(
+            f"Paper position reloaded from disk on startup: {instrument_name} "
+            f"× {pos.contracts} contracts | entry={pos.entry_price:.4f} BTC"
+        )
 
     def _update_equity_curve(self, now: datetime, equity: float) -> None:
         """Append a data point to data/equity_curve.json on each position close."""
