@@ -2203,11 +2203,16 @@ if _STATIC_DIR.exists():
     async def serve_root():
         return _static_response(_STATIC_DIR / "index.html")
 
+    # The app is built with base="/btc-wheel-bot/", so all asset URLs include
+    # that prefix.  Strip it before resolving against the dist directory.
+    _PWA_PREFIX = "btc-wheel-bot/"
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        file = _STATIC_DIR / full_path
+        rel = full_path[len(_PWA_PREFIX):] if full_path.startswith(_PWA_PREFIX) else full_path
+        file = _STATIC_DIR / rel
         if file.exists() and file.is_file():
             return _static_response(file)
         return _static_response(_STATIC_DIR / "index.html")
 
-    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+    app.mount("/btc-wheel-bot/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
