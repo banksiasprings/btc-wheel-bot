@@ -511,7 +511,20 @@ export default function TradingView() {
             ))}</div>
           </div>
         )}
-        {error && <div className="h-32 flex items-center justify-center text-sm text-red-400">{error}</div>}
+        {error && !chartData && (
+          <div className="h-32 flex flex-col items-center justify-center gap-3">
+            <div className="flex gap-1">{[0,1,2].map(i => (
+              <div key={i} className="w-2 h-2 rounded-full bg-yellow-500 animate-bounce"
+                   style={{ animationDelay: `${i * 0.2}s` }} />
+            ))}</div>
+            <span className="text-xs text-muted-foreground">Reconnecting…</span>
+          </div>
+        )}
+        {error && chartData && (
+          <div className="flex items-center justify-between px-4 py-1 bg-yellow-500/10 border-b border-yellow-500/20">
+            <span className="text-xs text-yellow-400">⚡ Updating…</span>
+          </div>
+        )}
 
         {/* ── Chart ──────────────────────────────────────────────────────── */}
         {chartData && allChartData.length > 0 && (

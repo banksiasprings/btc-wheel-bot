@@ -114,6 +114,12 @@ class WheelBot:
         self._dte_notified_instrument: str = ""
         self._dte_notified_thresholds: set[int] = set()
 
+        # Position risk level tracking — send Telegram when level transitions
+        # between "normal", "caution", and "danger". Keyed per instrument so a
+        # new trade starts fresh.
+        self._risk_notified_instrument: str = ""
+        self._last_risk_level: str = "normal"
+
         # Delta-hedging manager — state_path per-bot so farm bots don't share state
         self._hedge = HedgeManager(
             paper=paper,
@@ -1343,6 +1349,57 @@ class WheelBot:
                             notifier.notify_expiry_approaching(
                                 _bot_name_str, _dte_now, _instr,
                                 _strike, _spot, _be, _upnl
+                            )
+                        except Exception:
+                            pass
+        except Exception:
+            pass  # never let notification logic block the tick
+
+        # ── Position risk-level alerts ────────────────────────────────────────
+        # Fires a Telegram notification whenever the position transitions between
+        # "normal" → "caution" → "danger" (or back down). Only one alert per
+        # level transition so the user isn't spammed every tick.
+        try:
+            if pos_data and self._positions:
+                p = self._positions[0]
+                _instr      = p.instrument_name
+                _abs_delta  = abs(p.current_delta)
+                _max_delta  = cfg.risk.max_adverse_delta
+                _upnl       = pos_data.get("unrealized_pnl_usd", 0)
+                _max_loss   = p.entry_equity * cfg.risk.max_loss_per_leg if p.entry_equity > 0 else float("inf")
+                _be         = round(p.strike - p.entry_price * p.contracts, 0) if p.contracts > 0 else 0.0
+                _bot_name_str = os.path.basename(_DATA_DIR.rstrip("/")) if _DATA_DIR != str(Path(__file__).parent / "data") else "main"
+
+                # Compute current risk level
+                if _abs_delta >= _max_delta or (_max_loss < float("inf") and _upnl < -_max_loss):
+                    _risk_level = "danger"
+                elif _abs_delta >= 0.80 * _max_delta or (_max_loss < float("inf") and _upnl < -0.50 * _max_loss):
+                    _risk_level = "caution"
+                else:
+                    _risk_level = "normal"
+
+                # Reset tracking on new instrument
+                if _instr != self._risk_notified_instrument:
+                    self._risk_notified_instrument = _instr
+                    self._last_risk_level = "normal"
+
+                # Alert only when the level changes
+                if _risk_level != self._last_risk_level:
+                    self._last_risk_level = _risk_level
+                    if _risk_level in ("caution", "danger"):
+                        try:
+                            notifier.notify_position_risk(
+                                _bot_name_str,
+                                _risk_level,
+                                {
+                                    "strike":             p.strike,
+                                    "current_spot":       spot,
+                                    "unrealized_pnl_usd": _upnl,
+                                    "current_delta":      _abs_delta,
+                                    "dte":                pos_data.get("dte", 0),
+                                    "type":               p.option_type,
+                                    "breakeven":          _be,
+                                },
                             )
                         except Exception:
                             pass
