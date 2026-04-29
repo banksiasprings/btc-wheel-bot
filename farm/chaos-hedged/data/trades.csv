@@ -1,0 +1,2 @@
+timestamp,instrument,option_type,strike,entry_price,exit_price,contracts,pnl_btc,pnl_usd,equity_before,equity_after,btc_price,iv_rank_at_entry,dte_at_entry,dte_at_close,slippage_btc,fill_time_sec,reason,mode
+2026-04-29T08:00:00+00:00,BTC-29APR26-76500-P,put,76500.0,0.0081,0.0,0.1,0.00081,62.4,100000.0,100062.4,77031.0,0.0212,3,0,0.0,0.0,expiry_settlement,paper
