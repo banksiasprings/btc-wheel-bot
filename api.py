@@ -1442,6 +1442,7 @@ def get_btc_history(days: int = 30, bot_id: str | None = None) -> dict:
     iv_threshold     = cfg.get("strategy",  {}).get("iv_rank_threshold",         30)
     premium_fraction = cfg.get("backtest",  {}).get("premium_fraction_of_spot",  0.02)
     starting_equity  = cfg.get("backtest",  {}).get("starting_equity",           0)
+    max_adverse_delta = cfg.get("risk",     {}).get("max_adverse_delta",         0.40)
 
     # Target zone where bot would place puts (±50% of offset, centered on otm strike)
     zone_center = round(current_price * (1 - otm_offset), 0)          if current_price else None
@@ -1529,6 +1530,7 @@ def get_btc_history(days: int = 30, bot_id: str | None = None) -> dict:
             "iv_rank_threshold":  iv_threshold,
             "premium_fraction":   premium_fraction,
             "starting_equity":    starting_equity,
+            "max_adverse_delta":  max_adverse_delta,
         },
         "trade_markers": trade_markers,
     }

@@ -1,12 +1,27 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, ReferenceArea,
 } from 'recharts'
 import {
   getChartData, ChartData, getFarmStatus, FarmStatus, BotFarmEntry,
+  getBotLiveState, BotLiveState,
+  getStatus, StatusData,
+  getHedge, HedgeData,
+  closeFarmBotPosition, closePosition,
 } from '../api'
 import { applyBotOrder } from '../lib/botOrder'
+
+// Heartbeat is considered stale if older than this — matches api.py's
+// 3-minute dead-bot detection threshold in /status.
+const HEARTBEAT_STALE_SEC = 180
+
+// Risk-level → colour mapping for the position chip and danger banner.
+const RISK_STYLE: Record<'ok' | 'caution' | 'danger', { dot: string; bg: string; text: string; border: string; label: string }> = {
+  ok:      { dot: 'bg-green-500',  bg: 'bg-green-900/40',  text: 'text-green-300',  border: 'border-green-700/60',  label: 'OK' },
+  caution: { dot: 'bg-amber-500',  bg: 'bg-amber-900/40',  text: 'text-amber-300',  border: 'border-amber-700/60',  label: 'Caution' },
+  danger:  { dot: 'bg-red-500',    bg: 'bg-red-900/50',    text: 'text-red-300',    border: 'border-red-700/60',    label: 'Danger' },
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,6 +41,40 @@ interface InfoPanel { type: InfoType; payload?: ChartPoint }
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const K = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toFixed(0)}`
+
+function fmtUsd(n: number | null | undefined, signed = false): string {
+  if (n == null || !isFinite(n)) return '—'
+  const sign = signed && n > 0 ? '+' : ''
+  const abs = Math.abs(n)
+  if (abs >= 1000) return `${sign}${n < 0 ? '-' : ''}$${(abs / 1000).toFixed(2)}k`
+  return `${sign}$${n.toFixed(2)}`
+}
+
+function fmtPct(n: number | null | undefined, signed = true): string {
+  if (n == null || !isFinite(n)) return '—'
+  const sign = signed && n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(2)}%`
+}
+
+function fmtBtc(n: number | null | undefined, signed = false): string {
+  if (n == null || !isFinite(n)) return '—'
+  const sign = signed && n > 0 ? '+' : ''
+  return `${sign}${n.toFixed(4)} BTC`
+}
+
+function fmtAge(s: number | null | undefined): string {
+  if (s == null || !isFinite(s)) return '—'
+  if (s < 60)   return `${Math.floor(s)}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m ago`
+}
+
+function daysHeld(entryDate?: string): number | null {
+  if (!entryDate) return null
+  const t = Date.parse(entryDate)
+  if (isNaN(t)) return null
+  return Math.max(0, Math.floor((Date.now() - t) / 86_400_000))
+}
 
 function fmtDate(ts: number) {
   return new Date(ts * 1000).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
@@ -282,6 +331,19 @@ export default function TradingView() {
   const [error, setError]           = useState<string | null>(null)
   const [infoPanel, setInfoPanel]   = useState<InfoPanel | null>(null)
 
+  // Live bot state for the Open Position card (farm-bot context)
+  const [liveState, setLiveState]   = useState<BotLiveState | null>(null)
+  // Status of the main bot (used when no farm bot is selected)
+  const [botStatus, setBotStatus]   = useState<StatusData | null>(null)
+  // Hedge (BTC-PERP) state from main bot
+  const [hedgeData, setHedgeData]   = useState<HedgeData | null>(null)
+
+  // Emergency-close confirm + result message
+  const [closeConfirm, setCloseConfirm] = useState<boolean>(false)
+  const [closing, setClosing]           = useState(false)
+  const [closeMsg, setCloseMsg]         = useState<string>('')
+  const closeMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     getFarmStatus().then(fs => {
       setFarmStatus(fs)
@@ -304,6 +366,51 @@ export default function TradingView() {
 
   useEffect(() => { load() }, [load])
   useEffect(() => { const id = setInterval(load, 30_000); return () => clearInterval(id) }, [load])
+
+  // ── Live state (bot health + position numbers) ─────────────────────────────
+  // Refresh in parallel with the chart, but on a faster cadence (15s) so the
+  // health banner and P&L numbers don't lag behind real position changes.
+  const loadLive = useCallback(async () => {
+    if (botId) {
+      try { setLiveState(await getBotLiveState(botId)) }
+      catch { setLiveState(null) }
+      // Farm bot — refresh farm status too so position_risk stays current
+      try { setFarmStatus(await getFarmStatus()) }
+      catch { /* leave previous farmStatus */ }
+    } else {
+      try { setBotStatus(await getStatus()) }
+      catch { setBotStatus(null) }
+    }
+    try { setHedgeData(await getHedge()) }
+    catch { setHedgeData(null) }
+  }, [botId])
+
+  // Clear bot-specific state when the user switches bots so we never show
+  // the previous bot's numbers paired with the new bot's chart.
+  useEffect(() => { setLiveState(null); setCloseMsg('') }, [botId])
+  useEffect(() => { loadLive() }, [loadLive])
+  useEffect(() => { const id = setInterval(loadLive, 15_000); return () => clearInterval(id) }, [loadLive])
+
+  // ── Emergency close ────────────────────────────────────────────────────────
+  async function executeClose() {
+    setCloseConfirm(false)
+    setClosing(true)
+    setCloseMsg('Sending close command…')
+    try {
+      if (botId) await closeFarmBotPosition(botId)
+      else       await closePosition()
+      setCloseMsg('✅ Close command sent — bot will execute on next cycle')
+      // Refresh live state and chart after a beat so the user sees the change
+      setTimeout(() => { loadLive(); load() }, 2000)
+    } catch (e) {
+      setCloseMsg(`❌ ${String(e)}`)
+    } finally {
+      setClosing(false)
+      if (closeMsgTimer.current) clearTimeout(closeMsgTimer.current)
+      closeMsgTimer.current = setTimeout(() => setCloseMsg(''), 6000)
+    }
+  }
+  useEffect(() => () => { if (closeMsgTimer.current) clearTimeout(closeMsgTimer.current) }, [])
 
   // Live countdown — ticks every minute so the countdown stays fresh
   const [countdownNow, setCountdownNow] = useState(Date.now())
@@ -436,6 +543,35 @@ export default function TradingView() {
   const losses = tradeCount - wins
   const res    = chartData?.resolution ?? '1D'
 
+  // ── Live position values (prefer BotLiveState, fall back to chart overlays) ──
+  const livePos       = liveState?.position
+  const hasLivePos    = !!livePos?.open
+  const contracts     = livePos?.contracts ?? null
+  const premUsd       = livePos?.premium_collected ?? null
+  const unrlPnlUsd    = livePos?.unrealized_pnl_usd ?? null
+  const unrlPnlPct    = livePos?.unrealized_pnl_pct ?? null
+  const entryPxBtc    = livePos?.entry_price ?? null
+  const currentPxBtc  = livePos?.current_price ?? null
+  const livePosDelta  = livePos?.current_delta ?? livePos?.delta ?? null
+  const ivRankLive    = liveState?.state?.iv_rank ?? null
+  const ivRankThresh  = chartData?.config?.iv_rank_threshold ?? null
+  const maxAdvDelta   = chartData?.config?.max_adverse_delta ?? 0.40
+  const positionRisk  = (selectedBot?.position_risk ?? 'ok') as 'ok' | 'caution' | 'danger'
+  const heldDays      = daysHeld(livePos?.entry_date)
+
+  // ── Health flags ───────────────────────────────────────────────────────────
+  // Source of truth depends on context: farm bot uses BotLiveState, otherwise
+  // the main bot's /status endpoint.
+  const killSwitchActive = !!liveState?.kill_switch_active
+  const heartbeatAge     = liveState?.heartbeat_age_seconds ?? null
+  const heartbeatStale   = botId
+    ? (heartbeatAge != null && heartbeatAge > HEARTBEAT_STALE_SEC)
+    : (botStatus != null && !botStatus.bot_running)
+  const botStopped = botId
+    ? (selectedBot?.status === 'stopped' || selectedBot?.status === 'error')
+    : (botStatus != null && !botStatus.bot_running)
+  const showHealthBanner = killSwitchActive || heartbeatStale || botStopped
+
   return (
     <div className="flex flex-col min-h-screen bg-navy pb-24">
 
@@ -481,6 +617,42 @@ export default function TradingView() {
       </div>
 
       <div className="px-4 pt-4 space-y-4">
+
+        {/* ── Health banner ─────────────────────────────────────────────────
+            Surfaces conditions that make the chart misleading: kill switch
+            engaged, bot stopped, or heartbeat older than HEARTBEAT_STALE_SEC.
+            Without this the chart can look live while the bot is dead. */}
+        {showHealthBanner && (
+          <div className={`rounded-2xl border px-4 py-3 flex items-start gap-3 ${
+            killSwitchActive || botStopped
+              ? 'bg-red-950 border-red-700'
+              : 'bg-amber-950/60 border-amber-700/60'
+          }`}>
+            <span className="text-xl flex-shrink-0 mt-0.5">
+              {killSwitchActive ? '🛑' : botStopped ? '⏹️' : '⚠️'}
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className={`font-semibold text-sm ${
+                killSwitchActive || botStopped ? 'text-red-300' : 'text-amber-300'
+              }`}>
+                {killSwitchActive
+                  ? 'Kill switch active — trading halted'
+                  : botStopped
+                    ? `Bot is ${selectedBot?.status ?? 'stopped'} — no live updates`
+                    : 'Stale heartbeat — bot may be unresponsive'}
+              </p>
+              <p className={`text-xs mt-0.5 ${
+                killSwitchActive || botStopped ? 'text-red-400' : 'text-amber-400/90'
+              }`}>
+                {killSwitchActive && 'Delete the KILL_SWITCH file (or use the Farm tab) to resume.'}
+                {!killSwitchActive && botStopped && 'Restart the bot from the Farm tab to resume.'}
+                {!killSwitchActive && !botStopped && heartbeatStale && (
+                  <>Last heartbeat {fmtAge(heartbeatAge)} — chart values shown may not reflect current state.</>
+                )}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* ── Trade summary pills ─────────────────────────────────────────── */}
         {tradeCount > 0 && (
@@ -723,13 +895,29 @@ export default function TradingView() {
           />
         )}
 
-        {/* ── Open position card ──────────────────────────────────────────── */}
+        {/* ── Open position card ────────────────────────────────────────────
+            Strike / breakeven / next-entry come from chart overlays. The
+            P&L row, contracts, premium, delta, IV, and days-held come from
+            BotLiveState — these stay '—' when liveState hasn't loaded yet
+            so the user knows the chart-side data is still authoritative. */}
         {chartData && o?.active_strike && (
           <div className="bg-card rounded-2xl border border-amber-800/60 p-4 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="text-sm font-bold text-white">Open Position</span>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700/60">PUT active</span>
+              <div className="flex items-center gap-2">
+                {hasLivePos && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full border flex items-center gap-1.5 ${RISK_STYLE[positionRisk].bg} ${RISK_STYLE[positionRisk].text} ${RISK_STYLE[positionRisk].border}`}>
+                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${RISK_STYLE[positionRisk].dot}`}/>
+                    {RISK_STYLE[positionRisk].label}
+                  </span>
+                )}
+                <span className="text-xs px-2 py-0.5 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700/60">
+                  {(livePos?.type ?? 'put').replace('short_', '').toUpperCase()} active
+                </span>
+              </div>
             </div>
+
+            {/* Top row: strike / breakeven / next-entry */}
             <div className="grid grid-cols-3 gap-2">
               <div className="bg-navy rounded-xl px-3 py-2 text-center">
                 <p className="text-xs text-slate-500">Strike</p>
@@ -751,6 +939,77 @@ export default function TradingView() {
                 </div>
               )}
             </div>
+
+            {/* P&L hero row */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-navy rounded-xl px-3 py-2.5">
+                <p className="text-xs text-slate-500">Unrealised P&amp;L</p>
+                <p className={`text-base font-bold mt-0.5 ${
+                  unrlPnlUsd == null ? 'text-slate-400'
+                    : unrlPnlUsd >= 0 ? 'text-green-400' : 'text-red-400'
+                }`}>{fmtUsd(unrlPnlUsd, true)}</p>
+                <p className={`text-xs ${
+                  unrlPnlPct == null ? 'text-slate-500'
+                    : unrlPnlPct >= 0 ? 'text-green-500/80' : 'text-red-500/80'
+                }`}>{fmtPct(unrlPnlPct)} of equity</p>
+              </div>
+              <div className="bg-navy rounded-xl px-3 py-2.5">
+                <p className="text-xs text-slate-500">Premium Collected</p>
+                <p className="text-base font-bold text-amber-300 mt-0.5">{fmtUsd(premUsd)}</p>
+                <p className="text-xs text-slate-500">
+                  {contracts != null ? `${contracts} contract${contracts !== 1 ? 's' : ''}` : '—'}
+                </p>
+              </div>
+            </div>
+
+            {/* Detail grid: entry vs current, delta, IV, days held */}
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 px-1 pt-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Entry premium</span>
+                <span className="text-slate-200 font-medium">{entryPxBtc != null ? `${entryPxBtc.toFixed(4)} BTC` : '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Current mark</span>
+                <span className="text-slate-200 font-medium">{currentPxBtc != null ? `${currentPxBtc.toFixed(4)} BTC` : '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Delta</span>
+                <span className={`font-medium ${
+                  livePosDelta == null ? 'text-slate-200'
+                    : Math.abs(livePosDelta) >= maxAdvDelta ? 'text-red-400'
+                    : Math.abs(livePosDelta) >= maxAdvDelta * 0.75 ? 'text-amber-300'
+                    : 'text-slate-200'
+                }`}>
+                  {livePosDelta != null ? Math.abs(livePosDelta).toFixed(3) : '—'}
+                  <span className="text-slate-500 font-normal"> / {maxAdvDelta.toFixed(2)}</span>
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">IV rank</span>
+                <span className="text-slate-200 font-medium">
+                  {ivRankLive != null ? `${(ivRankLive * 100).toFixed(0)}%` : '—'}
+                  {ivRankThresh != null && (
+                    <span className="text-slate-500 font-normal"> / {(ivRankThresh * 100).toFixed(0)}%</span>
+                  )}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Days held</span>
+                <span className="text-slate-200 font-medium">
+                  {heldDays != null ? `${heldDays}d` : '—'}
+                  {livePos?.entry_date && (
+                    <span className="text-slate-500 font-normal"> · since {livePos.entry_date}</span>
+                  )}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Heartbeat</span>
+                <span className={`font-medium ${heartbeatStale ? 'text-amber-400' : 'text-slate-200'}`}>
+                  {heartbeatAge != null ? fmtAge(heartbeatAge) : '—'}
+                </span>
+              </div>
+            </div>
+
             {o.expiry_ts && (() => {
               const cd  = fmtCountdown(o.expiry_ts, countdownNow)
               const dte = dteFromTs(o.expiry_ts, countdownNow)
@@ -784,6 +1043,76 @@ export default function TradingView() {
                 </>
               )
             })()}
+
+            {/* Emergency close — last in the card so it doesn't pull focus */}
+            <div className="pt-1">
+              <button
+                onClick={() => setCloseConfirm(true)}
+                disabled={closing}
+                className="w-full py-2.5 rounded-xl bg-red-900/70 hover:bg-red-800/80 disabled:opacity-50 disabled:cursor-not-allowed text-red-200 text-sm font-semibold border border-red-800/60 transition-colors"
+              >
+                🆘 Emergency Close Position
+              </button>
+              {closeMsg && (
+                <p className={`text-xs mt-2 text-center ${
+                  closeMsg.startsWith('❌') ? 'text-red-400'
+                    : closeMsg.startsWith('✅') ? 'text-green-400'
+                    : 'text-slate-400'
+                }`}>{closeMsg}</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Hedge sub-card ────────────────────────────────────────────────
+            Only visible when the wheel bot's delta hedge has a non-zero
+            BTC-PERPETUAL position. Hidden when flat (clean state). */}
+        {hedgeData?.enabled && hedgeData.perp_position_btc !== 0 && (
+          <div className="bg-card rounded-2xl border border-purple-800/60 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🛡️</span>
+                <span className="text-sm font-bold text-white">Delta Hedge</span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-purple-900/60 text-purple-300 border border-purple-700/60">
+                BTC-PERP
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-navy rounded-xl px-3 py-2.5">
+                <p className="text-xs text-slate-500">Position</p>
+                <p className={`text-base font-bold mt-0.5 ${
+                  hedgeData.perp_position_btc >= 0 ? 'text-green-400' : 'text-red-400'
+                }`}>{fmtBtc(hedgeData.perp_position_btc, true)}</p>
+                <p className="text-xs text-slate-500">
+                  {hedgeData.avg_entry_price > 0 ? `entry ${K(hedgeData.avg_entry_price)}` : '—'}
+                </p>
+              </div>
+              <div className="bg-navy rounded-xl px-3 py-2.5">
+                <p className="text-xs text-slate-500">Unrealised P&amp;L</p>
+                <p className={`text-base font-bold mt-0.5 ${
+                  hedgeData.unrealised_pnl_usd == null ? 'text-slate-400'
+                    : hedgeData.unrealised_pnl_usd >= 0 ? 'text-green-400' : 'text-red-400'
+                }`}>{fmtUsd(hedgeData.unrealised_pnl_usd, true)}</p>
+                <p className="text-xs text-slate-500">
+                  realised {fmtUsd(hedgeData.realised_pnl_usd, true)}
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 px-1 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Funding paid</span>
+                <span className={`font-medium ${
+                  hedgeData.funding_paid_usd > 0 ? 'text-red-400'
+                    : hedgeData.funding_paid_usd < 0 ? 'text-green-400'
+                    : 'text-slate-200'
+                }`}>{fmtUsd(hedgeData.funding_paid_usd, true)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Rebalances</span>
+                <span className="text-slate-200 font-medium">{hedgeData.rebalance_count}</span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -865,6 +1194,80 @@ export default function TradingView() {
           <p className="text-center py-4 text-xs text-slate-500">No trades recorded in this period</p>
         )}
       </div>
+
+      {/* ── Emergency-close confirm modal ─────────────────────────────────── */}
+      {closeConfirm && (() => {
+        const strike = livePos?.strike ?? o?.active_strike ?? null
+        const spot   = livePos?.current_spot ?? chartData?.current_price ?? null
+        const optType = (livePos?.type ?? 'short_put').replace('short_', '')
+        const isItm = strike != null && spot != null && (
+          (optType === 'put' && spot < strike) ||
+          (optType === 'call' && spot > strike)
+        )
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm px-4 pb-8"
+            onClick={() => setCloseConfirm(false)}
+          >
+            <div
+              className="w-full max-w-sm bg-card border border-red-800 rounded-2xl p-5 space-y-4"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">🆘</span>
+                <div>
+                  <p className="font-bold text-white text-base">Emergency Close Position?</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{selectedBot?.name ?? 'Main bot'}</p>
+                </div>
+              </div>
+
+              <div className="bg-slate-800 rounded-xl px-3 py-2.5 space-y-1">
+                {strike != null && (
+                  <p className="text-xs text-slate-300">
+                    <span className="text-slate-500">Position: </span>
+                    Short {optType.toUpperCase()} @ {K(strike)}
+                  </p>
+                )}
+                {spot != null && (
+                  <p className="text-xs text-slate-300">
+                    <span className="text-slate-500">BTC Spot: </span>{K(spot)}
+                  </p>
+                )}
+                {livePosDelta != null && (
+                  <p className="text-xs text-slate-300">
+                    <span className="text-slate-500">Delta: </span>{Math.abs(livePosDelta).toFixed(3)}
+                  </p>
+                )}
+                {unrlPnlUsd != null && (
+                  <p className={`text-xs font-semibold ${unrlPnlUsd >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    Unrealised P&amp;L: {fmtUsd(unrlPnlUsd, true)}
+                  </p>
+                )}
+                {isItm && <p className="text-xs text-red-400 font-semibold">⚠️ Option is currently in the money</p>}
+              </div>
+
+              <p className="text-slate-300 text-sm">
+                This sends a buy-back command to the bot. It will execute a market order to close the short option on its next cycle (within seconds if running).
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setCloseConfirm(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={executeClose}
+                  className="flex-1 py-2.5 rounded-xl bg-red-700 hover:bg-red-600 text-white text-sm font-bold transition-colors"
+                >
+                  Close Position
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
