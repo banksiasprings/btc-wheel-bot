@@ -478,23 +478,41 @@ def get_evolve_results() -> dict:
     csv_path = OPT_DIR / "evolution_leaderboard.csv"
     rows: list[dict] = []
 
+    def _safe_float(v: Any, default: float = 0.0) -> float:
+        """Tolerant float coercion — empty strings, None, NaN all map to default."""
+        try:
+            f = float(v)
+            return f if f == f else default   # NaN check
+        except (TypeError, ValueError):
+            return default
+
+    def _row_to_genome(row: dict) -> dict:
+        """Map an optimizer-emitted dict (CSV row or JSON entry) onto the API
+        EvolveGenome shape, including capital-efficiency metrics. Defensive
+        about missing fields so old leaderboards (pre-fix) still load."""
+        return {
+            "fitness":               round(_safe_float(row.get("fitness")), 4),
+            "sharpe":                round(_safe_float(row.get("sharpe_ratio")), 3),
+            "return_pct":            round(_safe_float(row.get("total_return_pct")), 2),
+            "win_rate":              round(_safe_float(row.get("win_rate_pct")), 1),
+            "drawdown":              round(_safe_float(row.get("max_drawdown_pct")), 2),
+            "num_cycles":            int(_safe_float(row.get("num_cycles"))),
+            "trades_per_year":       round(_safe_float(row.get("trades_per_year")), 1),
+            "avg_pnl_per_trade_usd": round(_safe_float(row.get("avg_pnl_per_trade_usd")), 2),
+            "annualised_margin_roi": round(_safe_float(row.get("annualised_margin_roi")), 4),
+            "premium_on_margin":     round(_safe_float(row.get("premium_on_margin")), 4),
+            "min_viable_capital":    round(_safe_float(row.get("min_viable_capital")), 2),
+            "avg_margin_utilization": round(_safe_float(row.get("avg_margin_utilization")), 4),
+        }
+
     if csv_path.exists():
         try:
             with open(csv_path, newline="") as f:
                 reader = _csv.DictReader(f)
                 for row in reader:
                     try:
-                        rows.append({
-                            "fitness":              round(float(row.get("fitness", 0)), 4),
-                            "sharpe":               round(float(row.get("sharpe_ratio", 0)), 3),
-                            "return_pct":           round(float(row.get("total_return_pct", 0)), 2),
-                            "win_rate":             round(float(row.get("win_rate_pct", 0)), 1),
-                            "drawdown":             round(float(row.get("max_drawdown_pct", 0)), 2),
-                            "num_cycles":           int(float(row.get("num_cycles", 0))),
-                            "trades_per_year":      round(float(row.get("trades_per_year", 0)), 1),
-                            "avg_pnl_per_trade_usd": round(float(row.get("avg_pnl_per_trade_usd", 0)), 2),
-                        })
-                    except (ValueError, TypeError):
+                        rows.append(_row_to_genome(row))
+                    except Exception:
                         continue
         except Exception:
             pass
@@ -507,17 +525,8 @@ def get_evolve_results() -> dict:
             all_bots.sort(key=lambda r: r.get("fitness", 0), reverse=True)
             for b in all_bots:
                 try:
-                    rows.append({
-                        "fitness":              round(float(b.get("fitness", 0)), 4),
-                        "sharpe":               round(float(b.get("sharpe_ratio", 0)), 3),
-                        "return_pct":           round(float(b.get("total_return_pct", 0)), 2),
-                        "win_rate":             round(float(b.get("win_rate_pct", 0)), 1),
-                        "drawdown":             round(float(b.get("max_drawdown_pct", 0)), 2),
-                        "num_cycles":           int(float(b.get("num_cycles", 0))),
-                        "trades_per_year":      round(float(b.get("trades_per_year", 0)), 1),
-                        "avg_pnl_per_trade_usd": round(float(b.get("avg_pnl_per_trade_usd", 0)), 2),
-                    })
-                except (ValueError, TypeError):
+                    rows.append(_row_to_genome(b))
+                except Exception:
                     continue
 
     # Already sorted; take top 10

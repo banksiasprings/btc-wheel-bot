@@ -98,6 +98,13 @@ export interface EvolveGenome {
   num_cycles: number
   trades_per_year?: number
   avg_pnl_per_trade_usd?: number
+  // Capital-efficiency metrics (optimizer.py emits these as of 2026-05-01).
+  // Surfaced in the Pipeline winner card so users can pick small-capital,
+  // high-margin-ROI configs — the user's stated thesis.
+  annualised_margin_roi?: number     // total_return / lookback_years / avg_margin_util
+  premium_on_margin?: number         // total_premium_collected / total_margin_deployed
+  min_viable_capital?: number        // smallest equity at which any trade fired
+  avg_margin_utilization?: number    // mean fraction of equity held as margin
 }
 
 export interface EvolveResults {
@@ -118,6 +125,11 @@ export interface EvolveHistoryEntry {
   num_cycles?: number
   trades_per_year?: number
   avg_pnl_per_trade_usd?: number
+  // Capital-efficiency metrics — see EvolveGenome.
+  annualised_margin_roi?: number
+  premium_on_margin?: number
+  min_viable_capital?: number
+  avg_margin_utilization?: number
 }
 
 export interface EvolveGoalResult {

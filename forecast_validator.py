@@ -349,6 +349,18 @@ def create_snapshot(
             "sharpe_ratio": results.sharpe_ratio,
             "max_drawdown_pct": results.max_drawdown_pct,
             "win_rate_pct": results.win_rate_pct,
+            # Capital-efficiency metrics — recorded so the Forecasts tab can
+            # show what equity floor / margin ROI / yield-on-margin the
+            # backtest predicts. Not yet compared to actual (would require
+            # extending compute_actual_metrics to track margin usage from
+            # trades.csv); for now this is informational context.
+            "annualised_margin_roi": getattr(results, "annualised_margin_roi", 0.0),
+            "premium_on_margin": getattr(results, "premium_on_margin", 0.0),
+            "min_viable_capital": getattr(results, "min_viable_capital", 0.0),
+            "avg_margin_utilization": getattr(results, "avg_margin_utilization", 0.0),
+            "total_margin_deployed": getattr(results, "total_margin_deployed", 0.0),
+            "trades_per_year": getattr(results, "trades_per_year", 0.0),
+            "avg_pnl_per_trade_usd": getattr(results, "avg_pnl_per_trade_usd", 0.0),
         },
         "forecast": _dataclass_to_jsonable(forecast),
         "validation": None,

@@ -473,6 +473,52 @@ function StepEvolve({
                   </div>
                 ))}
               </div>
+
+              {/* Capital efficiency tile row — surfaces metrics that matter for
+                  the "small capital × many bots × hedged premium" thesis.
+                  Backend has emitted these since the collateral-fix audit;
+                  the UI was hiding them, so users picked configs by total
+                  return without seeing the capital floor or margin ROI. */}
+              {(winner.annualised_margin_roi != null
+                || winner.premium_on_margin != null
+                || winner.min_viable_capital != null
+                || winner.avg_margin_utilization != null) && (
+                <>
+                  <p className="text-xs text-slate-400 uppercase tracking-wide font-medium pt-1">Capital Efficiency</p>
+                  <div className="grid grid-cols-2 gap-2 text-center">
+                    {[
+                      ...(winner.min_viable_capital != null ? [{
+                        label: 'Min Capital',
+                        value: `$${winner.min_viable_capital.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+                        color: 'text-amber-300',
+                      }] : []),
+                      ...(winner.annualised_margin_roi != null ? [{
+                        label: 'Margin ROI',
+                        value: `${(winner.annualised_margin_roi * 100).toFixed(0)}%/yr`,
+                        color: winner.annualised_margin_roi >= 0 ? 'text-green-400' : 'text-red-400',
+                      }] : []),
+                      ...(winner.premium_on_margin != null ? [{
+                        label: 'Premium / Margin',
+                        value: `${(winner.premium_on_margin * 100).toFixed(1)}%`,
+                        color: 'text-green-400',
+                      }] : []),
+                      ...(winner.avg_margin_utilization != null ? [{
+                        label: 'Avg Margin Util',
+                        value: `${(winner.avg_margin_utilization * 100).toFixed(0)}%`,
+                        color: winner.avg_margin_utilization > 0.5 ? 'text-amber-400' : 'text-white',
+                      }] : []),
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="bg-slate-900/60 rounded-lg py-2">
+                        <p className="text-xs text-slate-500">{label}</p>
+                        <p className={`text-xs font-bold mt-0.5 ${color}`}>{value}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 leading-relaxed pt-1">
+                    Min Capital = smallest equity at any trade open · Margin ROI = annualised return on deployed margin · Premium / Margin = total premium income ÷ total margin used · Avg Margin Util = mean fraction of equity locked as collateral.
+                  </p>
+                </>
+              )}
             </div>
           )}
 

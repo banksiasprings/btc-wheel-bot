@@ -1642,6 +1642,13 @@ Examples:
                             "num_cycles":           int(float(_top.get("num_cycles", 0))),
                             "trades_per_year":      round(float(_top.get("trades_per_year", 0)), 1),
                             "avg_pnl_per_trade_usd": round(float(_top.get("avg_pnl_per_trade_usd", 0)), 2),
+                            # Capital-efficiency metrics — surfaced in the
+                            # Pipeline UI to help users pick small-capital
+                            # high-margin-ROI configs (the user's stated thesis).
+                            "annualised_margin_roi": round(float(_top.get("annualised_margin_roi", 0)), 4),
+                            "premium_on_margin":     round(float(_top.get("premium_on_margin", 0)), 4),
+                            "min_viable_capital":    round(float(_top.get("min_viable_capital", 0)), 2),
+                            "avg_margin_utilization": round(float(_top.get("avg_margin_utilization", 0)), 4),
                         }
         except Exception:
             pass

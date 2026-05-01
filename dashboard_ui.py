@@ -2136,6 +2136,48 @@ def tab_forecasts() -> None:
                     except Exception:
                         pass
 
+            # ── Capital efficiency context ────────────────────────────────────
+            # The backtest_summary now carries margin-ROI / min-viable-capital
+            # / premium-on-margin / margin-utilization (added 2026-05-01 in
+            # forecast_validator.create_snapshot). These answer the user's
+            # "small capital × high ROI" thesis, so surface them as a small
+            # info row beneath the forecast vs actual table.
+            cap_metrics = {
+                "Min viable capital": (
+                    f"${bt_summary.get('min_viable_capital', 0.0):,.0f}"
+                    if bt_summary.get('min_viable_capital') else "—"
+                ),
+                "Margin ROI / yr": (
+                    f"{bt_summary.get('annualised_margin_roi', 0.0) * 100:+.0f}%"
+                    if bt_summary.get('annualised_margin_roi') else "—"
+                ),
+                "Premium / margin": (
+                    f"{bt_summary.get('premium_on_margin', 0.0) * 100:.1f}%"
+                    if bt_summary.get('premium_on_margin') else "—"
+                ),
+                "Avg margin util": (
+                    f"{bt_summary.get('avg_margin_utilization', 0.0) * 100:.0f}%"
+                    if bt_summary.get('avg_margin_utilization') else "—"
+                ),
+            }
+            if any(v != "—" for v in cap_metrics.values()):
+                st.markdown(
+                    f'<div style="background:{C_CARD};border:1px solid {C_GRID};'
+                    f'border-radius:6px;padding:10px 14px;margin-top:8px;">'
+                    f'<div style="color:{C_MUTED};font-size:11px;'
+                    f'text-transform:uppercase;letter-spacing:0.5px;'
+                    f'margin-bottom:6px;">Capital efficiency (from backtest)</div>'
+                    + "".join(
+                        f'<div style="display:inline-block;margin-right:24px;">'
+                        f'<span style="color:{C_MUTED};font-size:11px;">{k}: </span>'
+                        f'<span style="color:{C_TEXT};font-size:13px;font-weight:600;">{v}</span>'
+                        f'</div>'
+                        for k, v in cap_metrics.items()
+                    )
+                    + '</div>',
+                    unsafe_allow_html=True,
+                )
+
             # Config snapshot (for drift detection)
             if config_snap:
                 with st.expander("⚙️ Config when snapshot was taken", expanded=False):
