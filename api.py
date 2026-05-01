@@ -1478,8 +1478,18 @@ def get_btc_history(days: int = 30, bot_id: str | None = None) -> dict:
                         exit_ts = int(datetime.fromisoformat(row["timestamp"]).timestamp())
                         strike = float(row.get("strike") or 0)
                         pnl = float(row.get("pnl_usd") or 0)
+                        # Real entry timestamp from days-held = dte_at_entry - dte_at_close.
+                        # Falls back to exit_ts if either DTE field is missing/invalid so the
+                        # marker still renders rather than disappearing.
+                        try:
+                            dte_at_entry = int(float(row.get("dte_at_entry") or 0))
+                            dte_at_close = int(float(row.get("dte_at_close") or 0))
+                            days_held = max(0, dte_at_entry - dte_at_close)
+                            entry_ts = exit_ts - days_held * 86_400
+                        except (ValueError, TypeError):
+                            entry_ts = exit_ts
                         trade_markers.append({
-                            "entry_time": exit_ts,
+                            "entry_time": entry_ts,
                             "exit_time": exit_ts,
                             "strike": strike,
                             "pnl_usd": pnl,
@@ -1536,6 +1546,85 @@ def get_btc_history(days: int = 30, bot_id: str | None = None) -> dict:
     }
     # Cache 60s for 30d/90d, 20s for 7d (more real-time feel)
     _chart_cache[cache_key] = {"data": payload, "expires": now + (20 if days <= 7 else 60)}
+    return payload
+
+
+# ── IV-rank history (for the trading-tab gauge) ───────────────────────────────
+
+_iv_rank_cache: dict = {}
+
+@app.get("/chart/iv_rank", dependencies=[Depends(_require_api_key)])
+def get_iv_rank_history(days: int = 30, bot_id: str | None = None) -> dict:
+    """
+    Return downsampled IV-rank time series from tick_log.csv.
+    Used by the trading tab to render the IV rank vs threshold gauge with
+    a sparkline of recent history. Bucketed to ~120 points so payload stays
+    small even for the 90-day window.
+    """
+    import csv as _csv
+
+    cache_key = f"iv_{days}_{bot_id or 'main'}"
+    now = time.time()
+    if _iv_rank_cache.get(cache_key, {}).get("expires", 0) > now:
+        return _iv_rank_cache[cache_key]["data"]
+
+    if bot_id:
+        tick_path = FARM_DIR / bot_id / "data" / "tick_log.csv"
+    else:
+        tick_path = DATA_DIR / "tick_log.csv"
+
+    if not tick_path.exists():
+        return {"points": [], "available": False, "current": None}
+
+    cutoff = now - days * 86_400
+    rows: list[tuple[int, float]] = []
+    try:
+        with open(tick_path, newline="") as f:
+            for row in _csv.DictReader(f):
+                ts_str = row.get("timestamp", "")
+                iv_str = row.get("iv_rank", "")
+                if not ts_str or not iv_str:
+                    continue
+                try:
+                    ts = int(datetime.fromisoformat(ts_str).timestamp())
+                except (ValueError, TypeError):
+                    continue
+                if ts < cutoff:
+                    continue
+                try:
+                    iv = float(iv_str)
+                except (ValueError, TypeError):
+                    continue
+                rows.append((ts, iv))
+    except Exception as exc:
+        return {"points": [], "available": False, "current": None, "error": str(exc)[:120]}
+
+    # Stable downsample — bucket by elapsed time and take last sample in each
+    # bucket (preserves the most recent value, matches what users expect).
+    target = 120
+    points: list[dict] = []
+    if rows:
+        rows.sort(key=lambda r: r[0])
+        if len(rows) <= target:
+            sampled = rows
+        else:
+            span = max(1, rows[-1][0] - rows[0][0])
+            bucket_size = span / target
+            buckets: dict[int, tuple[int, float]] = {}
+            for ts, iv in rows:
+                bidx = int((ts - rows[0][0]) / bucket_size)
+                # last value wins inside each bucket
+                buckets[bidx] = (ts, iv)
+            sampled = [buckets[k] for k in sorted(buckets)]
+        points = [{"ts": ts, "iv_rank": round(iv, 4)} for ts, iv in sampled]
+
+    current = points[-1]["iv_rank"] if points else None
+    payload = {
+        "points":    points,
+        "available": True,
+        "current":   current,
+    }
+    _iv_rank_cache[cache_key] = {"data": payload, "expires": now + 30}
     return payload
 
 

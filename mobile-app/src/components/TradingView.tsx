@@ -8,6 +8,7 @@ import {
   getBotLiveState, BotLiveState,
   getStatus, StatusData,
   getHedge, HedgeData,
+  getIvRankHistory, IvRankHistory,
   closeFarmBotPosition, closePosition,
 } from '../api'
 import { applyBotOrder } from '../lib/botOrder'
@@ -28,14 +29,28 @@ const RISK_STYLE: Record<'ok' | 'caution' | 'danger', { dot: string; bg: string;
 interface ChartPoint {
   time: number
   close?: number
+  // [low, high] for the volatility-range envelope. Recharts treats a
+  // tuple-valued dataKey on an Area as a band, drawn between the two values.
+  range?: [number, number]
   projected?: number
   isFuture?: boolean
+  // Paired trade markers — at most one entry and one exit per candle.
+  // (Two trades in the same candle is rare; on collision the more recent
+  // exit wins so the won/lost colour stays accurate.)
+  entryY?: number
+  exitY?: number
   tradeWon?: boolean
   tradePnl?: number
   tradeStrike?: number
+  // Marker for the currently-open position's entry candle.
+  liveEntryY?: number
 }
 
-type InfoType = 'trade' | 'strike' | 'breakeven' | 'zone' | 'expiry' | 'projection' | 'est_strike' | 'est_breakeven'
+interface TradeConnector {
+  x1: number; y1: number; x2: number; y2: number; won: boolean
+}
+
+type InfoType = 'trade' | 'strike' | 'breakeven' | 'expiry' | 'projection' | 'est_strike' | 'est_breakeven'
 interface InfoPanel { type: InfoType; payload?: ChartPoint }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -105,23 +120,67 @@ function dteFromTs(expiryTs: number, refNow: number): number {
   return Math.max(0, Math.ceil((expiryTs * 1000 - refNow) / 86_400_000))
 }
 
-// ── Trade dot — triangles pointing up (win) or down (loss) ───────────────────
+// ── Trade marker dots ────────────────────────────────────────────────────────
+// Three independent dot renderers so entry, exit, and the live-position entry
+// can each be rendered as its own recharts Line series. Each only paints when
+// its field is set on the payload, so they only appear at the right candles.
 
-function TradeDot(props: any) {
+// Bucketed sizes by absolute USD P&L — three steps so a $30 win and a $300 win
+// look meaningfully different (the old continuous /12 formula compressed both
+// into 8–13px and read as identical).
+function tradeSize(pnl: number | undefined): number {
+  const a = Math.abs(pnl ?? 0)
+  if (a >= 200) return 13
+  if (a >= 60)  return 10
+  return 7
+}
+
+function ExitDot(props: any) {
   const { cx, cy, payload } = props
-  if (payload?.tradeWon === undefined || payload?.isFuture) return null
+  if (payload?.exitY == null || payload?.isFuture) return null
   const won = payload.tradeWon as boolean
-  const pnl = Math.abs(payload.tradePnl ?? 30)
-  const sz  = Math.min(13, Math.max(8, pnl / 12))
+  const sz  = tradeSize(payload.tradePnl)
   const fill = won ? '#22c55e' : '#ef4444'
-  // up-triangle for win, down-triangle for loss
+  // Up-triangle for a winning exit, down for losing.
   const pts = won
     ? `${cx},${cy - sz} ${cx - sz * 0.9},${cy + sz * 0.55} ${cx + sz * 0.9},${cy + sz * 0.55}`
     : `${cx},${cy + sz} ${cx - sz * 0.9},${cy - sz * 0.55} ${cx + sz * 0.9},${cy - sz * 0.55}`
   return (
     <g style={{ cursor: 'pointer' }}>
-      <circle cx={cx} cy={cy} r={sz * 1.8} fill={fill} opacity={0.12} />
+      <circle cx={cx} cy={cy} r={sz * 1.8} fill={fill} opacity={0.10} />
       <polygon points={pts} fill={fill} stroke="white" strokeWidth={1.5} strokeLinejoin="round" />
+    </g>
+  )
+}
+
+function EntryDot(props: any) {
+  const { cx, cy, payload } = props
+  if (payload?.entryY == null || payload?.isFuture) return null
+  const won = payload.tradeWon as boolean
+  const fill = won ? '#22c55e' : '#ef4444'
+  // Hollow circle — neutral "trade started" glyph that sits on the price line
+  // without overstating a direction, since at entry we don't yet know the
+  // outcome (the colour is just inherited from the eventual result).
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      <circle cx={cx} cy={cy} r={5}   fill="#0f172a" stroke={fill} strokeWidth={2}/>
+      <circle cx={cx} cy={cy} r={1.5} fill={fill}/>
+    </g>
+  )
+}
+
+function LiveEntryDot(props: any) {
+  const { cx, cy, payload } = props
+  if (payload?.liveEntryY == null || payload?.isFuture) return null
+  // Pulsing amber diamond — distinct from historical trade dots so the user
+  // can tell their currently-open position apart from past closed trades.
+  return (
+    <g style={{ pointerEvents: 'none' }}>
+      <circle cx={cx} cy={cy} r={11} fill="#f59e0b" opacity={0.18}/>
+      <polygon
+        points={`${cx},${cy - 6} ${cx + 6},${cy} ${cx},${cy + 6} ${cx - 6},${cy}`}
+        fill="#fbbf24" stroke="white" strokeWidth={1.5} strokeLinejoin="round"
+      />
     </g>
   )
 }
@@ -134,20 +193,29 @@ function ChartTooltip({ active, payload, resolution }: any) {
   if (!d) return null
   const price = d.isFuture ? d.projected : d.close
   if (!price) return null
+  const hasEntry  = d.entryY != null
+  const hasExit   = d.exitY  != null
+  const isLiveEntry = d.liveEntryY != null
   return (
     <div className="bg-slate-900 border border-slate-600 rounded-xl px-3 py-2 text-xs shadow-xl pointer-events-none">
       <p className="text-slate-400 mb-1">{fmtShort(d.time, resolution)}{d.isFuture ? ' (projected)' : ''}</p>
       <p className="text-white font-bold text-sm">{K(price)}</p>
-      {d.tradeWon !== undefined && !d.isFuture && (
-        <>
-          <div className="border-t border-slate-700 mt-1.5 pt-1.5">
-            <p className={`font-semibold ${d.tradeWon ? 'text-green-400' : 'text-red-400'}`}>
-              {d.tradeWon ? '▲ WIN' : '▼ LOSS'} {d.tradePnl != null ? `$${d.tradePnl.toFixed(0)}` : ''}
-            </p>
-            {d.tradeStrike != null && <p className="text-slate-400 mt-0.5">Strike {K(d.tradeStrike)}</p>}
-            <p className="text-slate-500 mt-0.5 text-xs">Tap for details</p>
-          </div>
-        </>
+      {isLiveEntry && (
+        <div className="border-t border-slate-700 mt-1.5 pt-1.5">
+          <p className="font-semibold text-amber-300">◆ Open Position Entry</p>
+          <p className="text-slate-400 mt-0.5">Currently active trade started here</p>
+        </div>
+      )}
+      {(hasEntry || hasExit) && d.tradeWon !== undefined && !d.isFuture && (
+        <div className="border-t border-slate-700 mt-1.5 pt-1.5">
+          <p className={`font-semibold ${d.tradeWon ? 'text-green-400' : 'text-red-400'}`}>
+            {hasExit
+              ? `${d.tradeWon ? '▲ WIN' : '▼ LOSS'}${d.tradePnl != null ? ` $${d.tradePnl.toFixed(0)}` : ''}`
+              : 'Trade entry'}
+          </p>
+          {d.tradeStrike != null && <p className="text-slate-400 mt-0.5">Strike {K(d.tradeStrike)}</p>}
+          {hasExit && <p className="text-slate-500 mt-0.5 text-xs">Tap for details</p>}
+        </div>
       )}
     </div>
   )
@@ -213,22 +281,6 @@ function InfoPanelContent({
         `Above ${K(be)}: the trade is profitable — premium more than covers any paper loss.`,
         `Below ${K(be)}: losses exceed the premium collected. The deeper BTC falls, the worse the loss.`,
         `The gap between the strike and breakeven is the "cushion" — how far BTC can fall before the trade genuinely costs money.`,
-      ]
-      break
-    }
-    case 'zone': {
-      const upper = o.zone_upper
-      const lower = o.zone_lower
-      const center = o.zone_center
-      const otm = cfg ? `${(cfg.otm_offset * 100).toFixed(1)}%` : null
-      icon = '🔵'
-      color = 'text-blue-400'
-      title = 'Entry Zone'
-      body = [
-        `The blue band (${lower ? K(lower) : '?'} – ${upper ? K(upper) : '?'}) is where the bot would sell its next PUT right now, based on the ${otm ?? 'configured'} out-of-the-money offset.`,
-        `Center of zone: ${center ? K(center) : '?'}.`,
-        `The bot enters this zone when IV Rank exceeds ${cfg ? `${(cfg.iv_rank_threshold * 100).toFixed(0)}%` : 'the threshold'} — indicating options are expensive enough to sell profitably.`,
-        `If BTC is in or above this zone at entry, the put has a good chance of expiring worthless.`,
       ]
       break
     }
@@ -337,6 +389,17 @@ export default function TradingView() {
   const [botStatus, setBotStatus]   = useState<StatusData | null>(null)
   // Hedge (BTC-PERP) state from main bot
   const [hedgeData, setHedgeData]   = useState<HedgeData | null>(null)
+  // IV rank time series (for the gauge sparkline)
+  const [ivHistory, setIvHistory]   = useState<IvRankHistory | null>(null)
+
+  // Projection toggle — persisted so user preference survives reloads.
+  // Default OFF: the regression line was easy to misread as a forecast.
+  const [showProjection, setShowProjection] = useState<boolean>(() => {
+    return localStorage.getItem('chart_projection') === 'on'
+  })
+  useEffect(() => {
+    localStorage.setItem('chart_projection', showProjection ? 'on' : 'off')
+  }, [showProjection])
 
   // Emergency-close confirm + result message
   const [closeConfirm, setCloseConfirm] = useState<boolean>(false)
@@ -385,11 +448,20 @@ export default function TradingView() {
     catch { setHedgeData(null) }
   }, [botId])
 
+  // IV rank history — refreshed on the slower chart cadence (30s) since
+  // tick_log appends roughly every poll and downsampling already smooths it.
+  const loadIvHistory = useCallback(async () => {
+    try { setIvHistory(await getIvRankHistory(days, botId)) }
+    catch { setIvHistory(null) }
+  }, [days, botId])
+
   // Clear bot-specific state when the user switches bots so we never show
   // the previous bot's numbers paired with the new bot's chart.
-  useEffect(() => { setLiveState(null); setCloseMsg('') }, [botId])
+  useEffect(() => { setLiveState(null); setCloseMsg(''); setIvHistory(null) }, [botId])
   useEffect(() => { loadLive() }, [loadLive])
   useEffect(() => { const id = setInterval(loadLive, 15_000); return () => clearInterval(id) }, [loadLive])
+  useEffect(() => { loadIvHistory() }, [loadIvHistory])
+  useEffect(() => { const id = setInterval(loadIvHistory, 30_000); return () => clearInterval(id) }, [loadIvHistory])
 
   // ── Emergency close ────────────────────────────────────────────────────────
   async function executeClose() {
@@ -419,65 +491,161 @@ export default function TradingView() {
     return () => clearInterval(id)
   }, [])
 
-  // ── Build chart data ────────────────────────────────────────────────────────
+  // ── Live position values (computed early so the chart builder below can
+  //   consume them for the live-entry marker and the buffer pill). ─────────
+  const livePos      = liveState?.position
+  const hasLivePos   = !!livePos?.open
 
-  const allChartData: ChartPoint[] = (() => {
-    if (!chartData) return []
+  // ── Build chart data ────────────────────────────────────────────────────────
+  // Produces three things in one pass:
+  //   - allChartData  : candle array with HLC envelope + paired trade markers
+  //                     + live-position entry marker, optionally extended with
+  //                     a projection tail.
+  //   - tradeConnectors: line segments connecting each trade's entry to its
+  //                     exit, coloured by win/loss for the connector overlay.
+  // Colocating both lets us walk the candle array exactly once.
+
+  const { allChartData, tradeConnectors } = (() => {
+    if (!chartData) return { allChartData: [] as ChartPoint[], tradeConnectors: [] as TradeConnector[] }
     const { candles, trade_markers } = chartData
     const resSec = chartData.resolution === '360' ? 21600 : 86400
+    const halfRes = resSec / 2
+    const liveSpot = chartData.current_price
 
-    // Historical candles with trade markers merged in
-    const hist: ChartPoint[] = candles.map(c => {
-      const marker = trade_markers.find(m => {
-        const mt = m.exit_time ?? m.entry_time
-        return mt >= c.time - resSec / 2 && mt < c.time + resSec / 2
-      })
-      return {
-        time: c.time, close: c.close,
-        projected: undefined, isFuture: false,
-        tradeWon:   marker?.won,
-        tradePnl:   marker?.pnl_usd,
-        tradeStrike: marker?.strike ?? undefined,
-      }
-    })
+    // Pass 1: build base candle points with HLC range envelope.
+    const hist: ChartPoint[] = candles.map(c => ({
+      time: c.time,
+      close: c.close,
+      range: [c.low, c.high],
+      projected: undefined,
+      isFuture: false,
+    }))
 
-    // Linear trend projection from last 7 candles
-    const recent = hist.slice(-7)
-    const n = recent.length
-    if (n >= 3) {
-      const xs = recent.map((_, i) => i)
-      const ys = recent.map(c => c.close!)
-      const xm = xs.reduce((a, b) => a + b) / n
-      const ym = ys.reduce((a, b) => a + b) / n
-      const slope = xs.reduce((s, x, i) => s + (x - xm) * (ys[i] - ym), 0) /
-                    xs.reduce((s, x) => s + (x - xm) ** 2, 0)
-      const lastClose = hist[hist.length - 1].close!
-      const lastTime  = hist[hist.length - 1].time
-
-      // Attach projection start to the last real candle
-      hist[hist.length - 1].projected = lastClose
-
-      // Extend into the future far enough to always show the expiry line.
-      // For the 7-day view (6h candles), the default 30% lookahead is only 18 hours —
-      // too short if expiry is several days out. Use 60% for short windows.
-      const lookaheadCandles = days <= 7
-        ? Math.max(8, Math.round(days * 0.60))   // 7d: at least 2 days of projection
-        : Math.max(3, Math.round(days * 0.30))
-      const expiryTs = chartData.overlays?.expiry_ts
-      const minTsNeeded = expiryTs ? expiryTs + resSec * 2 : 0   // two candles past expiry
-      let i = 1
-      while (i <= lookaheadCandles || lastTime + i * resSec < minTsNeeded) {
-        hist.push({
-          time: lastTime + i * resSec,
-          projected: Math.max(1, lastClose + slope * i),
-          isFuture: true,
-        })
-        i++
-        if (i > 365) break  // safety cap
+    // Patch the last historical candle's close to live spot so the price line
+    // reaches the same number shown in the page header — without this the
+    // green line ends up to 6 hours stale on the 7-day view.
+    if (liveSpot && hist.length > 0) {
+      const last = hist[hist.length - 1]
+      if (last.close != null) {
+        const [lo, hi] = last.range ?? [last.close, last.close]
+        last.close = liveSpot
+        last.range = [Math.min(lo, liveSpot), Math.max(hi, liveSpot)]
       }
     }
 
-    return hist
+    // Helper: nearest candle to a timestamp, by ±half-resolution window.
+    // Returns the candle index or -1 if outside the visible window.
+    const indexAt = (ts: number): number => {
+      // Linear scan — candle counts are ≤ ~100 so this is fine and avoids the
+      // off-by-one risk of binary search across non-uniform tick spacing.
+      for (let i = 0; i < hist.length; i++) {
+        const ct = hist[i].time
+        if (ts >= ct - halfRes && ts < ct + halfRes) return i
+      }
+      return -1
+    }
+
+    // Pass 2: paired trade markers + connector segments.
+    // For each trade, place an entry dot on the entry candle and an exit dot
+    // on the exit candle. If both fall inside the same candle we keep only
+    // the exit (carries the won/lost info). On collisions across trades the
+    // most-recent trade wins for that candle — visual fidelity is acceptable
+    // since users can drill into the full list elsewhere.
+    const connectors: TradeConnector[] = []
+    for (const m of trade_markers) {
+      const ei = indexAt(m.entry_time)
+      const xi = indexAt(m.exit_time ?? m.entry_time)
+      // A trade entirely outside the window contributes nothing.
+      if (ei === -1 && xi === -1) continue
+      // Same-candle: only the exit (so the colour is correct).
+      if (ei === xi || ei === -1 || xi === -1) {
+        const target = xi !== -1 ? xi : ei
+        const c = hist[target]
+        c.exitY       = c.close
+        c.tradeWon    = m.won
+        c.tradePnl    = m.pnl_usd
+        c.tradeStrike = m.strike ?? undefined
+        continue
+      }
+      // Distinct candles — set both endpoints, plus a connector segment.
+      const eC = hist[ei]
+      const xC = hist[xi]
+      eC.entryY      = eC.close
+      eC.tradeWon    = m.won
+      eC.tradePnl    = m.pnl_usd
+      eC.tradeStrike = m.strike ?? undefined
+      xC.exitY       = xC.close
+      xC.tradeWon    = m.won
+      xC.tradePnl    = m.pnl_usd
+      xC.tradeStrike = m.strike ?? undefined
+      if (eC.close != null && xC.close != null) {
+        connectors.push({ x1: eC.time, y1: eC.close, x2: xC.time, y2: xC.close, won: m.won })
+      }
+    }
+
+    // Pass 3: live-position entry marker. Anchor at the candle whose timeline
+    // contains entry_date, plot at underlying_at_entry if available,
+    // otherwise at that candle's close.
+    if (livePos?.open && livePos.entry_date) {
+      const entryTs = Math.floor(Date.parse(livePos.entry_date) / 1000)
+      if (!isNaN(entryTs)) {
+        const i = indexAt(entryTs)
+        if (i !== -1) {
+          const c = hist[i]
+          c.liveEntryY = livePos.underlying_at_entry ?? c.close
+        }
+      }
+    }
+
+    // Pass 4: optional trend projection (off by default, toggle in header).
+    if (showProjection) {
+      const recent = hist.slice(-7)
+      const n = recent.length
+      if (n >= 3) {
+        const xs = recent.map((_, i) => i)
+        const ys = recent.map(c => c.close!)
+        const xm = xs.reduce((a, b) => a + b) / n
+        const ym = ys.reduce((a, b) => a + b) / n
+        const slope = xs.reduce((s, x, i) => s + (x - xm) * (ys[i] - ym), 0) /
+                      xs.reduce((s, x) => s + (x - xm) ** 2, 0)
+        const lastClose = hist[hist.length - 1].close!
+        const lastTime  = hist[hist.length - 1].time
+
+        hist[hist.length - 1].projected = lastClose
+
+        const lookaheadCandles = days <= 7
+          ? Math.max(8, Math.round(days * 0.60))
+          : Math.max(3, Math.round(days * 0.30))
+        const expiryTs = chartData.overlays?.expiry_ts
+        const minTsNeeded = expiryTs ? expiryTs + resSec * 2 : 0
+        let i = 1
+        while (i <= lookaheadCandles || lastTime + i * resSec < minTsNeeded) {
+          hist.push({
+            time: lastTime + i * resSec,
+            projected: Math.max(1, lastClose + slope * i),
+            isFuture: true,
+          })
+          i++
+          if (i > 365) break
+        }
+      }
+    } else {
+      // Projection off — but we still need the chart to extend out to expiry
+      // so the violet expiry vline has somewhere to land. Pad with empty
+      // future points (close=undefined, no projected) just to extend xDomain.
+      const expiryTs = chartData.overlays?.expiry_ts
+      const lastTime = hist.length > 0 ? hist[hist.length - 1].time : 0
+      if (expiryTs && lastTime > 0 && expiryTs > lastTime) {
+        let i = 1
+        while (lastTime + i * resSec < expiryTs + resSec * 2) {
+          hist.push({ time: lastTime + i * resSec, isFuture: true })
+          i++
+          if (i > 365) break
+        }
+      }
+    }
+
+    return { allChartData: hist, tradeConnectors: connectors }
   })()
 
   // ── Monitoring / estimated overlays (when no open position) ────────────────
@@ -491,13 +659,17 @@ export default function TradingView() {
   // ── Y axis domain ───────────────────────────────────────────────────────────
 
   const histPoints = allChartData.filter(p => !p.isFuture)
-  const nowTs = chartData && histPoints.length > 0 ? histPoints[histPoints.length - 1].time : 0
+  // Place "Now" at actual wall-clock time (not the last candle's start-of-bucket).
+  // On the 7-day view candles are 6h-aligned so the difference is meaningful.
+  const liveNowTs = Math.floor(Date.now() / 1000)
+  const lastCandleTs = histPoints.length > 0 ? histPoints[histPoints.length - 1].time : 0
 
   const yDomain = (() => {
     if (!allChartData.length) return ['auto', 'auto'] as [string, string]
     const o = chartData?.overlays
     const vals = [
       ...allChartData.map(c => c.close ?? c.projected ?? 0).filter(v => v > 0),
+      ...allChartData.flatMap(c => c.range ?? []),
       o?.active_strike, o?.breakeven, o?.zone_upper, o?.zone_lower,
       estStrike, estBreakeven,
     ].filter((v): v is number => v != null && v > 0)
@@ -506,15 +678,17 @@ export default function TradingView() {
     return [Math.floor(mn - pad), Math.ceil(mx + pad)] as [number, number]
   })()
 
-  // xDomain: always extend right edge to include expiry + breathing room
+  // xDomain: extend right edge to cover both live now and (if set) expiry.
   const xDomain: [number, number] | string[] = (() => {
     if (!allChartData.length) return ['dataMin', 'dataMax']
     const minX = allChartData[0].time
     let maxX = allChartData[allChartData.length - 1].time
+    // Always include live now so the Now vline doesn't sit at the right edge.
+    maxX = Math.max(maxX, liveNowTs)
     const expiryTs = chartData?.overlays?.expiry_ts
-    if (expiryTs && expiryTs > nowTs && nowTs > 0) {
-      // Right-pad by 12% of the historical window so the expiry label has room
-      const histSpan = Math.max(1, nowTs - minX)
+    if (expiryTs && expiryTs > liveNowTs) {
+      // Right-pad by 12% of the historical window so the expiry label has room.
+      const histSpan = Math.max(1, liveNowTs - minX)
       maxX = Math.max(maxX, expiryTs + histSpan * 0.12)
     }
     return [minX, maxX]
@@ -544,8 +718,7 @@ export default function TradingView() {
   const res    = chartData?.resolution ?? '1D'
 
   // ── Live position values (prefer BotLiveState, fall back to chart overlays) ──
-  const livePos       = liveState?.position
-  const hasLivePos    = !!livePos?.open
+  // (livePos / hasLivePos are declared earlier so the chart builder can use them.)
   const contracts     = livePos?.contracts ?? null
   const premUsd       = livePos?.premium_collected ?? null
   const unrlPnlUsd    = livePos?.unrealized_pnl_usd ?? null
@@ -654,6 +827,134 @@ export default function TradingView() {
           </div>
         )}
 
+        {/* ── Strike-distance safety buffer ──────────────────────────────────
+            Surfaces the gap between live spot and strike / breakeven as a
+            single colour-coded pill. Green > 5%, amber 2–5%, red < 2% on
+            either gap (whichever is tighter sets the colour). Only renders
+            when there's an active position. */}
+        {(() => {
+          const strike = o?.active_strike
+          const be     = o?.breakeven
+          const spot   = chartData?.current_price
+          if (!strike || !spot) return null
+          const strikePct = (spot - strike) / spot * 100
+          const bePct     = be ? (spot - be) / spot * 100 : null
+          // Worst case (smallest gap, possibly negative) drives the colour.
+          const worst = bePct != null ? Math.min(strikePct, bePct) : strikePct
+          const tone =
+            worst < 0   ? { ring: 'border-red-700 bg-red-950/60',     text: 'text-red-200',    label: 'Below strike' } :
+            worst < 2   ? { ring: 'border-red-700/70 bg-red-950/40',  text: 'text-red-300',    label: 'Tight buffer' } :
+            worst < 5   ? { ring: 'border-amber-700/70 bg-amber-950/40', text: 'text-amber-300', label: 'Watch buffer' } :
+                          { ring: 'border-emerald-800/70 bg-emerald-950/40', text: 'text-emerald-300', label: 'Healthy buffer' }
+          return (
+            <div className={`rounded-2xl border ${tone.ring} px-4 py-3 flex items-center justify-between gap-3`}>
+              <div className="flex flex-col">
+                <span className={`text-xs font-semibold uppercase tracking-wide ${tone.text}`}>{tone.label}</span>
+                <span className="text-xs text-slate-400 mt-0.5">spot ${spot.toLocaleString('en-AU', { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs">
+                <div className="flex flex-col items-end">
+                  <span className={`font-bold ${tone.text}`}>↑ {strikePct.toFixed(1)}%</span>
+                  <span className="text-slate-500">above strike</span>
+                </div>
+                {bePct != null && (
+                  <div className="flex flex-col items-end">
+                    <span className={`font-bold ${tone.text}`}>↑ {bePct.toFixed(1)}%</span>
+                    <span className="text-slate-500">above BE</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* ── IV-rank gauge ──────────────────────────────────────────────────
+            Shows current IV rank vs the configured entry threshold so the
+            user can see at a glance whether the bot is interested in
+            trading. Sparkline of recent history if available; fall-back to
+            a static gauge using the live IV rank from BotLiveState. */}
+        {(ivRankLive != null || ivHistory?.current != null) && ivRankThresh != null && (() => {
+          const live = ivRankLive ?? ivHistory?.current ?? 0
+          const thr  = ivRankThresh
+          const livePct = Math.max(0, Math.min(1, live)) * 100
+          const thrPct  = Math.max(0, Math.min(1, thr))  * 100
+          // Colour the fill by zone: red above 0.85 (volatility cap), green
+          // when above threshold (bot will enter), amber otherwise.
+          const fillColor = live >= 0.85 ? 'bg-red-500'
+                          : live >= thr  ? 'bg-emerald-500'
+                          :                'bg-amber-500'
+          const headlineColor = live >= 0.85 ? 'text-red-300'
+                              : live >= thr  ? 'text-emerald-300'
+                              :                'text-amber-300'
+          // Sparkline: optional, only when we have ≥3 history points.
+          const pts = ivHistory?.points ?? []
+          const sparkPath = (() => {
+            if (pts.length < 3) return null
+            const w = 100, h = 24
+            const xs = pts.map(p => p.ts)
+            const xMin = Math.min(...xs), xMax = Math.max(...xs)
+            const xSpan = Math.max(1, xMax - xMin)
+            const d = pts.map((p, i) => {
+              const x = ((p.ts - xMin) / xSpan) * w
+              const y = h - Math.max(0, Math.min(1, p.iv_rank)) * h
+              return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`
+            }).join(' ')
+            const thrY = h - thrPct / 100 * h
+            return { d, w, h, thrY }
+          })()
+          return (
+            <div className="bg-card rounded-2xl border border-border p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">IV Rank</span>
+                  <span className={`text-base font-bold ${headlineColor}`}>{livePct.toFixed(0)}%</span>
+                </div>
+                <span className="text-xs text-slate-500">
+                  threshold <span className="text-slate-300 font-medium">{thrPct.toFixed(0)}%</span>
+                </span>
+              </div>
+              {/* Bar with threshold tick */}
+              <div className="relative h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className={`absolute left-0 top-0 bottom-0 ${fillColor} transition-all`}
+                  style={{ width: `${livePct}%` }}
+                />
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-white/70"
+                  style={{ left: `${thrPct}%` }}
+                  aria-hidden
+                />
+              </div>
+              {/* Sparkline (only when history is available) */}
+              {sparkPath && (
+                <svg
+                  viewBox={`0 0 ${sparkPath.w} ${sparkPath.h}`}
+                  className="w-full h-6 mt-1"
+                  preserveAspectRatio="none"
+                  aria-hidden
+                >
+                  <line
+                    x1={0} x2={sparkPath.w}
+                    y1={sparkPath.thrY} y2={sparkPath.thrY}
+                    stroke="#475569" strokeDasharray="2 2" strokeWidth="0.5"
+                  />
+                  <path d={sparkPath.d} fill="none"
+                    stroke={live >= 0.85 ? '#ef4444' : live >= thr ? '#22c55e' : '#f59e0b'}
+                    strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round"
+                  />
+                </svg>
+              )}
+              <p className="text-xs text-slate-500">
+                {live >= 0.85
+                  ? 'Extreme volatility — bot caps to one leg.'
+                  : live >= thr
+                    ? 'Above threshold — bot will open new positions when conditions align.'
+                    : `Below threshold — waiting for IV to rise above ${thrPct.toFixed(0)}% before entering.`}
+              </p>
+            </div>
+          )
+        })()}
+
         {/* ── Trade summary pills ─────────────────────────────────────────── */}
         {tradeCount > 0 && (
           <div className="flex gap-2 flex-wrap">
@@ -702,18 +1003,23 @@ export default function TradingView() {
         {chartData && allChartData.length > 0 && (
           <div className="bg-card rounded-2xl border border-border overflow-hidden">
 
-            {/* Legend + tap hint */}
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 pt-3 pb-2 text-xs text-slate-400">
-              <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-0.5 bg-green-500"/>BTC Price</span>
-              {o?.active_strike   && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-orange-400"/>Strike</span>}
-              {o?.breakeven       && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-emerald-400"/>Breakeven</span>}
-              {estStrike != null  && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-amber-500 opacity-60"/>Est. Strike</span>}
-              {estBreakeven != null && <span className="flex items-center gap-1.5"><span className="inline-block w-3 border-t-2 border-dashed border-teal-400 opacity-60"/>Est. BE</span>}
-              {o?.zone_lower      && <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-2.5 rounded-sm bg-blue-500 opacity-40"/>Entry Zone</span>}
-              {tradeCount > 0     && <span className="flex items-center gap-1.5"><span className="text-green-400 font-bold text-xs">▲</span><span className="text-red-400 font-bold text-xs">▼</span>Trades</span>}
-              <span className="flex items-center gap-1.5 ml-auto"><span className="inline-block w-3 border-t border-dashed border-slate-500"/>Projection</span>
+            {/* Slim header — title + projection toggle. Replaces the old
+                7-item legend strip; the clickable chips below the chart
+                already cover labelling and add up tappable interaction. */}
+            <div className="flex items-center justify-between px-3 pt-3 pb-2">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide">BTC Price</p>
+              <button
+                onClick={() => setShowProjection(v => !v)}
+                className={`text-xs px-2 py-1 rounded-full border transition-colors ${
+                  showProjection
+                    ? 'bg-slate-700 border-slate-600 text-slate-200'
+                    : 'bg-transparent border-slate-700 text-slate-500 hover:text-slate-300'
+                }`}
+                title="Linear regression of last 7 candles. Not a forecast."
+              >
+                〰️ Projection {showProjection ? 'on' : 'off'}
+              </button>
             </div>
-            <p className="text-xs text-slate-600 px-3 pb-2">Tap a trade marker or use the chips below for details</p>
 
             <ResponsiveContainer width="100%" height={310}>
               <ComposedChart
@@ -726,10 +1032,6 @@ export default function TradingView() {
                   <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%"  stopColor="#22c55e" stopOpacity={0.3}/>
                     <stop offset="95%" stopColor="#22c55e" stopOpacity={0.02}/>
-                  </linearGradient>
-                  <linearGradient id="projGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor="#64748b" stopOpacity={0.15}/>
-                    <stop offset="95%" stopColor="#64748b" stopOpacity={0}/>
                   </linearGradient>
                 </defs>
 
@@ -751,11 +1053,57 @@ export default function TradingView() {
 
                 <Tooltip content={<ChartTooltip resolution={res}/>}/>
 
-                {/* Entry zone */}
-                {o?.zone_lower != null && o?.zone_upper != null && (
-                  <ReferenceArea y1={o.zone_lower} y2={o.zone_upper}
-                    fill="#3b82f6" fillOpacity={0.12}
-                    stroke="#3b82f6" strokeOpacity={0.35} strokeDasharray="5 4" strokeWidth={1}
+                {/* P&L zone shading — three faint horizontal bands so spot's
+                    relationship to strike & breakeven reads at a glance.
+                    Order matters: drawn first so they sit behind everything.
+                       above breakeven           = profit zone (green)
+                       between strike and BE     = assigned-but-covered (amber)
+                       below strike              = assignment loss (red)
+                    Only meaningful when there's an active position. */}
+                {o?.active_strike != null && o?.breakeven != null && yDomain[1] && (
+                  <>
+                    <ReferenceArea y1={o.breakeven} y2={yDomain[1] as number}
+                      fill="#22c55e" fillOpacity={0.05} ifOverflow="extendDomain"/>
+                    <ReferenceArea y1={o.active_strike} y2={o.breakeven}
+                      fill="#f59e0b" fillOpacity={0.07} ifOverflow="extendDomain"/>
+                    <ReferenceArea y1={yDomain[0] as number} y2={o.active_strike}
+                      fill="#ef4444" fillOpacity={0.07} ifOverflow="extendDomain"/>
+                  </>
+                )}
+
+                {/* HLC range envelope — faint grey band drawn between the
+                    daily/6h low and high of each candle. Gives volatility
+                    context without competing with the close line. Range is
+                    only set on historical points so the band doesn't
+                    extend into the projection. */}
+                <Area type="monotone" dataKey="range"
+                  stroke="none" fill="#475569" fillOpacity={0.18}
+                  isAnimationActive={false} connectNulls={false}
+                />
+
+                {/* Trade-connector segments (entry → exit). Coloured by
+                    win/loss; rendered under the price line so the dots sit
+                    on top. */}
+                {tradeConnectors.map((c, i) => (
+                  <ReferenceLine
+                    key={`tc-${i}`}
+                    segment={[{ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }]}
+                    stroke={c.won ? '#22c55e' : '#ef4444'}
+                    strokeWidth={1.5}
+                    strokeDasharray="3 3"
+                    strokeOpacity={0.65}
+                    ifOverflow="hidden"
+                  />
+                ))}
+
+                {/* Live-position entry marker — anchored at entry candle.
+                    Rendered before the price area so the price line still
+                    reads cleanly above it. */}
+                {hasLivePos && livePos?.entry_date && (
+                  <Line type="monotone" dataKey="liveEntryY"
+                    stroke="transparent"
+                    dot={<LiveEntryDot/>} activeDot={false}
+                    isAnimationActive={false}
                   />
                 )}
 
@@ -763,20 +1111,37 @@ export default function TradingView() {
                 <Area type="monotone" dataKey="close"
                   stroke="#22c55e" strokeWidth={2.5}
                   fill="url(#priceGrad)"
-                  dot={<TradeDot/>}
+                  dot={false}
                   activeDot={{ r: 5, fill: '#22c55e', stroke: 'white', strokeWidth: 2 }}
                   connectNulls={false}
                 />
 
-                {/* Projection dashed line */}
-                <Line type="monotone" dataKey="projected"
-                  stroke="#64748b" strokeWidth={1.5} strokeDasharray="5 4"
-                  dot={false} activeDot={false} connectNulls
+                {/* Trade entry markers (hollow circles on entry candles) */}
+                <Line type="monotone" dataKey="entryY"
+                  stroke="transparent"
+                  dot={<EntryDot/>} activeDot={false}
+                  isAnimationActive={false}
                 />
 
-                {/* NOW vertical line */}
-                {nowTs > 0 && (
-                  <ReferenceLine x={nowTs} stroke="#475569" strokeWidth={1.5}
+                {/* Trade exit markers (filled triangles, win/loss coloured) */}
+                <Line type="monotone" dataKey="exitY"
+                  stroke="transparent"
+                  dot={<ExitDot/>} activeDot={false}
+                  isAnimationActive={false}
+                />
+
+                {/* Projection dashed line — opt-in via the toggle above. */}
+                {showProjection && (
+                  <Line type="monotone" dataKey="projected"
+                    stroke="#64748b" strokeWidth={1.5} strokeDasharray="5 4"
+                    dot={false} activeDot={false} connectNulls
+                  />
+                )}
+
+                {/* NOW vertical line — pinned to actual wall-clock time, not
+                    the (potentially 6h-stale) last candle. */}
+                {liveNowTs > 0 && (
+                  <ReferenceLine x={liveNowTs} stroke="#475569" strokeWidth={1.5}
                     label={{ value: 'Now', position: 'insideTopRight', fill: '#94a3b8', fontSize: 10 }}
                   />
                 )}
@@ -795,10 +1160,13 @@ export default function TradingView() {
                   />
                 )}
 
-                {/* Est. Strike (monitoring mode) */}
+                {/* Target line (monitoring mode) — single dashed line at
+                    zone_center replaces the old wide blue band. The bot
+                    deterministically picks the strike closest to centre, so
+                    a band over-states the breadth of behaviour. */}
                 {estStrike != null && (
-                  <ReferenceLine y={estStrike} stroke="#f59e0b" strokeDasharray="4 6" strokeWidth={1.5} strokeOpacity={0.6}
-                    label={{ value: `Est. Strike ${K(estStrike)}`, position: 'insideTopLeft', fill: '#f59e0b', fontSize: 9, opacity: 0.75 }}
+                  <ReferenceLine y={estStrike} stroke="#3b82f6" strokeDasharray="6 4" strokeWidth={1.5} strokeOpacity={0.7}
+                    label={{ value: `Target ≈ ${K(estStrike)}`, position: 'insideTopLeft', fill: '#60a5fa', fontSize: 10 }}
                   />
                 )}
 
@@ -809,10 +1177,21 @@ export default function TradingView() {
                   />
                 )}
 
-                {/* Expiry vertical */}
-                {o?.expiry_ts != null && o.expiry_ts > nowTs && (
-                  <ReferenceLine x={o.expiry_ts} stroke="#a78bfa" strokeDasharray="4 4" strokeWidth={1.5}
-                    label={{ value: 'Expiry', position: 'insideTopRight', fill: '#a78bfa', fontSize: 10 }}
+                {/* Expiry vertical — drawn whenever an expiry is known. If
+                    expiry is in the past (e.g. mid-settlement) it shows in
+                    a faded slate so the user sees "happened" rather than
+                    silently dropping the line. */}
+                {o?.expiry_ts != null && (
+                  <ReferenceLine x={o.expiry_ts}
+                    stroke={o.expiry_ts > liveNowTs ? '#a78bfa' : '#475569'}
+                    strokeOpacity={o.expiry_ts > liveNowTs ? 1 : 0.6}
+                    strokeDasharray="4 4" strokeWidth={1.5}
+                    label={{
+                      value: o.expiry_ts > liveNowTs ? 'Expiry' : 'Expired',
+                      position: 'insideTopRight',
+                      fill: o.expiry_ts > liveNowTs ? '#a78bfa' : '#94a3b8',
+                      fontSize: 10,
+                    }}
                   />
                 )}
               </ComposedChart>
@@ -852,14 +1231,6 @@ export default function TradingView() {
                       infoPanel?.type === 'est_breakeven' ? 'bg-teal-900/60 border-teal-600 text-teal-300' : 'bg-slate-800 border-slate-700 border-dashed text-slate-400 hover:text-teal-300'
                     }`}>
                     📈 Est. BE {K(estBreakeven)}
-                  </button>
-                )}
-                {o?.zone_lower && (
-                  <button onClick={() => setInfoPanel(p => p?.type === 'zone' ? null : { type: 'zone' })}
-                    className={`text-xs px-2.5 py-1.5 rounded-full border font-medium transition-colors ${
-                      infoPanel?.type === 'zone' ? 'bg-blue-900/60 border-blue-600 text-blue-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-blue-300'
-                    }`}>
-                    🔵 Entry Zone
                   </button>
                 )}
                 {o?.expiry_ts && (() => {
