@@ -293,13 +293,18 @@ class AIOverSeer:
 
         from config import cfg
 
-        # Free capital: equity minus notional collateral locked in open positions
+        # Free capital: equity minus collateral locked in open positions.
+        # `contracts` is in BTC of underlying (Deribit's "amount") so collateral
+        # = strike × contracts. The pre-2026-05-01 formula multiplied by an
+        # extra contract_size_btc (0.1) and undercounted collateral 10× —
+        # which meant the LLM was told the bot had ~93% free capital when it
+        # really had ~30%. Same bug class as risk_manager.check_collateral.
         pos = open_position or {}
         reserved = 0.0
         if open_position:
             strike = pos.get("strike", 0)
             contracts = pos.get("contracts", 1)
-            reserved = strike * contracts * cfg.sizing.contract_size_btc
+            reserved = strike * contracts
         free_equity = max(current_equity - reserved, 0.0)
         free_equity_pct = (free_equity / current_equity * 100) if current_equity > 0 else 0.0
         low_capital = free_equity_pct < (cfg.sizing.min_free_equity_fraction * 100)
