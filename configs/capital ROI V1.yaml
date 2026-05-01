@@ -3,7 +3,7 @@ _meta:
   fitness: 26.073
   goal: null
   name: capital ROI V1
-  notes: 'Evolved — goal: capital_roi'
+  notes: "Evolved \u2014 goal: capital_roi"
   sharpe: 2.44
   source: evolved
   status: paper
@@ -68,7 +68,7 @@ strategy:
   initial_cycle: put
   iv_dynamic_delta: true
   iv_rank_threshold: 0.701
-  liquidity_top_n: 100
+  liquidity_top_n: 30
   max_dte: 37
   min_dte: 3
   target_delta_max: 0.4057

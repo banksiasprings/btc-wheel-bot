@@ -3,7 +3,7 @@ _meta:
   fitness: 8.833
   goal: null
   name: sharpe V1
-  notes: 'Evolved — goal: sharpe'
+  notes: "Evolved \u2014 goal: sharpe"
   sharpe: 2.68
   source: evolved
   status: paper
@@ -68,7 +68,7 @@ strategy:
   initial_cycle: put
   iv_dynamic_delta: true
   iv_rank_threshold: 0.701
-  liquidity_top_n: 100
+  liquidity_top_n: 30
   max_dte: 37
   min_dte: 3
   target_delta_max: 0.4057

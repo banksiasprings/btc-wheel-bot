@@ -15,7 +15,7 @@ strategy:
   initial_cycle: put
   iv_dynamic_delta: true
   iv_rank_threshold: 0.3
-  liquidity_top_n: 100
+  liquidity_top_n: 30
   max_dte: 45
   min_dte: 21
   target_delta_max: 0.4

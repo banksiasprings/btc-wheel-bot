@@ -1,11 +1,11 @@
 _meta:
   created_at: '2026-04-25T03:10:00.000000+00:00'
   fitness: null
-  goal: "Stress-test bot: same as chaos-tester but with delta-neutral hedge enabled"
+  goal: 'Stress-test bot: same as chaos-tester but with delta-neutral hedge enabled'
   name: chaos-hedged
-  notes: "TEST ONLY — identical to chaos-tester except hedge.enabled=true.
-    Run alongside chaos-tester to compare hedged vs unhedged P&L on identical
-    market conditions."
+  notes: "TEST ONLY \u2014 identical to chaos-tester except hedge.enabled=true. Run\
+    \ alongside chaos-tester to compare hedged vs unhedged P&L on identical market\
+    \ conditions."
   source: manual
   status: paper
 backtest:
@@ -27,10 +27,9 @@ deribit:
   ws_url_testnet: wss://test.deribit.com/ws/api/v2
 execution:
   order_confirm_timeout: 30
-  poll_interval: 30
+  poll_interval: 90
   slippage_tolerance: 0.01
 hedge:
-  # Hedging ON — shorts BTC-PERP to neutralise option delta each tick
   enabled: true
   rebalance_threshold: 0.05
 logging:
@@ -69,7 +68,7 @@ strategy:
   initial_cycle: put
   iv_dynamic_delta: false
   iv_rank_threshold: 0.0
-  liquidity_top_n: 200
+  liquidity_top_n: 30
   max_dte: 7
   min_dte: 1
   target_delta_max: 0.5
