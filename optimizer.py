@@ -92,7 +92,10 @@ FITNESS_WEIGHTS = {
 # ── Fitness scoring ────────────────────────────────────────────────────────────
 
 
-EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "daily_trader")
+EVOLVE_GOALS = (
+    "balanced", "max_yield", "safest", "sharpe", "capital_roi",
+    "daily_trader", "small_bot_specialist",
+)
 
 
 def _fitness_for_goal(result: dict, goal: str) -> float:
@@ -169,6 +172,51 @@ def _fitness_for_goal(result: dict, goal: str) -> float:
         profit_ok  = 1.0 if r >= 0 else max(0.0, 1.0 + r * 2)  # penalise losses gently
         safety     = max(0.0, 1.0 - dd / 0.50)            # only hurts if drawdown > 50%
         return activity * 3.0 + profit_ok * 1.0 + safety * 0.5
+    elif goal == "small_bot_specialist":
+        # Aggressive variant of capital_roi tuned for the user's "many small
+        # bots" thesis. Where capital_roi puts 15% on capital floor, this puts
+        # 40% — the optimizer is *primarily* searching for the smallest
+        # equity that can still earn positive premium-on-margin. Other
+        # dimensions are kept as floors (must not lose money, must not
+        # over-leverage) rather than primary objectives.
+        prem_on_margin     = result.get("premium_on_margin", 0.0)
+        min_viable_capital = result.get("min_viable_capital", 0.0)
+        avg_margin_util    = result.get("avg_margin_utilization", 0.0)
+        num_trades         = result.get("num_cycles", 0)
+
+        activity_penalty = 1.0 if num_trades >= 6 else num_trades / 6.0
+
+        # Aggressive capital floor — saturates at $10k, zero at $100k.
+        if min_viable_capital <= 0:
+            capital_score = 0.0
+        elif min_viable_capital <= 10_000:
+            capital_score = 1.0
+        elif min_viable_capital >= 100_000:
+            capital_score = 0.0
+        else:
+            capital_score = 1.0 - (min_viable_capital - 10_000) / 90_000.0
+
+        # Don't lose money — hard gate, not a smooth penalty.
+        profit_ok = 1.0 if r >= 0 else max(0.0, 1.0 + r * 4)   # -25% return → 0.0
+
+        # Margin utilisation penalty — same shape as capital_roi.
+        if avg_margin_util <= 0.30:
+            util_score = 1.0
+        elif avg_margin_util >= 0.70:
+            util_score = 0.0
+        else:
+            util_score = 1.0 - (avg_margin_util - 0.30) / 0.40
+
+        prem_score = float(np.clip(prem_on_margin / 0.30, 0.0, 1.0))
+
+        score = (
+            0.40 * capital_score +    # 40% — small capital is the WHOLE point
+            0.20 * prem_score +        # 20% — premium yield on margin
+            0.15 * profit_ok +         # 15% — must not lose money
+            0.15 * util_score +        # 15% — keep margin util reasonable
+            0.10 * win                 # 10% — win rate
+        ) * activity_penalty
+        return round(float(np.clip(score, 0.0, 1.0)), 4)
     else:  # "balanced"
         return (sharpe * 2) + (r * 3) + (win * 2) - (dd * 3)
 

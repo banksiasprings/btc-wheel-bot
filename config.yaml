@@ -57,7 +57,7 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.701
+  iv_rank_threshold: 0.3
   liquidity_top_n: 100
   max_dte: 37
   min_dte: 3

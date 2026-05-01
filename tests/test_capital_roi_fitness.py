@@ -152,3 +152,75 @@ def test_old_result_without_capital_fields_still_scores():
     # Should still return a valid score (capital_score will be 0 → some penalty,
     # but the function shouldn't KeyError).
     assert 0.0 <= score <= 1.0
+
+
+# ── small_bot_specialist goal ─────────────────────────────────────────────────
+
+
+def test_small_bot_specialist_rewards_tiny_capital_more_aggressively():
+    """
+    Capital_roi: $20k vs $200k → ~15% score gap (15% of fitness weighted).
+    Small_bot_specialist: $20k vs $200k → ~40% score gap (40% weighted).
+    """
+    cap_small  = _fitness_for_goal(_result(min_viable_capital=20_000), "capital_roi")
+    cap_large  = _fitness_for_goal(_result(min_viable_capital=200_000), "capital_roi")
+    sbs_small  = _fitness_for_goal(_result(min_viable_capital=20_000), "small_bot_specialist")
+    sbs_large  = _fitness_for_goal(_result(min_viable_capital=200_000), "small_bot_specialist")
+    cap_gap = cap_small - cap_large
+    sbs_gap = sbs_small - sbs_large
+    assert sbs_gap > cap_gap, (
+        f"small_bot_specialist gap ({sbs_gap:.3f}) should exceed "
+        f"capital_roi gap ({cap_gap:.3f}) — that's the whole point."
+    )
+
+
+def test_small_bot_specialist_floor_at_10k_not_20k():
+    """small_bot_specialist saturates at $10k (vs $20k for capital_roi)."""
+    a = _fitness_for_goal(_result(min_viable_capital=10_000), "small_bot_specialist")
+    b = _fitness_for_goal(_result(min_viable_capital=15_000), "small_bot_specialist")
+    # 10k = full credit; 15k = partial (smaller score)
+    assert a > b
+
+
+def test_small_bot_specialist_zero_at_100k():
+    """small_bot_specialist's capital component zeros at $100k (vs $200k capital_roi)."""
+    at_100k = _fitness_for_goal(_result(min_viable_capital=100_000), "small_bot_specialist")
+    at_500k = _fitness_for_goal(_result(min_viable_capital=500_000), "small_bot_specialist")
+    assert at_100k == at_500k, (
+        f"At $100k+ the capital component should already be zeroed "
+        f"({at_100k} vs {at_500k}) — this is the small-bot specialism kicking in."
+    )
+
+
+def test_small_bot_specialist_hard_loss_gate():
+    """
+    Losing strategies should score very low — the profit_ok term uses a 4×
+    multiplier (vs 2× in daily_trader), so even -10% return → profit_ok=0.6.
+    """
+    profitable = _fitness_for_goal(
+        _result(min_viable_capital=10_000, return_pct=10.0), "small_bot_specialist"
+    )
+    losing = _fitness_for_goal(
+        _result(min_viable_capital=10_000, return_pct=-25.0), "small_bot_specialist"
+    )
+    assert profitable > losing
+    # At -25% return, profit_ok = max(0, 1 + (-0.25)*4) = 0
+    # so the 0.15 contribution drops out entirely
+    assert losing < profitable - 0.10
+
+
+def test_small_bot_specialist_score_bounded():
+    great = _fitness_for_goal(_result(
+        return_pct=50, sharpe=5.0, win_rate=90, drawdown=3,
+        margin_roi=2.0, premium_on_margin=0.40,
+        min_viable_capital=5_000, avg_margin_util=0.20,
+        num_trades=20,
+    ), "small_bot_specialist")
+    assert 0.0 <= great <= 1.0
+    bad = _fitness_for_goal(_result(
+        return_pct=-50, sharpe=-5.0, win_rate=10, drawdown=50,
+        margin_roi=-2.0, premium_on_margin=0.0,
+        min_viable_capital=500_000, avg_margin_util=0.95,
+        num_trades=0,
+    ), "small_bot_specialist")
+    assert bad == 0.0

@@ -30,12 +30,13 @@ import ConfigSelector from './ConfigSelector'
 type StepStatus = 'not_started' | 'in_progress' | 'complete' | 'locked'
 
 const EVOLVE_GOALS: { id: EvolveGoal; icon: string; label: string; desc?: string }[] = [
-  { id: 'balanced',     icon: '🎯', label: 'Balanced'                                            },
-  { id: 'max_yield',    icon: '🚀', label: 'Max Yield'                                           },
-  { id: 'safest',       icon: '🛡', label: 'Safest'                                              },
-  { id: 'sharpe',       icon: '⚖️', label: 'Sharpe'                                              },
-  { id: 'capital_roi',  icon: '📊', label: 'Capital ROI'                                         },
-  { id: 'daily_trader', icon: '⚡', label: 'Daily Trader', desc: 'max trades · test the pipeline' },
+  { id: 'balanced',             icon: '🎯', label: 'Balanced'                                            },
+  { id: 'max_yield',            icon: '🚀', label: 'Max Yield'                                           },
+  { id: 'safest',               icon: '🛡', label: 'Safest'                                              },
+  { id: 'sharpe',               icon: '⚖️', label: 'Sharpe'                                              },
+  { id: 'capital_roi',          icon: '📊', label: 'Capital ROI'                                         },
+  { id: 'small_bot_specialist', icon: '🐝', label: 'Small Bot',     desc: 'tiny capital · many bots'     },
+  { id: 'daily_trader',         icon: '⚡', label: 'Daily Trader',  desc: 'max trades · test the pipeline' },
 ]
 
 // Hardcoded "reckless" params for the Daily Trader quick-start preset.
@@ -80,6 +81,8 @@ function goalExplainer(goal: EvolveGoal, w: EvolveGenome): string {
       return `Best risk-adjusted performance. Sharpe ${w.sharpe.toFixed(2)} — the highest return per unit of volatility in the population. Drawdown held at ${w.drawdown.toFixed(1)}%.`
     case 'capital_roi':
       return `Capital efficiency winner. ${ret(w.return_pct)} return on deployed margin with Sharpe ${w.sharpe.toFixed(2)}. The optimizer balanced deployment aggressiveness against drawdown risk.`
+    case 'small_bot_specialist':
+      return `Tiny-capital winner. Built to run profitably from small accounts (${w.min_viable_capital ? `\$${(w.min_viable_capital / 1000).toFixed(0)}k floor` : 'low capital floor'}) so you can deploy many in parallel. ${ret(w.return_pct)} return, ${w.win_rate.toFixed(0)}% win rate, premium-on-margin ${w.premium_on_margin != null ? (w.premium_on_margin * 100).toFixed(1) + '%' : 'tracked'}.`
     default:
       return `Balanced across return, risk, and win rate. ${ret(w.return_pct)} return, Sharpe ${w.sharpe.toFixed(2)}, ${w.win_rate.toFixed(0)}% win rate, ${w.drawdown.toFixed(1)}% max drawdown.`
   }

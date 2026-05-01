@@ -551,7 +551,7 @@ def get_evolve_results() -> dict:
 def get_evolve_results_all() -> dict:
     """Return per-goal evolution results with version history and delta vs previous run."""
     result: dict[str, dict] = {}
-    for goal in ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "daily_trader"):
+    for goal in ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "daily_trader", "small_bot_specialist"):
         genome = _read_yaml(OPT_DIR / f"best_genome_{goal}.yaml") or _read_yaml(OPT_DIR / "best_genome.yaml")
         ts = _evolve_goal_ts(goal)
 
@@ -1065,7 +1065,7 @@ def _sweep_best_fitness() -> float | None:
     return best
 
 
-_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi")
+_EVOLVE_GOALS = ("balanced", "max_yield", "safest", "sharpe", "capital_roi", "small_bot_specialist")
 
 
 def _evolve_preset_for_goal(goal: str) -> tuple[dict | None, float | None]:

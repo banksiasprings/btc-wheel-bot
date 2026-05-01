@@ -203,7 +203,7 @@ export interface PresetInfo {
   params: PresetParams
 }
 
-export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe' | 'capital_roi' | 'daily_trader'
+export type EvolveGoal = 'balanced' | 'max_yield' | 'safest' | 'sharpe' | 'capital_roi' | 'daily_trader' | 'small_bot_specialist'
 export type ActivePreset = 'sweep' | `evolve_${EvolveGoal}` | 'custom'
 
 export interface PresetsData {

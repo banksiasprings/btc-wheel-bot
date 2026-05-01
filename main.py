@@ -155,10 +155,36 @@ def cmd_live(cfg) -> None:
     logger.warning("  Ensure your account has sufficient margin.")
     logger.warning("═" * 60)
 
-    confirm = input("\n  Type 'YES I UNDERSTAND' to proceed: ").strip()
-    if confirm != "YES I UNDERSTAND":
-        logger.info("Live mode cancelled")
-        sys.exit(0)
+    # Confirmation step. Two paths:
+    #   1. Interactive (TTY attached): prompt for "YES I UNDERSTAND".
+    #   2. Non-interactive (systemd, supervisor, container): read
+    #      WHEEL_BOT_LIVE_CONFIRM env var. Must equal "YES I UNDERSTAND"
+    #      to proceed. If unset, we sys.exit cleanly so the unit fails
+    #      fast and visibly rather than blocking on input() forever.
+    expected = "YES I UNDERSTAND"
+    env_confirm = os.environ.get("WHEEL_BOT_LIVE_CONFIRM", "")
+    if env_confirm:
+        if env_confirm != expected:
+            logger.error(
+                f"WHEEL_BOT_LIVE_CONFIRM set but doesn't match "
+                f"the expected confirmation phrase. Live mode aborted."
+            )
+            sys.exit(1)
+        logger.info("Live mode confirmed via WHEEL_BOT_LIVE_CONFIRM env var.")
+    elif sys.stdin.isatty():
+        confirm = input(f"\n  Type '{expected}' to proceed: ").strip()
+        if confirm != expected:
+            logger.info("Live mode cancelled")
+            sys.exit(0)
+    else:
+        logger.error(
+            "Running non-interactively (no TTY) and WHEEL_BOT_LIVE_CONFIRM "
+            "is not set. Live mode requires explicit confirmation. To "
+            "proceed under systemd / docker / cron, set:\n"
+            "  WHEEL_BOT_LIVE_CONFIRM='YES I UNDERSTAND'\n"
+            "Aborting to avoid an infinite input() block."
+        )
+        sys.exit(1)
 
     logger.info("Live mode confirmed — starting bot…")
     bot = WheelBot(cfg, paper=False)
