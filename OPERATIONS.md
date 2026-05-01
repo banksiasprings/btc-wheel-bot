@@ -97,6 +97,79 @@ rm KILL_SWITCH
 
 ---
 
+## Bot farm (running 15+ paper bots in parallel)
+
+The farm runs every config in `configs/` whose `_meta.status == "paper"`
+as its own subprocess, with isolated state under `farm/<slug>/`. As of
+2026-05-02 the fleet is 15 bots — the main config + 14 thesis variants.
+
+### Start the farm
+
+```bash
+cd ~/Documents/btc-wheel-bot
+nohup /usr/local/bin/python3.11 bot_farm.py > logs/farm.log 2>&1 &
+disown
+echo $! > /tmp/farm.pid
+```
+
+The supervisor discovers paper configs every 60 s and spawns or stops
+subprocesses as configs are added/removed/changed.
+
+### Check farm health
+
+```bash
+# Supervisor + every bot subprocess
+ps -ef | grep -E "bot_farm|main\.py --mode=paper" | grep -v grep
+
+# Per-bot status (updated every 60 s by the supervisor)
+cat farm/status.json | jq '.bots[] | "\(.id): trades=\(.metrics.num_trades) equity=$\(.metrics.current_equity)"'
+
+# Per-bot heartbeat (each bot writes its own)
+ls -la farm/*/bot_heartbeat.json | head -20
+```
+
+### Stop the farm
+
+```bash
+# Graceful — supervisor catches SIGTERM and stops each bot
+kill $(cat /tmp/farm.pid)
+
+# Per-bot kill switch (stop just one bot)
+echo "stop $(date)" > farm/<slug>/KILL_SWITCH
+```
+
+### Adding a new test bot
+
+```bash
+# Edit / add a config in configs/<name>.yaml with _meta.status: paper
+# The farm picks it up within 60 s automatically.
+```
+
+### Removing a test bot
+
+Set `_meta.status` to anything other than "paper" (e.g. `archived`,
+`draft`). The supervisor stops the subprocess on the next discovery tick.
+
+### Forecast validation across the fleet
+
+```bash
+# Create a 30-day snapshot for every paper bot
+python3.11 forecast_validator.py create --all-paper-bots \
+    --horizon-days 30 --starting-equity 100000
+
+# Validate any due snapshots across all paper bots
+python3.11 forecast_validator.py validate --all-paper-bots
+
+# List snapshots from every paper bot
+python3.11 forecast_validator.py list --all-paper-bots
+```
+
+Each bot's snapshots live in `farm/<slug>/data/forecasts/`. The Sunday
+cloud routine ([trig_0153UrVWvYz2yv58yjEQhndk](https://claude.ai/code/routines/trig_0153UrVWvYz2yv58yjEQhndk))
+runs both create + validate weekly across the fleet.
+
+---
+
 ## Forecast validation loop
 
 The forecast-validator captures the backtest's predictions at a fixed time and
