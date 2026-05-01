@@ -36,6 +36,18 @@ from deribit_client import DeribitPublicREST
 Cycle = Literal["put", "call"]
 
 
+# ── Hedge cost calibration ─────────────────────────────────────────────────────
+# Real Deribit BTC-PERP funding settles every 8 hours (3× per day) at typically
+# 0.01–0.03% per epoch in calm regimes — i.e. ~0.03–0.09% per day on perp
+# notional. The pre-2026-05-01 model used 0.0001 (1 bp/day) which understated
+# real-world funding by 3–9×. We target the conservative middle (0.03%/day).
+# Spread cost on perp rebalances = 0.02% of notional per trade — leave at the
+# original calibration; the audit found that already conservative for Deribit
+# (typical $1–5 spread on $77k spot ≈ 0.001–0.006%).
+HEDGE_FUNDING_DAILY  = 0.0003   # 0.03% / day on perp notional
+HEDGE_REBALANCE_BPS  = 0.0002   # 0.02% / rebalance
+
+
 # ── Black-Scholes helpers ──────────────────────────────────────────────────────
 
 def _d1(S: float, K: float, T: float, r: float, sigma: float) -> float:
@@ -501,7 +513,7 @@ class Backtester:
 
                 # Final day hedge mark-to-market (close the hedge at expiry spot)
                 daily_hedge_pnl = leg["hedge_btc"] * (spot - leg["prev_spot"])
-                daily_funding   = abs(leg["hedge_btc"]) * spot * 0.0001
+                daily_funding   = abs(leg["hedge_btc"]) * spot * HEDGE_FUNDING_DAILY
                 leg["hedge_pnl_total"]     += daily_hedge_pnl
                 leg["hedge_funding_total"] += daily_funding
 
@@ -566,8 +578,10 @@ class Backtester:
 
                 # Daily hedge mark-to-market P&L on the perp position
                 daily_hedge_pnl = leg["hedge_btc"] * (spot - leg["prev_spot"])
-                # Daily funding cost: ~0.01%/day on perp notional (BTC-PERP funding)
-                daily_funding   = abs(leg["hedge_btc"]) * spot * 0.0001
+                # Daily funding cost on perp notional. See HEDGE_FUNDING_DAILY
+                # at top of file for the calibration rationale (3× the
+                # pre-2026-05-01 value, matching real Deribit funding).
+                daily_funding   = abs(leg["hedge_btc"]) * spot * HEDGE_FUNDING_DAILY
                 leg["hedge_pnl_total"]     += daily_hedge_pnl
                 leg["hedge_funding_total"] += daily_funding
                 leg["prev_spot"]            = spot
@@ -583,8 +597,9 @@ class Backtester:
                 adjustment = lots * 0.1
 
                 if abs(adjustment) >= 0.1:
-                    # Spread/slippage: ~0.02% of notional per rebalance trade
-                    spread_cost = abs(adjustment) * spot * 0.0002
+                    # Spread/slippage on perp rebalance — calibrated to typical
+                    # Deribit BTC-PERP spread (~0.02% of notional per trade).
+                    spread_cost = abs(adjustment) * spot * HEDGE_REBALANCE_BPS
                     leg["hedge_funding_total"] += spread_cost
                     leg["hedge_btc"]           += adjustment
                     logger.debug(
@@ -661,7 +676,7 @@ class Backtester:
                     else +entry_delta * contracts
                 )
                 # Opening spread cost for the initial hedge trade
-                opening_spread = abs(initial_hedge) * spot * 0.0002
+                opening_spread = abs(initial_hedge) * spot * HEDGE_REBALANCE_BPS
 
                 # Deribit initial margin for short put/call (BTC-settled options)
                 # margin = max(0.15 - OTM_pct, 0.10) × underlying × notional_btc

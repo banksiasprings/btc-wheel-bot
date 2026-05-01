@@ -109,16 +109,54 @@ def _fitness_for_goal(result: dict, goal: str) -> float:
     elif goal == "sharpe":
         return sharpe * 3 + win * 1
     elif goal == "capital_roi":
-        # Optimise for return on margin deployed
-        margin_roi = result.get("annualised_margin_roi", 0.0)
-        num_trades = result.get("num_cycles", 0)
-        # Penalise if too few trades (strategy not active enough)
+        # Optimise for the user's stated thesis: small-capital, high-margin-ROI,
+        # low-risk hedged premium harvesting. Compared to the previous scorer
+        # (return-on-margin only) this also rewards LOW minimum viable capital
+        # and LOW margin utilisation — without those, the optimizer happily
+        # picks configs that need $200k+ to trade and lock 90% of equity in
+        # collateral. Both kill the "millions of small bots" thesis.
+        margin_roi          = result.get("annualised_margin_roi", 0.0)
+        prem_on_margin      = result.get("premium_on_margin", 0.0)
+        min_viable_capital  = result.get("min_viable_capital", 0.0)
+        avg_margin_util     = result.get("avg_margin_utilization", 0.0)
+        num_trades          = result.get("num_cycles", 0)
+
+        # Penalise idle strategies — fewer than 6 trades over the backtest
+        # period means the activity numbers can't be trusted.
         activity_penalty = 1.0 if num_trades >= 6 else num_trades / 6.0
+
+        # Reward low minimum capital — saturates at $20k (small-bot target),
+        # zero reward beyond $200k (institutional-only).
+        if min_viable_capital <= 0:
+            capital_score = 0.0   # no data; treat as worst
+        elif min_viable_capital <= 20_000:
+            capital_score = 1.0
+        elif min_viable_capital >= 200_000:
+            capital_score = 0.0
+        else:
+            capital_score = 1.0 - (min_viable_capital - 20_000) / 180_000.0
+
+        # Reward low margin utilisation — using <30% leaves room for vol
+        # spikes and gamma rebalances. >70% is dangerous.
+        if avg_margin_util <= 0.30:
+            util_score = 1.0
+        elif avg_margin_util >= 0.70:
+            util_score = 0.0
+        else:
+            util_score = 1.0 - (avg_margin_util - 0.30) / 0.40
+
+        # Reward yield-on-margin saturating at 30% (premium income / margin
+        # deployed). 30% over a 12-month backtest = exceptional; 5% = mediocre.
+        prem_score = float(np.clip(prem_on_margin / 0.30, 0.0, 1.0))
+
         score = (
-            0.45 * min(margin_roi, 3.0) / 3.0 +    # ROI on margin — capped at 300% annual
-            0.25 * min(sharpe, 3.0) / 3.0 +          # Risk-adjusted
-            0.15 * max(0.0, 1.0 - dd / 0.30) +       # Drawdown penalty
-            0.15 * win                                  # Win rate
+            0.30 * min(margin_roi, 2.0) / 2.0 +    # 30% — annualised margin ROI capped at 200%
+            0.20 * prem_score +                      # 20% — premium income / margin used
+            0.15 * capital_score +                   # 15% — low capital floor
+            0.15 * util_score +                      # 15% — keep margin utilisation below 50%
+            0.10 * min(sharpe, 3.0) / 3.0 +         # 10% — risk-adjusted return
+            0.05 * max(0.0, 1.0 - dd / 0.30) +      # 5% — drawdown discipline
+            0.05 * win                                # 5% — win rate
         ) * activity_penalty
         return round(float(np.clip(score, 0.0, 1.0)), 4)
     elif goal == "daily_trader":
