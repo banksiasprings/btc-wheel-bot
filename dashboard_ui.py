@@ -1835,6 +1835,338 @@ def tab_recommendations() -> None:
 # TAB 6 — SETTINGS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def tab_fleet() -> None:
+    """
+    Cross-bot fleet view. Answers the user's question: "how is the system
+    working visually + ROI per bot, capital tied up, returns?"
+
+    Reads:
+      - farm/status.json (supervisor's per-bot snapshot, refreshed every 60s)
+      - farm/<slug>/data/current_position.json (live open-position detail)
+      - farm/<slug>/data/trades.csv (closed-trade ledger)
+      - farm/<slug>/bot_heartbeat.json (latest tick timestamp)
+
+    Renders:
+      1. Aggregate cards (fleet equity, margin deployed, open positions, etc.)
+      2. Per-bot leaderboard table sorted by ROI
+      3. Open-positions live snapshot
+      4. Equity-curve comparison chart (one normalized line per bot)
+      5. Capital-efficiency scatter (return % vs avg margin util %)
+    """
+    st.markdown("### 🛰 Fleet Monitor")
+    st.caption(
+        "Live view of every paper bot. Each row is one config running in "
+        "`farm/<slug>/`. Sorted by capital efficiency — the top-left of the "
+        "scatter (high return, low margin used) is the thesis you're hunting for."
+    )
+
+    farm_dir = BOT_DIR / "farm"
+    status_path = farm_dir / "status.json"
+    if not status_path.exists():
+        st.info(
+            "No `farm/status.json` yet. Start the farm with "
+            "`python3.11 bot_farm.py` to populate this view."
+        )
+        return
+
+    try:
+        farm_status = json.loads(status_path.read_text())
+    except Exception as exc:
+        st.error(f"Could not read farm/status.json: {exc}")
+        return
+
+    bots_meta = farm_status.get("bots", []) or []
+    if not bots_meta:
+        st.info("Farm supervisor is up but no bots are running.")
+        return
+
+    # ── Augment each bot row with live data from per-bot files ───────────────
+    rows: list[dict] = []
+    now = time.time()
+    for b in bots_meta:
+        bot_id = b.get("id", "?")
+        slug_dir = farm_dir / bot_id
+        m = b.get("metrics", {}) or {}
+        cs = b.get("config_summary", {}) or {}
+
+        starting_equity = float(m.get("starting_equity") or 0)
+        current_equity  = float(m.get("current_equity")  or starting_equity)
+        roi_pct         = ((current_equity - starting_equity) / starting_equity * 100.0
+                           if starting_equity > 0 else 0.0)
+
+        # Open position detail
+        cp_path = slug_dir / "data" / "current_position.json"
+        pos_open = False
+        pos_inst = "—"
+        pos_unreal = 0.0
+        pos_dte = None
+        pos_delta = None
+        margin_used_usd = 0.0
+        if cp_path.exists():
+            try:
+                cp = json.loads(cp_path.read_text())
+                if cp.get("open"):
+                    pos_open = True
+                    pos_inst = cp.get("instrument_name", "?")
+                    pos_unreal = float(cp.get("unrealized_pnl_usd") or 0)
+                    pos_dte = cp.get("days_to_expiry")
+                    pos_delta = cp.get("current_delta")
+                    # Cash-secured collateral = strike × contracts (BTC of underlying)
+                    strike = float(cp.get("strike") or 0)
+                    contracts = float(cp.get("contracts") or 0)
+                    margin_used_usd = strike * contracts
+            except Exception:
+                pass
+
+        # Heartbeat freshness
+        hb_path = slug_dir / "bot_heartbeat.json"
+        last_tick_s = None
+        if hb_path.exists():
+            try:
+                hb = json.loads(hb_path.read_text())
+                last_tick_s = max(0, int(now - hb.get("timestamp", 0)))
+            except Exception:
+                pass
+
+        rows.append({
+            "Bot": bot_id,
+            "Status": b.get("status", "?"),
+            "Equity $": current_equity,
+            "ROI %": roi_pct,
+            "Open Pos": pos_inst,
+            "Unrealized $": pos_unreal,
+            "Margin Used $": margin_used_usd,
+            "Util %": (margin_used_usd / current_equity * 100.0)
+                      if (pos_open and current_equity > 0) else 0.0,
+            "Trades": int(m.get("num_trades") or 0),
+            "Win %": float(m.get("win_rate") or 0) * 100.0,
+            "Sharpe": float(m.get("sharpe") or 0),
+            "Max DD %": float(m.get("max_drawdown") or 0) * 100.0,
+            "DTE": pos_dte if pos_open else None,
+            "Δ": round(pos_delta, 3) if pos_delta is not None else None,
+            "Last tick": (f"{last_tick_s}s" if last_tick_s is not None and last_tick_s < 600
+                          else (f"{last_tick_s // 60}m" if last_tick_s is not None else "—")),
+            "IV thresh": cs.get("iv_rank_threshold"),
+            "Start $": starting_equity,
+        })
+
+    df = pd.DataFrame(rows)
+
+    # ── Aggregate cards ──────────────────────────────────────────────────────
+    n_running = sum(1 for b in bots_meta if b.get("status") == "running")
+    n_open = int(df["Open Pos"].apply(lambda v: v != "—").sum())
+    fleet_equity = float(df["Equity $"].sum())
+    fleet_start  = float(df["Start $"].sum())
+    fleet_unreal = float(df["Unrealized $"].sum())
+    fleet_margin = float(df["Margin Used $"].sum())
+    fleet_trades = int(df["Trades"].sum())
+    util_pct = (fleet_margin / fleet_equity * 100.0) if fleet_equity > 0 else 0.0
+    pnl_pct = ((fleet_equity - fleet_start) / fleet_start * 100.0) if fleet_start > 0 else 0.0
+
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    with c1:
+        metric_card("Bots Running", f"{n_running} / {len(bots_meta)}")
+    with c2:
+        metric_card("Fleet Equity", f"${fleet_equity:,.0f}",
+                    "green" if fleet_equity >= fleet_start else "red")
+    with c3:
+        metric_card("Fleet ROI", f"{pnl_pct:+.2f}%",
+                    "green" if pnl_pct >= 0 else "red")
+    with c4:
+        metric_card("Open Positions", f"{n_open}")
+    with c5:
+        metric_card(
+            "Margin Deployed",
+            f"${fleet_margin:,.0f}<br>"
+            f"<span style='font-size:13px;font-weight:400;opacity:0.75'>"
+            f"{util_pct:.1f}% of fleet</span>",
+            "amber" if util_pct > 50 else "",
+        )
+    with c6:
+        metric_card("Closed Trades", f"{fleet_trades}")
+
+    if abs(fleet_unreal) > 0.01:
+        st.caption(
+            f"Unrealized fleet P&L: **${fleet_unreal:+,.2f}** "
+            f"(across {n_open} open positions)"
+        )
+
+    st.divider()
+
+    # ── Per-bot leaderboard ──────────────────────────────────────────────────
+    st.markdown("#### 📊 Per-bot leaderboard")
+    st.caption("Sorted by ROI %. Click any column header to re-sort.")
+
+    df_view = df.copy()
+    df_view = df_view.sort_values("ROI %", ascending=False).reset_index(drop=True)
+    # Truncate long bot names so the table fits without horizontal scroll
+    df_view["Bot"] = df_view["Bot"].apply(
+        lambda s: s if len(s) <= 26 else s[:23] + "…"
+    )
+
+    st.dataframe(
+        df_view,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Bot":            st.column_config.TextColumn("Bot", width="medium"),
+            "Status":         st.column_config.TextColumn("Status", width="small"),
+            "Equity $":       st.column_config.NumberColumn("Equity $", format="$%.0f"),
+            "ROI %":          st.column_config.NumberColumn("ROI %", format="%+.2f%%"),
+            "Open Pos":       st.column_config.TextColumn("Open Pos", width="medium"),
+            "Unrealized $":   st.column_config.NumberColumn("Unreal $", format="$%+.0f"),
+            "Margin Used $":  st.column_config.NumberColumn("Margin $", format="$%.0f"),
+            "Util %":         st.column_config.NumberColumn("Util %", format="%.1f%%"),
+            "Trades":         st.column_config.NumberColumn("Trades", format="%d"),
+            "Win %":          st.column_config.NumberColumn("Win %", format="%.0f%%"),
+            "Sharpe":         st.column_config.NumberColumn("Sharpe", format="%.2f"),
+            "Max DD %":       st.column_config.NumberColumn("Max DD %", format="%.1f%%"),
+            "DTE":            st.column_config.NumberColumn("DTE", format="%d"),
+            "Δ":              st.column_config.NumberColumn("Δ", format="%.3f"),
+            "Last tick":      st.column_config.TextColumn("Last", width="small"),
+            "IV thresh":      st.column_config.NumberColumn("IV thresh", format="%.2f"),
+            "Start $":        None,   # hide from view
+        },
+    )
+
+    st.divider()
+
+    # ── Open positions live snapshot ────────────────────────────────────────
+    open_rows = df[df["Open Pos"] != "—"].copy()
+    if len(open_rows) > 0:
+        st.markdown(f"#### 🎯 Open positions ({len(open_rows)})")
+        st.caption("What's currently at risk across the fleet.")
+        open_view = open_rows[
+            ["Bot", "Open Pos", "DTE", "Δ", "Margin Used $", "Unrealized $"]
+        ].sort_values("Unrealized $", ascending=False).reset_index(drop=True)
+        st.dataframe(
+            open_view,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Margin Used $":  st.column_config.NumberColumn("Collateral $", format="$%.0f"),
+                "Unrealized $":   st.column_config.NumberColumn("Unreal $", format="$%+.0f"),
+                "DTE":            st.column_config.NumberColumn("DTE", format="%d"),
+                "Δ":              st.column_config.NumberColumn("Δ", format="%.3f"),
+            },
+        )
+
+    st.divider()
+
+    # ── Capital-efficiency scatter ──────────────────────────────────────────
+    st.markdown("#### 🎯 Capital efficiency map")
+    st.caption(
+        "Top-left = high return on low margin (the small-capital × high-ROI thesis). "
+        "Each dot is one bot. Bots without open positions cluster at Util=0."
+    )
+    try:
+        import plotly.graph_objects as go
+        active_df = df[df["Trades"] > 0].copy()
+        if len(active_df) == 0:
+            st.info("No bot has closed trades yet — chart populates when trades start firing.")
+        else:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=active_df["Util %"],
+                y=active_df["ROI %"],
+                mode="markers+text",
+                text=active_df["Bot"],
+                textposition="top center",
+                marker=dict(
+                    size=14,
+                    color=active_df["ROI %"],
+                    colorscale="RdYlGn",
+                    cmid=0,
+                    line=dict(width=1, color="#666"),
+                ),
+                hovertemplate=(
+                    "<b>%{text}</b><br>"
+                    "ROI: %{y:+.2f}%<br>"
+                    "Margin util: %{x:.1f}%<extra></extra>"
+                ),
+            ))
+            fig.add_hline(y=0, line=dict(color=C_GRID, width=1, dash="dot"))
+            fig.update_layout(
+                height=380,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=C_BG,
+                plot_bgcolor=C_CARD,
+                font=dict(color=C_TEXT, size=11),
+                xaxis=dict(
+                    title="Avg margin utilization (%)",
+                    gridcolor=C_GRID,
+                    zerolinecolor=C_GRID,
+                ),
+                yaxis=dict(
+                    title="ROI (%)",
+                    gridcolor=C_GRID,
+                    zerolinecolor=C_GRID,
+                ),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        st.warning(f"Couldn't render capital-efficiency chart: {exc}")
+
+    st.divider()
+
+    # ── Equity-curve comparison ─────────────────────────────────────────────
+    st.markdown("#### 📈 Equity curves (normalized to 100%)")
+    st.caption(
+        "Each line is one bot's equity over time, scaled so 100% = starting "
+        "equity. Diverging lines show which thesis is winning."
+    )
+    try:
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        plotted = 0
+        for b in bots_meta:
+            slug = b.get("id", "")
+            ec_path = farm_dir / slug / "data" / "equity_curve.json"
+            if not ec_path.exists():
+                continue
+            try:
+                ec = json.loads(ec_path.read_text())
+                dates = ec.get("dates", [])
+                equity = ec.get("equity", [])
+                start_eq = float(ec.get("starting_equity") or (equity[0] if equity else 1))
+                if not dates or not equity or start_eq <= 0:
+                    continue
+                normalized = [v / start_eq * 100.0 for v in equity]
+                fig.add_trace(go.Scatter(
+                    x=dates, y=normalized, mode="lines",
+                    name=slug, line=dict(width=1.5),
+                    hovertemplate=f"<b>{slug}</b><br>%{{x}}<br>%{{y:.2f}}%<extra></extra>",
+                ))
+                plotted += 1
+            except Exception:
+                continue
+        if plotted == 0:
+            st.info(
+                "No `equity_curve.json` files yet — these are written when a bot "
+                "closes its first trade. Once trades start firing, the curves populate."
+            )
+        else:
+            fig.add_hline(y=100, line=dict(color=C_GRID, width=1, dash="dot"))
+            fig.update_layout(
+                height=380,
+                margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=C_BG,
+                plot_bgcolor=C_CARD,
+                font=dict(color=C_TEXT, size=11),
+                xaxis=dict(title="Date", gridcolor=C_GRID),
+                yaxis=dict(title="Equity (% of start)", gridcolor=C_GRID),
+                legend=dict(
+                    orientation="h",
+                    bgcolor="rgba(0,0,0,0)",
+                    font=dict(size=10),
+                ),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        st.warning(f"Couldn't render equity curves: {exc}")
+
+
 def tab_forecasts() -> None:
     """
     Out-of-sample forecast validation tab.
@@ -2366,9 +2698,10 @@ def main() -> None:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 Backtest",
         "📈 Paper Trading",
+        "🛰 Fleet",
         "🧬 Optimizer",
         "📋 Recommendations",
         "📊 Forecasts",
@@ -2380,14 +2713,16 @@ def main() -> None:
     with tab2:
         tab_paper()
     with tab3:
-        tab_optimizer()
+        tab_fleet()
     with tab4:
-        tab_recommendations()
+        tab_optimizer()
     with tab5:
-        tab_forecasts()
+        tab_recommendations()
     with tab6:
-        tab_config()
+        tab_forecasts()
     with tab7:
+        tab_config()
+    with tab8:
         tab_settings()
 
 
