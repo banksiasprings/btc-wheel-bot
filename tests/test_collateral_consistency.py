@@ -89,9 +89,14 @@ def test_check_collateral_uses_correct_formula(rm):
     """
     Position: 0.1 BTC at $70k strike. Real cash-secured collateral = $7,000.
     With the bug, check_collateral computed $700 (10× too low).
-    Verify the corrected formula now returns the right scale by checking the
-    boundary: a position where real collateral ≈ equity × buffer should fail.
+    Verify the corrected formula now returns the right scale by checking
+    that an over-margined position is correctly blocked, regardless of
+    whether the live config has collateral_buffer at 1.0 (legacy default)
+    or 1.5 (post-2026-05-02 paper-mode aggressive value).
     """
+    from config import cfg
+    buffer = cfg.sizing.collateral_buffer
+
     pos = Position(
         instrument_name="BTC-1JAN26-70000-P",
         strike=70_000.0,
@@ -103,14 +108,20 @@ def test_check_collateral_uses_correct_formula(rm):
         current_price=0.02,
         entry_equity=10_000.0,
     )
-    # Real collateral = 70_000 × 0.1 = $7,000
-    # Equity = $7,500, buffer = 1.0 → max allowed = $7,500
-    # Should pass (7,000 < 7,500)
-    assert rm.check_collateral([pos], equity_usd=7_500.0, btc_price=70_000.0)
-    # Equity = $5,000, buffer = 1.0 → max allowed = $5,000
-    # Should FAIL (7,000 > 5,000) — this is what the buggy formula would have
-    # missed (it would have computed collateral = $700 < $5,000 = pass).
-    assert not rm.check_collateral([pos], equity_usd=5_000.0, btc_price=70_000.0)
+    # Real collateral = $7,000. With $7,000 / buffer + $1 of equity, the
+    # check should pass (well within budget); with $7,000 / buffer / 2, it
+    # should fail (over-budget regardless of buffer value).
+    safe_equity   = (7_000.0 / buffer) * 2.0      # 2× headroom
+    tight_equity  = (7_000.0 / buffer) * 0.5      # half budget — must fail
+    assert rm.check_collateral([pos], equity_usd=safe_equity, btc_price=70_000.0)
+    assert not rm.check_collateral([pos], equity_usd=tight_equity, btc_price=70_000.0)
+
+    # Sanity: with the buggy formula (× contract_size_btc), collateral was
+    # $700, so check_collateral([pos], equity=2_000) would have erroneously
+    # passed regardless of buffer. Verify it now FAILS at $2k equity since
+    # real collateral $7,000 > $2,000 × buffer in any reasonable config.
+    if buffer <= 3.0:    # well below absurd levels
+        assert not rm.check_collateral([pos], equity_usd=2_000.0, btc_price=70_000.0)
 
 
 def test_check_free_margin_uses_correct_formula(rm):

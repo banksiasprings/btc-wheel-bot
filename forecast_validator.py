@@ -74,6 +74,57 @@ def _trades_csv_path() -> Path:
     return _data_dir() / "trades.csv"
 
 
+# ── Multi-bot helpers (for the farm iteration loop) ───────────────────────────
+
+
+def _slugify(name: str) -> str:
+    """
+    Mirror bot_farm.py's slugifier so we resolve to the same data dirs.
+    `Safest V1` → `safest-v1`, `capital_roi_20260501_1813` → unchanged.
+    """
+    import re
+    slug = name.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    return slug or "config"
+
+
+def list_paper_bot_data_dirs(repo_root: Path | None = None) -> list[tuple[str, Path]]:
+    """
+    Return [(bot_name, bot_data_dir), ...] for every config with status='paper'.
+
+    bot_data_dir is the farm/<slug>/data/ path that bot_farm.py uses for
+    each bot's isolated state. Even if the farm isn't running, this is
+    where forecast snapshots SHOULD live so each bot is validated against
+    its own trades.csv.
+
+    Skips invalid YAML and configs without _meta.status. Always safe to
+    call — never raises.
+    """
+    root = repo_root or Path(__file__).parent
+    configs_dir = root / "configs"
+    out: list[tuple[str, Path]] = []
+    if not configs_dir.exists():
+        return out
+    try:
+        import yaml
+    except ImportError:
+        return out
+    for yaml_path in sorted(configs_dir.glob("*.yaml")):
+        try:
+            cfg = yaml.safe_load(yaml_path.read_text()) or {}
+        except Exception:
+            continue
+        meta = cfg.get("_meta") or {}
+        if meta.get("status") != "paper":
+            continue
+        name = meta.get("name") or yaml_path.stem
+        slug = _slugify(name)
+        bot_data_dir = root / "farm" / slug / "data"
+        out.append((name, bot_data_dir))
+    return out
+
+
 # ── Severity levels ────────────────────────────────────────────────────────────
 
 
@@ -819,7 +870,55 @@ def list_snapshots() -> list[dict]:
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 
+def _with_bot_data_dir(bot_data_dir: Path):
+    """
+    Context manager: temporarily set WHEEL_BOT_DATA_DIR so the module-level
+    `_data_dir()` and friends resolve to the farm bot's isolated data path.
+    Restores the original env on exit.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        prev = os.environ.get("WHEEL_BOT_DATA_DIR")
+        os.environ["WHEEL_BOT_DATA_DIR"] = str(bot_data_dir)
+        try:
+            yield
+        finally:
+            if prev is None:
+                del os.environ["WHEEL_BOT_DATA_DIR"]
+            else:
+                os.environ["WHEEL_BOT_DATA_DIR"] = prev
+    return _ctx()
+
+
 def _cli_create(args: argparse.Namespace) -> int:
+    if getattr(args, "all_paper_bots", False):
+        bots = list_paper_bot_data_dirs()
+        if not bots:
+            print("\n  No paper-status configs found in configs/.\n")
+            return 1
+        print(f"\nCreating snapshots for {len(bots)} paper bots…\n")
+        ok = 0
+        failed: list[tuple[str, str]] = []
+        for name, bot_data_dir in bots:
+            try:
+                with _with_bot_data_dir(bot_data_dir):
+                    out = create_snapshot(
+                        horizon_days=args.horizon_days,
+                        btc_price_now=args.btc_price or 0.0,
+                        iv_rank_now=args.iv_rank or 0.0,
+                        note=(args.note or "") + f" [bot={name}]",
+                        starting_equity_override=args.starting_equity,
+                    )
+                print(f"  ✓ {name}: {out.name}")
+                ok += 1
+            except Exception as exc:
+                print(f"  ✗ {name}: {exc}")
+                failed.append((name, str(exc)))
+        print(f"\n{ok}/{len(bots)} created. {len(failed)} failed.\n")
+        return 0 if not failed else 1
+
     out = create_snapshot(
         horizon_days=args.horizon_days,
         btc_price_now=args.btc_price or 0.0,
@@ -832,6 +931,33 @@ def _cli_create(args: argparse.Namespace) -> int:
 
 
 def _cli_validate(args: argparse.Namespace) -> int:
+    if getattr(args, "all_paper_bots", False):
+        bots = list_paper_bot_data_dirs()
+        if not bots:
+            print("\n  No paper-status configs found in configs/.\n")
+            return 1
+        print(f"\nValidating snapshots across {len(bots)} paper bots…\n")
+        any_fail = False
+        for name, bot_data_dir in bots:
+            try:
+                with _with_bot_data_dir(bot_data_dir):
+                    results = validate_all_due(force=args.force)
+            except Exception as exc:
+                print(f"  ✗ {name}: validate errored: {exc}")
+                continue
+            if not results:
+                continue   # silent on no-due — keeps the report tight
+            for r in results:
+                print(
+                    f"  {name:<32}  {r['snapshot_id']}  →  "
+                    f"{r['overall_status'].upper():<8}  "
+                    f"({r['findings_count']} findings)"
+                )
+                if r["overall_status"] == SEVERITY_FAIL:
+                    any_fail = True
+        print()
+        return 2 if any_fail else 0
+
     results = validate_all_due(force=args.force)
     if not results:
         print("\n  No snapshots to validate (none due, or all already validated).\n")
@@ -849,6 +975,30 @@ def _cli_validate(args: argparse.Namespace) -> int:
 
 
 def _cli_list(args: argparse.Namespace) -> int:
+    if getattr(args, "all_paper_bots", False):
+        bots = list_paper_bot_data_dirs()
+        if not bots:
+            print("\n  No paper-status configs found in configs/.\n")
+            return 0
+        print()
+        print(f"  {'BOT':<32}  {'ID':<18}  {'CREATED':<19}  {'HORIZON':>8}  {'STATUS':<10}")
+        print(f"  {'-'*32}  {'-'*18}  {'-'*19}  {'-'*8}  {'-'*10}")
+        total = 0
+        for name, bot_data_dir in bots:
+            with _with_bot_data_dir(bot_data_dir):
+                snaps = list_snapshots()
+            for s in snaps:
+                print(
+                    f"  {name:<32}  {s['snapshot_id']:<18}  "
+                    f"{s['created_at'][:19]:<19}  {s['horizon_days']:>5}d   "
+                    f"{s['status']:<10}"
+                )
+                total += 1
+        if total == 0:
+            print(f"\n  No snapshots in any paper bot's data/forecasts/ yet.")
+        print()
+        return 0
+
     snaps = list_snapshots()
     if not snaps:
         print("\n  No snapshots found in data/forecasts/\n")
@@ -894,14 +1044,27 @@ def main() -> int:
                           help="Override config.yaml starting_equity for the backtest "
                                "(useful when configured equity is below the minimum "
                                "lot collateral). Recommended: match your live equity.")
+    p_create.add_argument("--all-paper-bots", action="store_true", default=False,
+                          dest="all_paper_bots",
+                          help="Create one snapshot per paper-status config in configs/, "
+                               "writing each into farm/<slug>/data/forecasts/. The farm "
+                               "iteration loop uses this — every test bot gets its own "
+                               "30-day forecast for cross-bot comparison.")
     p_create.set_defaults(func=_cli_create)
 
     p_validate = sub.add_parser("validate", help="Validate snapshots whose horizon has elapsed")
     p_validate.add_argument("--force", action="store_true",
                             help="Validate even if validate_after hasn't elapsed (testing only)")
+    p_validate.add_argument("--all-paper-bots", action="store_true", default=False,
+                            dest="all_paper_bots",
+                            help="Validate due snapshots across every paper-status bot "
+                                 "(walks farm/<slug>/data/forecasts/ for each).")
     p_validate.set_defaults(func=_cli_validate)
 
     p_list = sub.add_parser("list", help="List all snapshots and their status")
+    p_list.add_argument("--all-paper-bots", action="store_true", default=False,
+                        dest="all_paper_bots",
+                        help="List snapshots from every paper-status bot's data dir.")
     p_list.set_defaults(func=_cli_list)
 
     p_show = sub.add_parser("show", help="Print a snapshot file as JSON")

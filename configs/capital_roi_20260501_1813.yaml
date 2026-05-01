@@ -1,7 +1,22 @@
+_meta:
+  created_at: '2026-05-01T18:13:18.954212+00:00'
+  drawdown: 0.0
+  fitness: 0.5974
+  generations: 8
+  goal: capital_roi
+  name: capital_roi_20260501_1813
+  notes: '[paper-promoted 2026-05-02 from evolve auto-run]'
+  seeded_from: null
+  sharpe: -4.54
+  source: evolved
+  status: paper
+  total_return: 2.27
+  version: 1
+  win_rate: 100.0
 backtest:
-  approx_otm_offset: 0.0338
+  approx_otm_offset: 0.03
   lookback_months: 12
-  premium_fraction_of_spot: 0.0289
+  premium_fraction_of_spot: 0.0097
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
@@ -41,20 +56,13 @@ risk:
   roll_enabled: false
   roll_min_dte: 3
 sizing:
-  # NOTE 2026-05-02: aggressive paper-mode values for fast data collection.
-  # User wants to find real boundaries empirically — let the bot stack legs
-  # and use more equity per leg, then watch the collateral / drawdown checks
-  # surface the natural limits in logs/bot.log.
-  # *** RETUNE BEFORE LIVE TRADING *** — most pre-fix values were:
-  #   max_open_legs: 1, max_equity_per_leg: 0.0828,
-  #   min_free_equity_fraction: 0.1007, collateral_buffer: 1.0
-  collateral_buffer: 1.5         # was 1.0 — Deribit portfolio margin allows >100% collateral
+  collateral_buffer: 1.0
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.10       # was 0.0828
-  max_open_legs: 10              # was 1 — stack up to 10 simultaneous positions
-  min_free_equity_fraction: 0.05 # was 0.1007 — smaller cash buffer for paper exploration
+  max_equity_per_leg: 0.1083
+  max_open_legs: 1
+  min_free_equity_fraction: 0.0562
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -64,9 +72,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.3
+  iv_rank_threshold: 0.6594
   liquidity_top_n: 100
-  max_dte: 37
-  min_dte: 3
-  target_delta_max: 0.4057
-  target_delta_min: 0.1883
+  max_dte: 19
+  min_dte: 11
+  target_delta_max: 0.3478
+  target_delta_min: 0.25
