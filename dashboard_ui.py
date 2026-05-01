@@ -1835,6 +1835,313 @@ def tab_recommendations() -> None:
 # TAB 6 — SETTINGS
 # ══════════════════════════════════════════════════════════════════════════════
 
+def tab_forecasts() -> None:
+    """
+    Out-of-sample forecast validation tab.
+
+    Shows the snapshots produced by `forecast_validator.py create`, their
+    pending/due/validated status, and the forecast-vs-actual comparison
+    once a snapshot's horizon has elapsed. The whole point: surface drift
+    between what the backtest predicted and what the bot actually delivered
+    over the same window.
+    """
+    st.markdown("### 📊 Forecast Validation")
+    st.caption(
+        "Each snapshot freezes the backtest's forecast at a point in time. "
+        "Once the horizon elapses, the validator compares the forecast to "
+        "actual trades.csv outcomes during the window — divergences here are "
+        "the early-warning signal that the backtest is mispricing reality."
+    )
+
+    # Lazy import: forecast_validator depends on backtester which pulls in
+    # matplotlib, scipy, etc. — keep dashboard startup fast if unused.
+    try:
+        from forecast_validator import (
+            list_snapshots,
+            create_snapshot,
+            validate_all_due,
+        )
+    except Exception as exc:
+        st.error(f"forecast_validator module failed to import: {exc}")
+        return
+
+    # ── Action row: create + validate ─────────────────────────────────────────
+    col_create, col_validate, col_refresh = st.columns([2, 1, 1])
+
+    with col_create.expander("➕ Create new snapshot", expanded=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            horizon = st.number_input(
+                "Horizon (days)", min_value=7, max_value=180, value=30, step=7,
+                key="forecast_horizon_days",
+            )
+        with c2:
+            equity_override = st.number_input(
+                "Starting equity (USD)",
+                min_value=0.0, max_value=10_000_000.0, value=100_000.0, step=10_000.0,
+                key="forecast_equity_override",
+                help="Overrides config.yaml. Use your live account equity for a "
+                     "realistic forecast (config default is $1k which is below "
+                     "the minimum lot collateral on most strikes).",
+            )
+        note = st.text_input(
+            "Note (optional)", value="",
+            key="forecast_note",
+            placeholder="e.g. after parameter change",
+        )
+        # Capture current market context if the heartbeat has it
+        btc_now = 0.0
+        iv_now = 0.0
+        _hb_path = BOT_DIR / "bot_heartbeat.json"
+        if _hb_path.exists():
+            try:
+                _hb = json.loads(_hb_path.read_text())
+                btc_now = float(_hb.get("btc_price", 0.0))
+                iv_now = float(_hb.get("iv_rank", 0.0))
+            except Exception:
+                pass
+        if st.button("Run backtest + create snapshot", key="forecast_create_btn",
+                     use_container_width=True):
+            try:
+                with st.spinner("Running backtester and capturing forecast…"):
+                    out = create_snapshot(
+                        horizon_days=int(horizon),
+                        btc_price_now=btc_now,
+                        iv_rank_now=iv_now,
+                        note=note,
+                        starting_equity_override=float(equity_override) if equity_override > 0 else None,
+                    )
+                st.success(f"Snapshot saved: `{out.name}`")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Snapshot creation failed: {exc}")
+
+    with col_validate:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        if st.button("🔍 Validate due", key="forecast_validate_btn",
+                     use_container_width=True,
+                     help="Compare forecast vs actual for any snapshot whose horizon has elapsed."):
+            try:
+                with st.spinner("Validating snapshots…"):
+                    results = validate_all_due()
+                if not results:
+                    st.info("Nothing due to validate.")
+                else:
+                    fail_n = sum(1 for r in results if r["overall_status"] == "fail")
+                    warn_n = sum(1 for r in results if r["overall_status"] == "warning")
+                    pass_n = sum(1 for r in results if r["overall_status"] == "pass")
+                    st.success(
+                        f"Validated {len(results)} snapshot(s) — "
+                        f"✅ {pass_n} pass · ⚠️ {warn_n} warning · 🔴 {fail_n} fail"
+                    )
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Validation failed: {exc}")
+
+    with col_refresh:
+        st.markdown("<div style='margin-top:28px;'></div>", unsafe_allow_html=True)
+        if st.button("🔄 Refresh", key="forecast_refresh_btn",
+                     use_container_width=True):
+            st.rerun()
+
+    st.divider()
+
+    # ── List existing snapshots ───────────────────────────────────────────────
+    snaps = list_snapshots()
+    if not snaps:
+        st.info(
+            "No snapshots yet. Create one above (or via "
+            "`python forecast_validator.py create --horizon-days 30`) "
+            "to start the validation loop."
+        )
+        return
+
+    st.caption(f"{len(snaps)} snapshot(s) in `data/forecasts/`")
+
+    _STATUS_BADGE = {
+        "pending":  ("🕐", C_MUTED, "Pending — horizon hasn't elapsed yet"),
+        "due":      ("⏰", C_AMBER, "Due — run validate to compare"),
+        "pass":     ("🟢", C_GREEN, "Pass — actual within forecast envelope"),
+        "warning":  ("🟡", C_AMBER, "Warning — partial drift, investigate"),
+        "fail":     ("🔴", C_RED,   "FAIL — actual materially off forecast"),
+    }
+
+    for snap_meta in reversed(snaps):   # newest first
+        try:
+            snap = json.loads(Path(snap_meta["path"]).read_text())
+        except Exception as exc:
+            st.warning(f"Couldn't read {snap_meta['path']}: {exc}")
+            continue
+
+        status = snap_meta["status"]
+        emoji, colour, hint = _STATUS_BADGE.get(status, ("?", C_MUTED, ""))
+
+        # ── Header card ────────────────────────────────────────────────────────
+        snap_id = snap.get("snapshot_id", "?")
+        created = snap.get("created_at", "")[:19].replace("T", " ")
+        horizon_d = snap.get("horizon_days", "?")
+        validate_at = snap.get("validate_after", "")[:19].replace("T", " ")
+        note_txt = snap.get("note") or ""
+        st.markdown(
+            f'<div style="background:{C_CARD};border:1px solid {colour};'
+            f'border-radius:8px;padding:14px 18px;margin-bottom:8px;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<div><span style="font-size:18px;">{emoji}</span> '
+            f'<strong style="color:{C_TEXT};font-size:14px;">{snap_id}</strong>'
+            f' <span style="color:{C_MUTED};font-size:12px;">· '
+            f'created {created} · {horizon_d}-day horizon · validate after {validate_at}'
+            f'</span></div>'
+            f'<div style="color:{colour};font-size:12px;font-weight:600;">{status.upper()}</div>'
+            f'</div>'
+            + (f'<div style="color:{C_MUTED};font-size:11px;margin-top:6px;font-style:italic;">'
+               f'note: {note_txt}</div>' if note_txt else "")
+            + f'<div style="color:{C_MUTED};font-size:11px;margin-top:4px;">{hint}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Forecast preview (always shown) ────────────────────────────────────
+        forecast = snap.get("forecast", {}) or {}
+        bt_summary = snap.get("backtest_summary", {}) or {}
+        starting_equity = bt_summary.get("starting_equity", 0.0)
+        config_snap = snap.get("config", {}) or {}
+
+        with st.expander(
+            f"📋 Forecast snapshot details — "
+            f"$ {starting_equity:,.0f} starting equity",
+            expanded=(status in ("warning", "fail", "due")),
+        ):
+            # Forecast-only view (when not yet validated)
+            forecast_rows = [
+                {
+                    "Metric":        "Total return %",
+                    "Forecast (mid)":  f"{forecast.get('expected_total_return_pct', 0.0):+.2f}%",
+                    "5/95 CI":         f"{forecast.get('return_pct_ci', [0,0])[0]:+.2f}% to {forecast.get('return_pct_ci', [0,0])[1]:+.2f}%",
+                },
+                {
+                    "Metric":        "Max drawdown %",
+                    "Forecast (mid)":  f"{forecast.get('expected_max_drawdown_pct', 0.0):.2f}%",
+                    "5/95 CI":         f"{forecast.get('drawdown_pct_ci', [0,0])[0]:.2f}% to {forecast.get('drawdown_pct_ci', [0,0])[1]:.2f}%",
+                },
+                {
+                    "Metric":        "Trades count",
+                    "Forecast (mid)":  f"{forecast.get('expected_trades_count', 0.0):.1f}",
+                    "5/95 CI":         f"{forecast.get('trades_count_ci', [0,0])[0]:.0f} to {forecast.get('trades_count_ci', [0,0])[1]:.0f}",
+                },
+                {
+                    "Metric":        "Win rate %",
+                    "Forecast (mid)":  f"{forecast.get('expected_win_rate_pct', 0.0):.1f}%",
+                    "5/95 CI":         "—",
+                },
+                {
+                    "Metric":        "Avg premium yield %",
+                    "Forecast (mid)":  f"{forecast.get('expected_avg_premium_yield_pct', 0.0):.3f}%",
+                    "5/95 CI":         "—",
+                },
+                {
+                    "Metric":        "Avg P&L / trade $",
+                    "Forecast (mid)":  f"${forecast.get('expected_avg_pnl_per_trade_usd', 0.0):+,.2f}",
+                    "5/95 CI":         "—",
+                },
+            ]
+
+            validation = snap.get("validation")
+            if validation:
+                # ── Validated: add Actual + severity columns ───────────────────
+                actual = validation.get("actual", {}) or {}
+                findings_by_metric = {
+                    f["metric"]: f for f in validation.get("findings", [])
+                }
+                actual_strs = {
+                    "total_return_pct":      f"{actual.get('total_return_pct', 0.0):+.2f}%",
+                    "max_drawdown_pct":      f"{actual.get('max_drawdown_pct', 0.0):.2f}%",
+                    "trades_count":          f"{actual.get('trades_count', 0)}",
+                    "win_rate_pct":          f"{actual.get('win_rate_pct', 0.0):.1f}%",
+                    "avg_premium_yield_pct": f"{actual.get('avg_premium_yield_pct', 0.0):.3f}%",
+                    "avg_pnl_per_trade_usd": f"${actual.get('avg_pnl_per_trade_usd', 0.0):+,.2f}",
+                }
+                metric_keys = [
+                    "total_return_pct", "max_drawdown_pct", "trades_count",
+                    "win_rate_pct", "avg_premium_yield_pct", "avg_pnl_per_trade_usd",
+                ]
+                for row, key in zip(forecast_rows, metric_keys):
+                    row["Actual"] = actual_strs.get(key, "—")
+                    finding = findings_by_metric.get(key)
+                    if finding:
+                        sev = finding["severity"]
+                        sev_icon = {"pass": "✅", "warning": "⚠️", "fail": "🔴"}.get(sev, "")
+                        row["Δ"] = f"{sev_icon} {sev}"
+                    else:
+                        row["Δ"] = "—"
+
+                df = pd.DataFrame(forecast_rows)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                # Findings list (warning + fail only)
+                bad = [
+                    f for f in validation.get("findings", [])
+                    if f["severity"] in ("warning", "fail")
+                ]
+                if bad:
+                    st.markdown("**Findings (warning/fail only):**")
+                    for f in bad:
+                        sev = f["severity"]
+                        c = C_AMBER if sev == "warning" else C_RED
+                        sev_icon = {"warning": "⚠️", "fail": "🔴"}[sev]
+                        st.markdown(
+                            f'<div style="background:{C_CARD};border-left:3px solid {c};'
+                            f'padding:8px 12px;margin-bottom:4px;border-radius:4px;">'
+                            f'{sev_icon} <strong style="color:{C_TEXT};font-size:13px;">{f["metric"]}</strong> '
+                            f'<span style="color:{C_MUTED};font-size:11px;">[{sev}]</span><br>'
+                            f'<span style="color:{C_MUTED};font-size:12px;">{f["message"]}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.success(
+                        "All metrics inside forecast envelope — "
+                        "the backtest was a faithful predictor over this window."
+                    )
+
+                # Sample size + validated-at footer
+                paper_n = actual.get("paper_trades", 0)
+                real_n  = actual.get("real_trades", 0)
+                ending  = actual.get("ending_equity", starting_equity)
+                validated_at = validation.get("validated_at", "")[:19].replace("T", " ")
+                st.caption(
+                    f"Validated {validated_at} · "
+                    f"{paper_n} paper · {real_n} live/testnet · "
+                    f"ending equity ${ending:,.2f}"
+                )
+            else:
+                # Not yet validated — show forecast only
+                df = pd.DataFrame(forecast_rows)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                if status == "due":
+                    st.info(
+                        "Horizon has elapsed — click **Validate due** above "
+                        "(or run `python forecast_validator.py validate`) to "
+                        "compare actuals."
+                    )
+                else:
+                    # Show how much time remains
+                    try:
+                        from datetime import datetime as _dt, timezone as _tz
+                        va = _dt.fromisoformat(snap.get("validate_after", ""))
+                        if va.tzinfo is None:
+                            va = va.replace(tzinfo=_tz.utc)
+                        remaining = va - _dt.now(_tz.utc)
+                        days_left = remaining.days
+                        st.caption(f"⏳ Validates in ~{max(days_left, 0)} day(s).")
+                    except Exception:
+                        pass
+
+            # Config snapshot (for drift detection)
+            if config_snap:
+                with st.expander("⚙️ Config when snapshot was taken", expanded=False):
+                    st.json(config_snap)
+
+
 def tab_settings() -> None:
     st.markdown("### 🔧 Settings")
 
@@ -2017,11 +2324,12 @@ def main() -> None:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Backtest",
         "📈 Paper Trading",
         "🧬 Optimizer",
         "📋 Recommendations",
+        "📊 Forecasts",
         "⚙️ Config",
         "🔧 Settings",
     ])
@@ -2034,8 +2342,10 @@ def main() -> None:
     with tab4:
         tab_recommendations()
     with tab5:
-        tab_config()
+        tab_forecasts()
     with tab6:
+        tab_config()
+    with tab7:
         tab_settings()
 
 
