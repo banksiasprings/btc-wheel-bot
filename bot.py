@@ -120,6 +120,24 @@ class WheelBot:
         self._risk_notified_instrument: str = ""
         self._last_risk_level: str = "normal"
 
+        # Consecutive order-failure tracking — if the broker rejects N orders
+        # in a row, the bot is stuck. Without this counter, the loop in
+        # bot.log can spin "Invalid params" forever without alerting anyone.
+        self._consecutive_open_failures: int = 0
+        self._consecutive_close_failures: int = 0
+        # Notify-once flags so we don't spam Telegram every tick after threshold.
+        self._open_failure_alert_sent: bool = False
+        self._close_failure_alert_sent: bool = False
+        # Threshold = ~5 minutes at 60s poll
+        self._failure_alert_threshold: int = 5
+
+        # Tick counter for periodic exchange reconciliation in live mode.
+        # Without this, internal position state diverges from the exchange
+        # whenever the WebSocket drops a settlement event during reconnect.
+        self._tick_count: int = 0
+        # Reconcile every N ticks (60 ticks × 60s = once per hour)
+        self._reconcile_every_n_ticks: int = 60
+
         # Delta-hedging manager — state_path per-bot so farm bots don't share state
         self._hedge = HedgeManager(
             paper=paper,
@@ -212,30 +230,42 @@ class WheelBot:
         await self._client.ws.subscribe(channels, self._on_settlement_event)
         logger.info(f"Live subscriptions active: {channels}")
 
-    async def _sync_positions_from_exchange(self) -> None:
+    async def _sync_positions_from_exchange(self, *, periodic: bool = False) -> None:
         """
         Reconcile internal position state with open positions on Deribit (LIVE_ONLY).
-        Called once on startup so the bot doesn't start with a clean slate
-        when it's restarted mid-trade.
+
+        Idempotent — safe to call at startup AND periodically.
+        On each call:
+          • If exchange has a position we already track → refresh mark/delta only,
+            preserving entry metadata (entry_price, iv_rank_at_entry, etc.).
+          • If exchange has a position we don't track → reconcile as new with
+            zeroed entry metadata (best we can do — see #9 in the audit).
+          • If we track a position that's no longer on the exchange → it was
+            settled or closed externally. Remove it. The WS settlement handler
+            is the canonical source for the trade record; if WS missed the
+            event, we lose the log line but keep state consistent.
+
+        Periodic mode (called every _reconcile_every_n_ticks): logs at debug
+        level, doesn't claim "starting flat" if empty.
         """
         if not self._client.has_private_access():
-            logger.warning(
-                "No private REST access — skipping position sync. "
-                "Set DERIBIT_API_KEY and DERIBIT_API_SECRET to enable."
-            )
+            if not periodic:
+                logger.warning(
+                    "No private REST access — skipping position sync. "
+                    "Set DERIBIT_API_KEY and DERIBIT_API_SECRET to enable."
+                )
             return
 
         try:
-            # Fetch equity FIRST so we can use it for entry_equity on reconciled positions.
             account = self._client.private.get_account_summary(
                 currency=self._cfg.deribit.currency
             )
-            logger.info(
-                f"Account equity: {account.equity:.6f} BTC "
-                f"| Available: {account.available_funds:.6f} BTC"
-            )
+            if not periodic:
+                logger.info(
+                    f"Account equity: {account.equity:.6f} BTC "
+                    f"| Available: {account.available_funds:.6f} BTC"
+                )
             # Rough USD estimate — will be overwritten precisely on first tick.
-            # Use a conservative BTC price floor so we don't under-estimate equity.
             rough_btc_price = 50_000.0
             reconcile_equity_usd = max(
                 account.equity * rough_btc_price,
@@ -245,39 +275,76 @@ class WheelBot:
             exchange_positions = self._client.private.get_positions(
                 currency=self._cfg.deribit.currency
             )
-            for ep in exchange_positions:
-                # Only import short positions (we are option sellers)
-                if ep.direction != "sell" or ep.size >= 0:
-                    continue
-                contracts = abs(ep.size)
-                # ep.delta is the *total position* delta (option_delta × contracts).
-                # Divide back to get the per-contract option delta for risk checks.
-                per_contract_delta = abs(ep.delta) / contracts if contracts > 0 else 0.0
-                pos = Position(
-                    instrument_name=ep.instrument_name,
-                    strike=float(ep.instrument_name.split("-")[2])
-                    if len(ep.instrument_name.split("-")) >= 3 else 0.0,
-                    option_type=ep.option_type,
-                    entry_price=ep.average_price,
-                    underlying_at_entry=0.0,   # unknown at reconcile time
-                    contracts=contracts,
-                    current_delta=per_contract_delta,
-                    current_price=ep.mark_price,
-                    entry_equity=reconcile_equity_usd,
-                    expiry_ts=ep.expiry_ts,
-                    entry_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),  # best approx at reconcile time
-                )
-                self._positions.append(pos)
-                logger.info(
-                    f"Reconciled position from Deribit: {ep.instrument_name} "
-                    f"× {contracts} contracts | delta={per_contract_delta:.3f}"
-                )
 
-            if not exchange_positions:
+            # Build a map of short positions on the exchange (we're option sellers)
+            their_by_name: dict = {}
+            for ep in exchange_positions:
+                if ep.direction == "sell" and ep.size < 0:
+                    their_by_name[ep.instrument_name] = ep
+
+            ours_by_name = {p.instrument_name: p for p in self._positions}
+
+            # 1. Refresh tracked positions / add new ones from the exchange
+            for name, ep in their_by_name.items():
+                contracts = abs(ep.size)
+                # ep.delta is total position delta — divide back to per-contract.
+                per_contract_delta = abs(ep.delta) / contracts if contracts > 0 else 0.0
+
+                existing = ours_by_name.get(name)
+                if existing is not None:
+                    # Refresh live state but preserve the entry metadata we recorded
+                    # when WE opened the position (entry_price, iv_rank_at_entry, etc.).
+                    existing.contracts     = contracts
+                    existing.current_price = ep.mark_price
+                    existing.current_delta = per_contract_delta
+                    if periodic:
+                        logger.debug(
+                            f"Reconciled (refresh): {name} × {contracts} "
+                            f"| delta={per_contract_delta:.3f}"
+                        )
+                else:
+                    pos = Position(
+                        instrument_name=name,
+                        strike=float(name.split("-")[2])
+                        if len(name.split("-")) >= 3 else 0.0,
+                        option_type=ep.option_type,
+                        entry_price=ep.average_price,
+                        underlying_at_entry=0.0,   # unknown at reconcile time
+                        contracts=contracts,
+                        current_delta=per_contract_delta,
+                        current_price=ep.mark_price,
+                        entry_equity=reconcile_equity_usd,
+                        expiry_ts=ep.expiry_ts,
+                        entry_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                    )
+                    self._positions.append(pos)
+                    logger.info(
+                        f"Reconciled position from Deribit: {name} "
+                        f"× {contracts} contracts | delta={per_contract_delta:.3f}"
+                    )
+
+            # 2. Drop tracked positions that are no longer on the exchange.
+            #    They were settled or closed externally — WS handler should have
+            #    written the trade record; if not, the log entry is lost but
+            #    state stays consistent.
+            for p in list(self._positions):
+                if p.instrument_name not in their_by_name:
+                    logger.warning(
+                        f"Position {p.instrument_name} no longer on exchange "
+                        f"(settled or closed externally) — removing from tracker. "
+                        f"If a trade record is missing in trades.csv, check the "
+                        f"WebSocket settlement log for that instrument."
+                    )
+                    self._positions.remove(p)
+
+            if not periodic and not exchange_positions:
                 logger.info("No open positions found on Deribit — starting flat")
 
         except Exception as exc:
-            logger.error(f"Position sync failed: {exc} — starting with empty state")
+            logger.error(
+                f"Position sync failed: {exc}"
+                + ("" if periodic else " — starting with empty state")
+            )
 
     def _on_settlement_event(self, data: dict) -> None:
         """
@@ -474,6 +541,7 @@ class WheelBot:
     async def _tick(self) -> None:
         """Single poll iteration."""
         now = datetime.now(timezone.utc)
+        self._tick_count += 1
 
         # Process any pending mobile API commands
         await self._process_commands()
@@ -481,6 +549,13 @@ class WheelBot:
         if not self._risk.check_kill_switch():
             self._write_stopped_state()
             return
+
+        # Periodic reconciliation in live mode (~every hour at 60s polling).
+        # Defends against the WS dropping settlement events during reconnect —
+        # without this, internal state diverges silently from the exchange.
+        if (not self._paper
+                and self._tick_count % self._reconcile_every_n_ticks == 0):
+            await self._sync_positions_from_exchange(periodic=True)
 
         # Fetch market state
         try:
@@ -747,6 +822,88 @@ class WheelBot:
 
         self._print_status(now, underlying_price)
 
+    # ── Position management helpers ────────────────────────────────────────────
+
+    @staticmethod
+    def _is_instrument_expired(expiry_ts: int, grace_seconds: int = 1800) -> bool:
+        """
+        True if `expiry_ts` (ms) is more than `grace_seconds` in the past.
+
+        Used to detect stranded positions: an option that already settled on
+        Deribit cannot be bought back, so the order API returns "Invalid params"
+        forever. Default grace = 30 min after expiry to allow settlement to
+        finalise on the exchange before we conclude it's gone.
+        """
+        if not expiry_ts:
+            return False
+        return time.time() > (expiry_ts / 1000 + grace_seconds)
+
+    @staticmethod
+    def _local_settlement_price(pos: Position, underlying_price: float) -> float:
+        """
+        Compute the option's BTC exit price assuming the exchange has settled it.
+
+        OTM → 0 (worthless, full premium kept).
+        ITM put  → (strike - spot) / spot
+        ITM call → (spot - strike) / spot
+
+        Mirrors _check_expired_positions() so paper and live agree on the math.
+        """
+        if pos.option_type == "put":
+            if underlying_price >= pos.strike or underlying_price <= 0:
+                return 0.0
+            return max((pos.strike - underlying_price) / underlying_price, 0.0)
+        # call
+        if underlying_price <= pos.strike or underlying_price <= 0:
+            return 0.0
+        return max((underlying_price - pos.strike) / underlying_price, 0.0)
+
+    def _record_close_failure(
+        self, pos: Position, status: str, error_message: str
+    ) -> None:
+        """Increment the consecutive-close-failure counter and alert at threshold."""
+        self._consecutive_close_failures += 1
+        if (self._consecutive_close_failures >= self._failure_alert_threshold
+                and not self._close_failure_alert_sent):
+            try:
+                notifier.notify_order_failures(
+                    side="close",
+                    consecutive=self._consecutive_close_failures,
+                    instrument=pos.instrument_name,
+                    status=status,
+                    error=error_message,
+                )
+            except Exception:
+                pass
+            self._close_failure_alert_sent = True
+
+    def _record_open_failure(
+        self, instrument: str, status: str, error_message: str
+    ) -> None:
+        """Increment the consecutive-open-failure counter and alert at threshold."""
+        self._consecutive_open_failures += 1
+        if (self._consecutive_open_failures >= self._failure_alert_threshold
+                and not self._open_failure_alert_sent):
+            try:
+                notifier.notify_order_failures(
+                    side="open",
+                    consecutive=self._consecutive_open_failures,
+                    instrument=instrument,
+                    status=status,
+                    error=error_message,
+                )
+            except Exception:
+                pass
+            self._open_failure_alert_sent = True
+
+    def _reset_open_failure_counter(self) -> None:
+        self._consecutive_open_failures = 0
+        self._open_failure_alert_sent = False
+
+    def _reset_close_failure_counter(self) -> None:
+        self._consecutive_close_failures = 0
+        self._close_failure_alert_sent = False
+
     # ── Position management ────────────────────────────────────────────────────
 
     async def _open_position(
@@ -787,6 +944,9 @@ class WheelBot:
         else:
             if self._client.ws is None or self._tracker is None:
                 logger.error("WebSocket not connected — cannot place order")
+                self._record_open_failure(
+                    signal.instrument_name, "ws_not_connected", "WebSocket not connected"
+                )
                 return
             # Stage 3: use OrderTracker for confirmed fills + slippage tracking
             rec = await self._tracker.place_and_track(
@@ -804,7 +964,14 @@ class WheelBot:
                     f"Open order did not fill: {rec.status.value} — "
                     f"skipping position entry"
                 )
+                self._record_open_failure(
+                    signal.instrument_name,
+                    rec.status.value,
+                    getattr(rec, "error_message", ""),
+                )
                 return
+            # Successful fill — reset the counter so future failures alert again
+            self._reset_open_failure_counter()
             # Use the actual fill price for position tracking
             signal = signal._replace(mark_price=rec.avg_fill_price) \
                 if hasattr(signal, "_replace") else signal
@@ -924,10 +1091,53 @@ class WheelBot:
                     f"Close confirmed: {pos.instrument_name} "
                     f"@ {rec.avg_fill_price:.6f} BTC | slippage={slippage_btc:+.6f}"
                 )
+                self._reset_close_failure_counter()
+            elif self._is_instrument_expired(pos.expiry_ts):
+                # Stranded expired-position recovery
+                # ────────────────────────────────────────────────────────────
+                # The order was rejected because the instrument has already
+                # settled on the exchange. Without this branch the bot retries
+                # forever (this exact pathology was filling bot.log for the
+                # BTC-24APR26-72000-P stranded position). Settle locally so
+                # we can drop the position and move the wheel forward.
+                spot_for_settle = (
+                    underlying_price if underlying_price > 0 else pos.underlying_at_entry
+                )
+                pos.current_price = self._local_settlement_price(pos, spot_for_settle)
+                # Best-effort: if we have private REST access, try to fetch the
+                # actual settlement price from Deribit. If it works, override
+                # the local estimate so trade record reflects reality.
+                try:
+                    if self._client.has_private_access():
+                        history = self._client.private.get_settlement_history_by_instrument(
+                            instrument_name=pos.instrument_name,
+                            settlement_type="settlement",
+                            count=1,
+                        )
+                        if history:
+                            actual_price = float(history[0].get("price", pos.current_price))
+                            if actual_price >= 0:
+                                pos.current_price = actual_price
+                                logger.info(
+                                    f"Stranded {pos.instrument_name}: using Deribit "
+                                    f"settlement price {actual_price:.6f} BTC"
+                                )
+                except Exception as exc:
+                    logger.debug(f"Settlement history fetch failed: {exc}")
+                logger.warning(
+                    f"Stranded expired position {pos.instrument_name} settled locally "
+                    f"@ {pos.current_price:.6f} BTC | reason={reason} → recording trade"
+                )
+                reason = f"stranded_expired:{reason}"
+                self._reset_close_failure_counter()
+                # Fall through to record trade and write CSV
             else:
                 logger.error(
                     f"Close order did not fill: {rec.status.value} — "
                     f"position NOT removed; will retry next tick"
+                )
+                self._record_close_failure(
+                    pos, rec.status.value, getattr(rec, "error_message", "")
                 )
                 return False  # ← phantom-trade fix: do NOT write CSV
 
@@ -1002,8 +1212,24 @@ class WheelBot:
             pass
 
         # ── Write experience.jsonl (adaptive learning — MUST NEVER block close) ─
+        # Skip reconciled positions: underlying_at_entry / iv_rank_at_entry are 0
+        # because we never observed the open. Including them poisons the
+        # calibration with fake "conditions = 0 IV at $0 BTC" datapoints.
+        # See audit issue #9.
+        skip_experience_log = (
+            pos.underlying_at_entry <= 0.0
+            or pos.iv_rank_at_entry <= 0.0
+            or pos.dte_at_entry <= 0
+        )
+        if skip_experience_log:
+            logger.debug(
+                f"Skipping experience.jsonl for {pos.instrument_name}: "
+                f"reconciled — no observed entry conditions"
+            )
         try:
             import json as _json
+            if skip_experience_log:
+                return True  # skip write, but signal close succeeded
             _exp_path = _data_path("experience.jsonl")
             _exp_record = {
                 "timestamp": time.time(),

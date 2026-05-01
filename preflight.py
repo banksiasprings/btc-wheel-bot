@@ -168,10 +168,10 @@ def check_connectivity(testnet: bool = False) -> CheckResult:
 
 def check_authentication(
     api_key: str, api_secret: str, testnet: bool = False
-) -> tuple[CheckResult, str]:
+) -> tuple[CheckResult, str, str]:
     """
-    Authenticate with Deribit and return (CheckResult, access_token).
-    Returns empty token on failure.
+    Authenticate with Deribit and return (CheckResult, access_token, scope).
+    Returns empty token / scope on failure.
     """
     base = "https://test.deribit.com" if testnet else "https://www.deribit.com"
     url  = f"{base}/api/v2/public/auth"
@@ -189,25 +189,53 @@ def check_authentication(
                 name=f"Authentication ({env})",
                 passed=False,
                 message=f"Auth failed: {data['error'].get('message', data['error'])}",
-            ), ""
+            ), "", ""
         token = data["result"]["access_token"]
-        scope = data["result"].get("scope", "unknown")
+        scope = data["result"].get("scope", "")
         return CheckResult(
             name=f"Authentication ({env})",
             passed=True,
             message=f"Authenticated OK",
-            detail=f"Scope: {scope}",
-        ), token
+            detail=f"Scope: {scope or 'unknown'}",
+        ), token, scope
     except Exception as exc:
         return CheckResult(
             name=f"Authentication ({env})",
             passed=False,
             message=f"Auth request failed: {exc}",
-        ), ""
+        ), "", ""
 
 
-def check_api_permissions(access_token: str, testnet: bool = False) -> CheckResult:
-    """Verify the API key has Trade permission (needed for order placement)."""
+def _scope_has_trade_write(scope: str) -> bool:
+    """
+    Return True iff the Deribit OAuth scope grants trade write permission.
+
+    Deribit scope strings are space-separated tokens like
+        "account:read block_trade:read trade:read_write mainaccount"
+    Trade write is required for placing orders. A read-only key passes auth
+    but every order placement returns "Invalid params" / "insufficient
+    permissions" — exactly the failure mode hitting bot.log right now.
+    """
+    if not scope:
+        return False
+    for token in scope.split():
+        if token == "trade:read_write" or token.startswith("trade:read_write"):
+            return True
+    return False
+
+
+def check_api_permissions(
+    access_token: str, scope: str, testnet: bool = False
+) -> CheckResult:
+    """
+    Verify the API key has BOTH Read AND Trade permission.
+
+    Read is confirmed by a successful get_account_summary call.
+    Trade is confirmed by parsing 'trade:read_write' out of the OAuth scope.
+    A read-only key would pass the old check (which only verified Read) but
+    every order would then fail with "Invalid params" — that bug is what's
+    been spamming bot.log. We block live launch instead of letting it loop.
+    """
     base = "https://test.deribit.com" if testnet else "https://www.deribit.com"
     env  = "testnet" if testnet else "mainnet"
     try:
@@ -226,14 +254,22 @@ def check_api_permissions(access_token: str, testnet: bool = False) -> CheckResu
                 message=f"Permission check failed: {data['error']}",
                 detail="Key may be read-only — enable Trade permission on Deribit",
             )
-        # If get_account_summary succeeds, Read is confirmed.
-        # Trade permission is only verifiable by placing/cancelling a tiny order,
-        # so we infer it from scope (checked in authenticate) and warn if uncertain.
+        # Read is confirmed. Now require Trade write scope explicitly.
+        if not _scope_has_trade_write(scope):
+            return CheckResult(
+                name=f"API Permissions ({env})",
+                passed=False,
+                message="Read OK but TRADE permission is MISSING",
+                detail=(
+                    f"Scope: '{scope or 'unknown'}'. The key cannot place orders. "
+                    f"Edit the API key on Deribit and grant 'trade:read_write'."
+                ),
+            )
         return CheckResult(
             name=f"API Permissions ({env})",
             passed=True,
-            message="Read access confirmed",
-            detail="Trade access will be verified on first order",
+            message="Read + Trade access confirmed",
+            detail=f"Scope: {scope}",
         )
     except Exception as exc:
         return CheckResult(
@@ -372,12 +408,14 @@ def run_preflight(
     if conn.passed and api_key and api_secret:
 
         # 5. Authentication
-        auth_result, access_token = check_authentication(api_key, api_secret, testnet)
+        auth_result, access_token, scope = check_authentication(
+            api_key, api_secret, testnet
+        )
         _add(auth_result)
 
         if access_token:
-            # 6. Permissions
-            _add(check_api_permissions(access_token, testnet))
+            # 6. Permissions (Read + Trade scope verified explicitly)
+            _add(check_api_permissions(access_token, scope, testnet))
 
             # 7. Account equity
             min_eq = 0.001 if testnet else 0.01   # testnet has fake funds, be lenient

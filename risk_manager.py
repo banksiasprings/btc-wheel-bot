@@ -139,14 +139,16 @@ class RiskManager:
         """
         Verify total collateral exposure does not exceed the buffer limit.
 
-        Collateral used = sum(strike × contracts × contract_size) for each put.
-        Buffer limit = equity × collateral_buffer (default 150%).
+        Collateral used = sum(strike × contracts) for each put.
+        `contracts` is in BTC of underlying — Deribit's "amount" field — so no
+        extra contract_size_btc multiplier (that would undercount by 10×).
+        Buffer limit = equity × collateral_buffer.
         """
         if not open_positions:
             return True
 
         total_collateral = sum(
-            pos.strike * pos.contracts * cfg.sizing.contract_size_btc
+            pos.strike * pos.contracts
             for pos in open_positions
         )
         max_allowed = equity_usd * cfg.sizing.collateral_buffer
@@ -180,10 +182,13 @@ class RiskManager:
 
         Calculation
         -----------
-            reserved_now  = Σ(strike × contracts × contract_size) for existing legs
-            reserved_new  = proposed_strike × proposed_contracts × contract_size
+            reserved_now  = Σ(strike × contracts) for existing legs
+            reserved_new  = proposed_strike × proposed_contracts
             free_after    = equity - reserved_now - reserved_new
             required_free = equity × min_free_equity_fraction
+
+        `contracts` is in BTC of underlying (Deribit's "amount") so no extra
+        contract_size_btc multiplier — that would undercount collateral 10×.
 
         Returns False (block trade) if free_after < required_free.
         """
@@ -192,10 +197,10 @@ class RiskManager:
             return True   # check disabled in config
 
         reserved_now = sum(
-            pos.strike * pos.contracts * cfg.sizing.contract_size_btc
+            pos.strike * pos.contracts
             for pos in open_positions
         )
-        reserved_new  = proposed_strike_usd * proposed_contracts * cfg.sizing.contract_size_btc
+        reserved_new  = proposed_strike_usd * proposed_contracts
         free_after    = equity_usd - reserved_now - reserved_new
         required_free = equity_usd * threshold
 

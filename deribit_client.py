@@ -513,7 +513,20 @@ class DeribitWebSocket:
                     if "id" in data and data["id"] in self._pending:
                         fut = self._pending.pop(data["id"])
                         if "error" in data:
-                            fut.set_exception(RuntimeError(data["error"]["message"]))
+                            err = data["error"]
+                            # Surface the full error payload (incl. nested 'data')
+                            # rather than just the generic 'message'. Deribit's
+                            # "Invalid params" / "insufficient_funds" / etc. comes
+                            # back with 'data.reason' that points at the real
+                            # cause; without this we can never debug failures.
+                            msg = err.get("message", "unknown")
+                            extra = err.get("data") or {}
+                            if extra:
+                                msg = f"{msg} (data={extra})"
+                            code = err.get("code")
+                            if code is not None:
+                                msg = f"{msg} [code={code}]"
+                            fut.set_exception(RuntimeError(msg))
                         else:
                             fut.set_result(data.get("result"))
 
@@ -595,14 +608,9 @@ class DeribitWebSocket:
         """
         if not self._authenticated:
             raise RuntimeError("Must authenticate before placing orders")
-        params: dict[str, Any] = {
-            "instrument_name": instrument_name,
-            "amount": amount,
-            "type": order_type,
-            "label": label,
-        }
-        if price is not None:
-            params["price"] = price
+        params = self._build_order_params(
+            instrument_name, amount, order_type, price, label
+        )
         result = await self._rpc("private/sell", params)
         logger.info(f"Sell order placed: {instrument_name} × {amount} @ {price}")
         return result
@@ -621,17 +629,41 @@ class DeribitWebSocket:
         """
         if not self._authenticated:
             raise RuntimeError("Must authenticate before placing orders")
+        params = self._build_order_params(
+            instrument_name, amount, order_type, price, label
+        )
+        result = await self._rpc("private/buy", params)
+        logger.info(f"Buy-to-close order placed: {instrument_name} × {amount} @ {price}")
+        return result
+
+    @staticmethod
+    def _build_order_params(
+        instrument_name: str,
+        amount: float,
+        order_type: str,
+        price: float | None,
+        label: str,
+    ) -> dict[str, Any]:
+        """
+        Construct the params dict for private/buy and private/sell.
+
+        Two real-world gotchas live here:
+          1. Empty `label`: Deribit accepts `label` as optional, but historically
+             rejected an empty string with a generic "Invalid params". Only send
+             the field when non-empty.
+          2. Limit price with no price: Deribit requires `price` for limit
+             orders; for market orders it must be omitted entirely.
+        """
         params: dict[str, Any] = {
             "instrument_name": instrument_name,
             "amount": amount,
             "type": order_type,
-            "label": label,
         }
-        if price is not None:
+        if label:
+            params["label"] = label
+        if order_type == "limit" and price is not None:
             params["price"] = price
-        result = await self._rpc("private/buy", params)
-        logger.info(f"Buy-to-close order placed: {instrument_name} × {amount} @ {price}")
-        return result
+        return params
 
     async def close(self) -> None:
         """Close WebSocket connection gracefully."""

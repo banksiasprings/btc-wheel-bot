@@ -130,6 +130,34 @@ def notify_error(message: str) -> None:
     _send(f"⚠️ <b>{name}</b> error\n{message[:300]}")
 
 
+def notify_order_failures(
+    side: str,
+    consecutive: int,
+    instrument: str,
+    status: str,
+    error: str = "",
+) -> None:
+    """
+    Sent once when N consecutive order placements have failed.
+
+    The bot logs every failure but without this alert it can spin on
+    "Invalid params" indefinitely without anyone noticing — exactly what
+    happened to the testnet bot that triggered the audit. Fires once per
+    failure streak; resets when an order finally succeeds.
+    """
+    name = _bot_name()
+    side_label = "OPEN" if side == "open" else "CLOSE"
+    err_text = f"\nLast error: <code>{error[:200]}</code>" if error else ""
+    _send(
+        f"🚨 <b>{name}</b> stuck on {side_label} orders\n"
+        f"<code>{instrument}</code>\n"
+        f"{consecutive} consecutive failures — status: <code>{status}</code>{err_text}\n\n"
+        f"<i>The bot keeps retrying every poll cycle. Likely causes: API key "
+        f"missing trade scope, instrument expired/delisted, insufficient margin, "
+        f"or Deribit downtime. Check logs/bot.log and the dashboard.</i>"
+    )
+
+
 def notify_drawdown_warning(drawdown_pct: float, equity_usd: float, bot_name: str = "") -> None:
     name = bot_name or _bot_name()
     _send(

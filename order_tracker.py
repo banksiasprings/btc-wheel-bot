@@ -118,6 +118,7 @@ class OrderTracker:
         timeout_seconds: float = 45.0,
         fallback_market: bool = True,
         poll_interval: float = 2.0,
+        max_slippage_pct: float = 0.30,
     ) -> OrderRecord:
         """
         Place a limit (or market) order and wait until it fills or times out.
@@ -236,7 +237,28 @@ class OrderTracker:
                         label=f"{label}_mkt",
                         timeout_seconds=15.0,
                         fallback_market=False,
+                        max_slippage_pct=max_slippage_pct,
                     )
+                    # Reject the market fill if slippage vs the original limit
+                    # price exceeds max_slippage_pct. Without this guard, a
+                    # forced close on a thin BTC option book can convert a
+                    # manageable loss into a much larger one — the market sweep
+                    # walks the order book until filled.
+                    if market_rec.status == OrderStatus.FILLED and price is not None:
+                        ref_price = price if price > 0 else 1e-9
+                        slip_pct = abs(market_rec.avg_fill_price - ref_price) / ref_price
+                        if slip_pct > max_slippage_pct:
+                            logger.error(
+                                f"Market fallback ABORTED: fill price "
+                                f"{market_rec.avg_fill_price:.6f} BTC vs limit "
+                                f"{price:.6f} BTC = {slip_pct:.1%} slippage > "
+                                f"{max_slippage_pct:.0%} cap. Order treated as TIMEOUT."
+                            )
+                            rec.status = OrderStatus.TIMEOUT
+                            rec.error_message = (
+                                f"market_fallback_slippage={slip_pct:.1%}"
+                            )
+                            break
                     # Merge fills into original record
                     if market_rec.status == OrderStatus.FILLED:
                         rec.filled_amount += market_rec.filled_amount

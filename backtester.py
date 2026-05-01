@@ -328,12 +328,21 @@ class Backtester:
         return raw_call_strike
 
     def _size(self, equity: float, strike: float) -> float:
+        # Cash-secured collateral on Deribit BTC options = strike × contracts
+        # (where `contracts` is in BTC of underlying — Deribit minimum lot 0.1 BTC).
+        # Must mirror RiskManager.calculate_contracts; mismatch silently inflates
+        # backtest returns relative to what the live bot will actually trade.
         max_notional = equity * self._cfg.sizing.max_equity_per_leg
-        collateral   = strike * self._cfg.sizing.contract_size_btc
-        if collateral <= 0:
+        collateral_per_contract = strike
+        if collateral_per_contract <= 0:
             return 0.0
-        raw = max_notional / collateral
-        return max(0.1, round(raw * 10) / 10)   # nearest 0.1
+        raw = max_notional / collateral_per_contract
+        min_lot = self._cfg.sizing.contract_size_btc   # 0.1 BTC minimum
+        if raw < min_lot:
+            return 0.0   # equity too small for the minimum lot — block the trade
+        # Floor (not round) to nearest 0.1 to match RiskManager.calculate_contracts.
+        import math
+        return max(min_lot, math.floor(raw / min_lot) * min_lot)
 
     def _dte(self) -> int:
         pref = self._cfg.strategy.expiry_preference
@@ -623,9 +632,17 @@ class Backtester:
                     continue
 
                 # Enforce minimum free equity buffer before opening.
-                # Use the actual sized position to compute real collateral consumed.
+                # `contracts` is in BTC of underlying; collateral = strike × contracts.
+                # Skip the trade if _size returned 0 (equity below minimum lot).
                 tentative_contracts = self._size(equity, strike)
-                actual_collateral = tentative_contracts * strike * self._cfg.sizing.contract_size_btc
+                if tentative_contracts <= 0:
+                    equity_curve.append(equity)
+                    continue
+                actual_collateral = tentative_contracts * strike
+                if actual_collateral > equity:
+                    # Real Deribit would reject — skip rather than simulate impossible trade.
+                    equity_curve.append(equity)
+                    continue
                 min_free = getattr(self._cfg.sizing, "min_free_equity_fraction", 0.0)
                 if min_free > 0 and equity > 0:
                     free_fraction_after = (equity - actual_collateral) / equity
@@ -646,11 +663,12 @@ class Backtester:
                 # Opening spread cost for the initial hedge trade
                 opening_spread = abs(initial_hedge) * spot * 0.0002
 
-                # Deribit initial margin for short put/call
-                # margin = max(0.15 - OTM_pct, 0.10) × underlying × contracts × 0.1 BTC/contract
+                # Deribit initial margin for short put/call (BTC-settled options)
+                # margin = max(0.15 - OTM_pct, 0.10) × underlying × notional_btc
+                # `contracts` is now in BTC of underlying directly, so no extra × 0.1.
                 otm_pct = max(0.0, (spot - strike) / spot) if cycle == "put" else max(0.0, (strike - spot) / spot)
                 margin_rate = max(0.15 - otm_pct, 0.10)
-                margin_required = margin_rate * spot * contracts * 0.1
+                margin_required = margin_rate * spot * contracts
                 _total_margin_deployed += margin_required
                 _total_premium_collected += premium * contracts
                 _margin_utilization_samples.append(margin_required / equity if equity > 0 else 0.0)
