@@ -1678,7 +1678,7 @@ def tab_config() -> None:
             "Collateral Buffer", value=float(sz.get("collateral_buffer", 1.00)),
             min_value=1.0, max_value=3.0, step=0.10, format="%.2f")
         changed["sizing"]["max_open_legs"] = st.number_input(
-            "Max Open Legs", value=int(sz.get("max_open_legs", 1)), min_value=1, max_value=5)
+            "Max Open Legs", value=int(sz.get("max_open_legs", 1)), min_value=1, max_value=20)
 
         section("AI Overseer")
         ov = raw.get("overseer", {})
