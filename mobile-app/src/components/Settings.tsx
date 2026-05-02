@@ -9,6 +9,11 @@ import InfoModal from './InfoModal'
 import SystemGuide from './SystemGuide'
 import ConfigLibrary from './ConfigLibrary'
 
+declare const __APP_VERSION__: string
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev'
+
+type UpdateState = 'idle' | 'checking' | 'current' | 'available'
+
 // ── Collapsible section wrapper ────────────────────────────────────────────────
 
 function Section({
@@ -59,6 +64,49 @@ export default function Settings() {
   const [tgToken, setTgToken]             = useState('')
   const [tgChatId, setTgChatId]           = useState('')
   const [tgStatus, setTgStatus]           = useState('')
+
+  // PWA update check
+  const [updateState, setUpdateState]     = useState<UpdateState>('idle')
+
+  async function checkForUpdate() {
+    if (updateState === 'checking') return
+    if (updateState === 'available') {
+      window.location.reload()
+      return
+    }
+    setUpdateState('checking')
+    try {
+      if (!('serviceWorker' in navigator)) {
+        setUpdateState('current')
+        setTimeout(() => setUpdateState('idle'), 3000)
+        return
+      }
+      const reg = await navigator.serviceWorker.getRegistration()
+      if (!reg) {
+        setUpdateState('current')
+        setTimeout(() => setUpdateState('idle'), 3000)
+        return
+      }
+      let foundNew = false
+      const onFound = () => { foundNew = true }
+      reg.addEventListener('updatefound', onFound)
+      try {
+        await reg.update()
+      } catch { /* network errors handled below */ }
+      // Give the browser a moment for updatefound to fire
+      await new Promise(r => setTimeout(r, 1500))
+      reg.removeEventListener('updatefound', onFound)
+      if (foundNew || reg.installing || reg.waiting) {
+        setUpdateState('available')
+      } else {
+        setUpdateState('current')
+        setTimeout(() => setUpdateState('idle'), 3000)
+      }
+    } catch {
+      setUpdateState('current')
+      setTimeout(() => setUpdateState('idle'), 3000)
+    }
+  }
 
   function showStatus(msg: string, ms = 3000) {
     setSaveStatus(msg)
@@ -304,6 +352,32 @@ export default function Settings() {
             GitHub →
           </a>
         </div>
+        <button
+          onClick={checkForUpdate}
+          disabled={updateState === 'checking'}
+          className={`w-full flex items-center justify-between rounded-xl px-3 py-2.5 text-xs font-medium border transition-colors ${
+            updateState === 'available'
+              ? 'bg-amber-950 border-amber-700 text-amber-300 hover:bg-amber-900'
+              : updateState === 'current'
+              ? 'bg-green-950 border-green-800 text-green-300'
+              : 'bg-navy border-border text-slate-300 hover:border-slate-600'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <span className="text-slate-500">v{APP_VERSION}</span>
+          </span>
+          <span className="flex items-center gap-2">
+            {updateState === 'checking' && (
+              <span className="inline-block h-3 w-3 rounded-full border-2 border-slate-500 border-t-transparent animate-spin" />
+            )}
+            <span>
+              {updateState === 'idle'      && 'Check for Update'}
+              {updateState === 'checking'  && 'Checking…'}
+              {updateState === 'current'   && 'Up to date ✓'}
+              {updateState === 'available' && 'Update available — tap to reload'}
+            </span>
+          </span>
+        </button>
       </Section>
 
       {/* ── Mode switch confirm dialogs ─────────────────────────────────────── */}
