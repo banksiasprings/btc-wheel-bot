@@ -2014,9 +2014,18 @@ def tab_fleet() -> None:
     with c4:
         metric_card("Open Positions", f"{n_open}")
     with c5:
+        # Compact "$Xk" representation prevents the value wrapping mid-number
+        # in the narrow card column (the previous "$15,300" got broken to
+        # "$15,30\n0" on Streamlit's default card width at 6-col layout).
+        if fleet_margin >= 1_000_000:
+            margin_short = f"${fleet_margin/1_000_000:.1f}M"
+        elif fleet_margin >= 10_000:
+            margin_short = f"${fleet_margin/1_000:.0f}k"
+        else:
+            margin_short = f"${fleet_margin:,.0f}"
         metric_card(
             "Margin Deployed",
-            f"${fleet_margin:,.0f}<br>"
+            f"{margin_short}<br>"
             f"<span style='font-size:13px;font-weight:400;opacity:0.75'>"
             f"{util_pct:.1f}% of fleet</span>",
             "amber" if util_pct > 50 else "",
@@ -2036,38 +2045,33 @@ def tab_fleet() -> None:
     st.markdown("#### 📊 Per-bot leaderboard")
     st.caption("Sorted by ROI %. Click any column header to re-sort.")
 
-    df_view = df.copy()
-    df_view = df_view.sort_values("ROI %", ascending=False).reset_index(drop=True)
-    # Truncate long bot names so the table fits without horizontal scroll
-    df_view["Bot"] = df_view["Bot"].apply(
-        lambda s: s if len(s) <= 26 else s[:23] + "…"
-    )
+    # ── Build display dataframe ──────────────────────────────────────────────
+    # Keep the column set small enough that each column gets >= 70px in the
+    # ~780px content area. Anything above ~10 columns truncates the leftmost
+    # to 4 characters and renders the rest nearly invisible. Power-user
+    # columns (Sharpe, MaxDD, IV thresh, Last tick) live in the drill-down.
+    df_view = df.sort_values("ROI %", ascending=False).reset_index(drop=True).copy()
+    df_view["Bot"] = df_view["Bot"].apply(lambda s: s if len(s) <= 22 else s[:19] + "…")
 
-    st.dataframe(
-        df_view,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Bot":            st.column_config.TextColumn("Bot", width="medium"),
-            "Status":         st.column_config.TextColumn("Status", width="small"),
-            "Equity $":       st.column_config.NumberColumn("Equity $", format="$%.0f"),
-            "ROI %":          st.column_config.NumberColumn("ROI %", format="%+.2f%%"),
-            "Open Pos":       st.column_config.TextColumn("Open Pos", width="medium"),
-            "Unrealized $":   st.column_config.NumberColumn("Unreal $", format="$%+.0f"),
-            "Margin Used $":  st.column_config.NumberColumn("Margin $", format="$%.0f"),
-            "Util %":         st.column_config.NumberColumn("Util %", format="%.1f%%"),
-            "Trades":         st.column_config.NumberColumn("Trades", format="%d"),
-            "Win %":          st.column_config.NumberColumn("Win %", format="%.0f%%"),
-            "Sharpe":         st.column_config.NumberColumn("Sharpe", format="%.2f"),
-            "Max DD %":       st.column_config.NumberColumn("Max DD %", format="%.1f%%"),
-            "DTE":            st.column_config.NumberColumn("DTE", format="%d"),
-            "Δ":              st.column_config.NumberColumn("Δ", format="%.3f"),
-            "Last tick":      st.column_config.TextColumn("Last", width="small"),
-            "Why not trading": st.column_config.TextColumn("Status / why-not", width="medium"),
-            "IV thresh":      st.column_config.NumberColumn("IV thresh", format="%.2f"),
-            "Start $":        None,   # hide from view
-        },
-    )
+    df_pretty = pd.DataFrame({
+        "Bot":      df_view["Bot"],
+        "ROI":      df_view["ROI %"].apply(lambda v: f"{v:+.2f}%"),
+        "Equity":   df_view["Equity $"].apply(lambda v: f"${v:,.0f}"),
+        "Open Pos": df_view["Open Pos"].apply(
+            lambda s: s if (s == "—" or len(s) <= 18) else s[:15] + "…"
+        ),
+        "Unreal":   df_view["Unrealized $"].apply(lambda v: f"${v:+,.0f}" if v else "—"),
+        "Margin":   df_view["Margin Used $"].apply(
+            lambda v: f"${v/1000:.1f}k" if v >= 10_000 else (f"${v:,.0f}" if v else "—")
+        ),
+        "Util":     df_view["Util %"].apply(lambda v: f"{v:.1f}%" if v else "—"),
+        "Trades":   df_view["Trades"].astype(str),
+        "Win%":     df_view["Win %"].apply(lambda v: f"{v:.0f}%"),
+        "Status":   df_view["Why not trading"].apply(
+            lambda s: s if len(s) <= 32 else s[:29] + "…"
+        ),
+    })
+    st.dataframe(df_pretty, use_container_width=True, hide_index=True, height=560)
 
     st.divider()
 
@@ -2076,20 +2080,24 @@ def tab_fleet() -> None:
     if len(open_rows) > 0:
         st.markdown(f"#### 🎯 Open positions ({len(open_rows)})")
         st.caption("What's currently at risk across the fleet.")
-        open_view = open_rows[
-            ["Bot", "Open Pos", "DTE", "Δ", "Margin Used $", "Unrealized $"]
-        ].sort_values("Unrealized $", ascending=False).reset_index(drop=True)
-        st.dataframe(
-            open_view,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Margin Used $":  st.column_config.NumberColumn("Collateral $", format="$%.0f"),
-                "Unrealized $":   st.column_config.NumberColumn("Unreal $", format="$%+.0f"),
-                "DTE":            st.column_config.NumberColumn("DTE", format="%d"),
-                "Δ":              st.column_config.NumberColumn("Δ", format="%.3f"),
-            },
-        )
+        open_sorted = open_rows.sort_values("Unrealized $", ascending=False).reset_index(drop=True)
+        # Use st.table here — st.dataframe was overlaying a translucent red
+        # tint on the cells (Streamlit's automatic conditional highlight on
+        # small dataframes with mixed string/number columns). st.table
+        # renders plain HTML, no canvas, no surprise colours.
+        open_pretty = pd.DataFrame({
+            "Bot":        open_sorted["Bot"],
+            "Open Pos":   open_sorted["Open Pos"],
+            "DTE":        open_sorted["DTE"].apply(
+                lambda v: f"{int(v)}" if pd.notna(v) else "—"
+            ),
+            "Delta":      open_sorted["Δ"].apply(
+                lambda v: f"{v:.3f}" if pd.notna(v) else "—"
+            ),
+            "Collateral": open_sorted["Margin Used $"].apply(lambda v: f"${v:,.0f}"),
+            "Unreal P&L": open_sorted["Unrealized $"].apply(lambda v: f"${v:+,.0f}"),
+        })
+        st.table(open_pretty)
 
     st.divider()
 
