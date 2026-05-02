@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBotWhyNotTrading, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState, WhyNotTrading } from '../api'
+import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBotWhyNotTrading, getBtcPrice, pauseFarmBot, resumeFarmBot, FarmStatus, BotFarmEntry, BotLiveState, WhyNotTrading } from '../api'
 import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -95,13 +95,16 @@ function StatusDot({ status }: { status: string }) {
 
 // ── Bot card ─────────────────────────────────────────────────────────────────
 
-function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onClosePosition, closeMsgText }: {
+function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onClosePosition, closeMsgText, onTogglePause, pauseBusy, pauseMsgText }: {
   bot: BotFarmEntry
   onRefresh: () => void
   isDragging?: boolean
   onExpandAttempt?: () => boolean
   onClosePosition?: (bot: BotFarmEntry) => void
   closeMsgText?: string
+  onTogglePause?: (bot: BotFarmEntry) => void
+  pauseBusy?: boolean
+  pauseMsgText?: string
 }) {
   const [expanded, setExpanded]   = useState(false)
   const [promoteMsg, setPromoteMsg] = useState('')
@@ -204,6 +207,11 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
                   title={whyNot?.reason ?? whyChipLabel}
                 >
                   ⓘ {whyChipLabel}
+                </span>
+              )}
+              {bot.paused && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 bg-amber-900/80 text-amber-200 border-amber-600">
+                  ⏸ Paused
                 </span>
               )}
             </div>
@@ -408,6 +416,40 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
                       }`}
                     >
                       🆘 Emergency Close Position
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Per-bot pause toggle — blocks new entries; existing position is unaffected */}
+              {onTogglePause && (
+                <div className="space-y-1.5">
+                  <p className={`text-xs ${
+                    bot.has_open_position
+                      ? 'text-amber-400'
+                      : 'text-slate-500'
+                  }`}>
+                    {bot.has_open_position
+                      ? '⚠️ Has open position — pausing won\'t close the existing trade'
+                      : '✓ No open position — safe to pause'}
+                  </p>
+                  {pauseMsgText ? (
+                    <div className="text-xs text-center text-amber-400 py-1">{pauseMsgText}</div>
+                  ) : (
+                    <button
+                      onClick={() => onTogglePause(bot)}
+                      disabled={pauseBusy}
+                      className={`w-full py-2 rounded-xl text-xs font-bold transition-colors border disabled:opacity-50 ${
+                        bot.paused
+                          ? 'bg-green-800 hover:bg-green-700 text-green-100 border-green-600'
+                          : 'bg-amber-900 hover:bg-amber-800 text-amber-100 border-amber-700'
+                      }`}
+                    >
+                      {pauseBusy
+                        ? '…'
+                        : bot.paused
+                          ? '▶ Resume New Entries'
+                          : '⏸ Pause New Entries'}
                     </button>
                   )}
                 </div>
@@ -618,6 +660,8 @@ export default function Farm() {
   const [confirm, setConfirm]       = useState<{ type: 'start' | 'stop'; liveBots: number; totalBots: number } | null>(null)
   const [closeConfirm, setCloseConfirm] = useState<{ botId: string; botName: string; pos: BotFarmEntry['open_position'] } | null>(null)
   const [closeMsg, setCloseMsg]     = useState<Record<string, string>>({})
+  const [pauseBusy, setPauseBusy]   = useState<Record<string, boolean>>({})
+  const [pauseMsg, setPauseMsg]     = useState<Record<string, string>>({})
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -683,6 +727,28 @@ export default function Farm() {
       setActionMsg(String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function handleTogglePause(bot: BotFarmEntry) {
+    const botId = bot.id
+    setPauseBusy(prev => ({ ...prev, [botId]: true }))
+    try {
+      if (bot.paused) {
+        await resumeFarmBot(botId)
+        setPauseMsg(prev => ({ ...prev, [botId]: '✅ Resumed — new entries enabled' }))
+      } else {
+        await pauseFarmBot(botId)
+        setPauseMsg(prev => ({ ...prev, [botId]: '✅ Paused — new entries blocked' }))
+      }
+      setTimeout(() => {
+        setPauseMsg(prev => { const n = { ...prev }; delete n[botId]; return n })
+        setTimeout(fetchStatus, 500)
+      }, 2500)
+    } catch (e) {
+      setPauseMsg(prev => ({ ...prev, [botId]: `Error: ${String(e)}` }))
+    } finally {
+      setPauseBusy(prev => ({ ...prev, [botId]: false }))
     }
   }
 
@@ -1096,6 +1162,9 @@ export default function Farm() {
                 onExpandAttempt={() => !didDragRef.current}
                 onClosePosition={b => setCloseConfirm({ botId: b.id, botName: b.name, pos: b.open_position ?? null })}
                 closeMsgText={closeMsg[bot.id]}
+                onTogglePause={handleTogglePause}
+                pauseBusy={pauseBusy[bot.id]}
+                pauseMsgText={pauseMsg[bot.id]}
               />
             </div>
           ))}

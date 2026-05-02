@@ -272,6 +272,15 @@ export const setMode = (mode: string, confirm?: string) =>
     method: 'POST',
     body: JSON.stringify({ mode, confirm }),
   })
+
+// Global pause toggles the KILL_SWITCH file. Bot processes stay alive; new
+// entries are blocked while paused. Existing positions still settle naturally.
+export const getTradingPaused = () =>
+  request<{ paused: boolean }>('/controls/trading_paused')
+export const pauseTrading = () =>
+  request<{ ok: boolean; paused: boolean }>('/controls/pause_trading', { method: 'POST' })
+export const resumeTrading = () =>
+  request<{ ok: boolean; paused: boolean }>('/controls/resume_trading', { method: 'POST' })
 export const getPresets = () => request<PresetsData>('/config/presets')
 export const loadPreset = (preset: Exclude<ActivePreset, 'custom'>) =>
   request<{ ok: boolean; preset: string; params_updated: string[] }>('/config/load_preset', {
@@ -406,6 +415,7 @@ export interface BotFarmEntry {
   readiness: BotReadiness
   has_open_position?: boolean
   position_risk?: 'ok' | 'caution' | 'danger'
+  paused?: boolean
   open_position?: {
     type: string | null
     strike: number | null
@@ -617,6 +627,15 @@ export const closeFarmBotPosition = (botId: string) =>
   request<{ ok: boolean; bot_id: string; command: string }>(`/farm/bot/${botId}/close_position`, {
     method: 'POST',
   })
+
+// Per-bot pause — creates farm/{botId}/PAUSED. Bot continues to manage existing
+// positions but skips opening new entries while the file is present.
+export const getFarmBotPaused = (botId: string) =>
+  request<{ paused: boolean }>(`/farm/bot/${botId}/paused`)
+export const pauseFarmBot = (botId: string) =>
+  request<{ ok: boolean; bot_id: string; paused: boolean }>(`/farm/bot/${botId}/pause`, { method: 'POST' })
+export const resumeFarmBot = (botId: string) =>
+  request<{ ok: boolean; bot_id: string; paused: boolean }>(`/farm/bot/${botId}/resume`, { method: 'POST' })
 
 export const promoteConfig = (configName: string, startingEquity: number) =>
   request<{ ok: boolean; message: string; starting_equity: number }>(`/configs/${encodeURIComponent(configName)}/promote`, {

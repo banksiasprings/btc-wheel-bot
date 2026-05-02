@@ -466,6 +466,7 @@ class BotProcess:
             "has_open_position":    has_open_position,
             "open_position":        open_position_summary if has_open_position else None,
             "position_risk":        position_risk,
+            "paused":               (self.bot_dir / "PAUSED").exists(),
         }
 
 

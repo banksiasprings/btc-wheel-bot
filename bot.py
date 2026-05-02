@@ -49,6 +49,15 @@ def _data_path(filename: str) -> Path:
     return Path(_DATA_DIR) / filename
 
 
+def _pause_sentinel_path() -> Path:
+    """
+    Per-bot pause sentinel — sits in the parent of the bot's data dir.
+    Farm bots: farm/{bot_id}/PAUSED. Single bot: BASE_DIR/PAUSED.
+    Mirrors the global KILL_SWITCH pattern but blocks new entries only.
+    """
+    return Path(_DATA_DIR).parent / "PAUSED"
+
+
 # ── BTC price ring-buffer (7 days × 24h × 1 sample/min ≈ 10 080 entries max) ──
 # We just need the oldest and newest values, so we keep a lightweight deque.
 _BTC_PRICE_HISTORY_MAX = 10_080  # 7 days at 1-per-minute
@@ -761,7 +770,11 @@ class WheelBot:
         )
 
         if needs_new_leg:
-            if not self._is_above_regime_ma(underlying_price):
+            # Per-bot PAUSED sentinel — skip new entries while present.
+            # Existing positions continue to be managed (rolls, hedges, expiry).
+            if _pause_sentinel_path().exists():
+                logger.info("Bot PAUSED — skipping new entry (existing positions still managed)")
+            elif not self._is_above_regime_ma(underlying_price):
                 logger.info(
                     f"Regime filter ACTIVE — BTC ${underlying_price:,.0f} is below its "
                     f"{self._cfg.sizing.regime_ma_days}-day MA; skipping new entry"
@@ -1610,6 +1623,7 @@ class WheelBot:
         try:
             state = {
                 "running": True,
+                "paused":  _pause_sentinel_path().exists(),
                 "mode": mode_str,
                 "started_at": self._started_at.isoformat(),
                 "last_heartbeat": now.isoformat(),

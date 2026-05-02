@@ -753,6 +753,32 @@ def control_set_mode(body: SetModeRequest) -> dict:
     return {"ok": True}
 
 
+# ── Pause / Resume Trading (global) ───────────────────────────────────────────
+# Toggles the global KILL_SWITCH file. Bot processes stay alive; they just stop
+# opening new entries on each tick. Existing positions continue to settle on the
+# exchange. Resuming clears the file and trading restarts on the next tick.
+
+@app.get("/controls/trading_paused", dependencies=[Depends(_require_api_key)])
+def get_trading_paused() -> dict:
+    """Return whether global trading is paused (KILL_SWITCH file present)."""
+    return {"paused": (BASE_DIR / "KILL_SWITCH").exists()}
+
+
+@app.post("/controls/pause_trading", dependencies=[Depends(_require_api_key)])
+def pause_trading() -> dict:
+    """Create the global KILL_SWITCH file. Blocks new entries across all bots."""
+    kill_path = BASE_DIR / "KILL_SWITCH"
+    kill_path.write_text("PAUSED")
+    return {"ok": True, "paused": True}
+
+
+@app.post("/controls/resume_trading", dependencies=[Depends(_require_api_key)])
+def resume_trading() -> dict:
+    """Remove the global KILL_SWITCH file. New entries resume on the next tick."""
+    (BASE_DIR / "KILL_SWITCH").unlink(missing_ok=True)
+    return {"ok": True, "paused": False}
+
+
 # ── Named Config Store ────────────────────────────────────────────────────────
 
 class SaveConfigRequest(BaseModel):
@@ -2218,6 +2244,43 @@ def farm_bot_close_position(bot_id: str) -> dict:
         pass
 
     return {"ok": True, "bot_id": bot_id, "command": "close_position"}
+
+
+# ── Per-bot pause / resume ────────────────────────────────────────────────────
+# Creates farm/{bot_id}/PAUSED. Bot.py checks this on each tick and skips
+# opening new positions while present, but continues to manage existing ones.
+
+def _bot_paused_path(bot_id: str) -> Path:
+    return FARM_DIR / bot_id / "PAUSED"
+
+
+@app.get("/farm/bot/{bot_id}/paused", dependencies=[Depends(_require_api_key)])
+def get_farm_bot_paused(bot_id: str) -> dict:
+    """Return whether the bot has a PAUSED sentinel file present."""
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+    return {"paused": _bot_paused_path(bot_id).exists()}
+
+
+@app.post("/farm/bot/{bot_id}/pause", dependencies=[Depends(_require_api_key)])
+def pause_farm_bot(bot_id: str) -> dict:
+    """Create the per-bot PAUSED file — blocks new entries for this bot only."""
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+    _bot_paused_path(bot_id).write_text("PAUSED")
+    return {"ok": True, "bot_id": bot_id, "paused": True}
+
+
+@app.post("/farm/bot/{bot_id}/resume", dependencies=[Depends(_require_api_key)])
+def resume_farm_bot(bot_id: str) -> dict:
+    """Remove the per-bot PAUSED file — bot resumes opening new entries."""
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+    _bot_paused_path(bot_id).unlink(missing_ok=True)
+    return {"ok": True, "bot_id": bot_id, "paused": False}
 
 
 class AssignConfigRequest(BaseModel):

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import {
   testConnection, setMode,
   getNotifierConfig, setupNotifier, testNotifier,
+  getTradingPaused, pauseTrading, resumeTrading,
   NotifierConfig,
 } from '../api'
 import { saveApiKey, loadApiKey, DEFAULT_URL } from '../credentials'
@@ -58,6 +59,12 @@ export default function Settings() {
   const [modeConfirm, setModeConfirm]     = useState(false)
   const [pendingMode, setPendingMode]     = useState<'paper' | 'live' | null>(null)
   const [modeConfirmText, setModeConfirmText] = useState('')
+
+  // Pause All Trading (global)
+  const [tradingPaused, setTradingPaused] = useState<boolean | null>(null)
+  const [pauseBusy, setPauseBusy]         = useState(false)
+  const [pauseConfirm, setPauseConfirm]   = useState(false)
+  const [restartHelpOpen, setRestartHelpOpen] = useState(false)
 
   // Telegram
   const [notifierCfg, setNotifierCfg]     = useState<NotifierConfig | null>(null)
@@ -117,12 +124,48 @@ export default function Settings() {
     try {
       const ntf = await getNotifierConfig().catch(() => null)
       setNotifierCfg(ntf)
+      const pauseState = await getTradingPaused().catch(() => null)
+      if (pauseState) setTradingPaused(pauseState.paused)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => { loadData() }, [])
+
+  async function handlePauseToggle() {
+    if (tradingPaused === null) return
+    if (!tradingPaused) {
+      // Confirm before pausing — visible action
+      setPauseConfirm(true)
+      return
+    }
+    // Resuming is a one-tap action
+    setPauseBusy(true)
+    try {
+      const r = await resumeTrading()
+      setTradingPaused(r.paused)
+      showStatus('Trading resumed ✓', 3000)
+    } catch (e) {
+      showStatus(String(e))
+    } finally {
+      setPauseBusy(false)
+    }
+  }
+
+  async function confirmPause() {
+    setPauseConfirm(false)
+    setPauseBusy(true)
+    try {
+      const r = await pauseTrading()
+      setTradingPaused(r.paused)
+      showStatus('Trading paused ✓', 3000)
+    } catch (e) {
+      showStatus(String(e))
+    } finally {
+      setPauseBusy(false)
+    }
+  }
 
   async function saveApiSettings() {
     saveApiKey(apiKey.trim())
@@ -186,6 +229,44 @@ export default function Settings() {
             : 'bg-slate-800 border-border text-slate-300'
         }`}>
           {saveStatus}
+        </div>
+      )}
+
+      {/* ── Pause All Trading ───────────────────────────────────────────────── */}
+      {tradingPaused !== null && (
+        <div className={`rounded-2xl border overflow-hidden ${
+          tradingPaused
+            ? 'bg-amber-950/40 border-amber-700'
+            : 'bg-card border-border'
+        }`}>
+          <button
+            onClick={handlePauseToggle}
+            disabled={pauseBusy}
+            className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left disabled:opacity-60"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-white">Pause All Trading</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Existing open positions continue running to expiry. Only new entries are blocked.
+              </p>
+            </div>
+            <span className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-full border font-bold whitespace-nowrap ${
+              tradingPaused
+                ? 'bg-amber-900/80 text-amber-200 border-amber-600'
+                : 'bg-green-900/80 text-green-300 border-green-700'
+            }`}>
+              {pauseBusy
+                ? '…'
+                : tradingPaused
+                  ? '⏸ Trading Paused'
+                  : '● Trading Active'}
+            </span>
+          </button>
+          {tradingPaused && (
+            <div className="border-t border-amber-700/40 px-4 py-2 text-xs text-amber-300">
+              New positions are blocked across all bots. Tap to resume.
+            </div>
+          )}
         </div>
       )}
 
@@ -351,6 +432,24 @@ export default function Settings() {
           >
             GitHub →
           </a>
+
+          {/* How to restart the farm */}
+          <div className="pt-3 mt-2 border-t border-border/40">
+            <button
+              onClick={() => setRestartHelpOpen(o => !o)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <span className="text-xs text-slate-300 font-medium">How to restart the farm</span>
+              <span className="text-slate-500 text-xs">{restartHelpOpen ? '▲' : '▼'}</span>
+            </button>
+            {restartHelpOpen && (
+              <ol className="mt-2 space-y-1.5 text-xs text-slate-400 list-decimal pl-5">
+                <li>Tap <span className="text-slate-300 font-medium">"Pause All Trading"</span> above to stop new entries.</li>
+                <li>Restart the farm process on the server.</li>
+                <li>Tap <span className="text-slate-300 font-medium">"Resume Trading"</span> to re-enable new entries.</li>
+              </ol>
+            )}
+          </div>
         </div>
         <button
           onClick={checkForUpdate}
@@ -418,6 +517,34 @@ export default function Settings() {
             <div className="flex gap-3">
               <button onClick={() => { setModeConfirm(false); setPendingMode(null) }} className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm">Cancel</button>
               <button onClick={confirmModeSwitch} className="flex-1 py-3 rounded-xl bg-amber-700 text-white text-sm font-semibold">Switch to Paper</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pause All Trading confirmation ──────────────────────────────────── */}
+      {pauseConfirm && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-6 z-50">
+          <div className="bg-card border border-amber-700 rounded-2xl p-6 w-full max-w-sm">
+            <div className="text-amber-400 text-2xl mb-3">⏸</div>
+            <h3 className="font-bold text-white text-lg mb-2">Pause All Trading?</h3>
+            <p className="text-slate-400 text-sm mb-4">
+              No new positions will be opened on any bot until you resume. Existing open
+              positions continue running to expiry.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setPauseConfirm(false)}
+                className="flex-1 py-3 rounded-xl bg-slate-700 text-white text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmPause}
+                className="flex-1 py-3 rounded-xl bg-amber-700 text-white text-sm font-semibold"
+              >
+                Pause Trading
+              </button>
             </div>
           </div>
         </div>
