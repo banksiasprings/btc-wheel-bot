@@ -1893,8 +1893,21 @@ def tab_fleet() -> None:
         st.info("Farm supervisor is up but no bots are running.")
         return
 
+    # ── Why-not-trading diagnostic helper ────────────────────────────────────
+    # The /farm/bot/{id}/why_not_trading endpoint (added by the parallel
+    # dispatch session) gives a plain-English reason each bot is or isn't
+    # eligible to enter a new trade right now. Reusing it here means the
+    # leaderboard "Reason" column matches what the mobile app shows.
+    def _bot_diag(bot_id: str) -> dict:
+        try:
+            from api import get_bot_why_not_trading
+            return get_bot_why_not_trading(bot_id)
+        except Exception:
+            return {"ready": None, "reason": "—", "checks": {}}
+
     # ── Augment each bot row with live data from per-bot files ───────────────
     rows: list[dict] = []
+    diags: dict[str, dict] = {}    # bot_id → diag dict, used in drill-down too
     now = time.time()
     for b in bots_meta:
         bot_id = b.get("id", "?")
@@ -1941,6 +1954,18 @@ def tab_fleet() -> None:
             except Exception:
                 pass
 
+        # Diagnostic: ready / waiting on what?
+        diag = _bot_diag(bot_id)
+        diags[bot_id] = diag
+        # Compact reason for the leaderboard row.
+        reason_short = (diag.get("reason") or "—")
+        if len(reason_short) > 38:
+            reason_short = reason_short[:35] + "…"
+        if diag.get("ready") is True:
+            reason_short = "🟢 " + reason_short
+        elif diag.get("ready") is False:
+            reason_short = "🟡 " + reason_short
+
         rows.append({
             "Bot": bot_id,
             "Status": b.get("status", "?"),
@@ -1959,6 +1984,7 @@ def tab_fleet() -> None:
             "Δ": round(pos_delta, 3) if pos_delta is not None else None,
             "Last tick": (f"{last_tick_s}s" if last_tick_s is not None and last_tick_s < 600
                           else (f"{last_tick_s // 60}m" if last_tick_s is not None else "—")),
+            "Why not trading": reason_short,
             "IV thresh": cs.get("iv_rank_threshold"),
             "Start $": starting_equity,
         })
@@ -2037,6 +2063,7 @@ def tab_fleet() -> None:
             "DTE":            st.column_config.NumberColumn("DTE", format="%d"),
             "Δ":              st.column_config.NumberColumn("Δ", format="%.3f"),
             "Last tick":      st.column_config.TextColumn("Last", width="small"),
+            "Why not trading": st.column_config.TextColumn("Status / why-not", width="medium"),
             "IV thresh":      st.column_config.NumberColumn("IV thresh", format="%.2f"),
             "Start $":        None,   # hide from view
         },
@@ -2394,6 +2421,42 @@ def tab_fleet() -> None:
                 f'</div></div>',
                 unsafe_allow_html=True,
             )
+
+            # ── Why-not-trading diagnostic ────────────────────────────────────
+            # Reuses the /farm/bot/{id}/why_not_trading endpoint that the
+            # mobile app uses, so the dashboard stays in sync with what the
+            # PWA shows. Per-check breakdown lives in an expander.
+            sel_diag = diags.get(slug, {}) or {}
+            ready = sel_diag.get("ready")
+            reason = sel_diag.get("reason", "—")
+            if ready is True:
+                badge_colour = C_GREEN
+                badge_icon = "🟢"
+                badge_label = "READY"
+            elif ready is False:
+                badge_colour = C_AMBER
+                badge_icon = "🟡"
+                badge_label = "NOT TRADING"
+            else:
+                badge_colour = C_MUTED
+                badge_icon = "⚫"
+                badge_label = "UNKNOWN"
+            st.markdown(
+                f'<div style="background:{C_CARD};border-left:4px solid {badge_colour};'
+                f'border-radius:4px;padding:10px 14px;margin-bottom:12px;">'
+                f'<div style="color:{badge_colour};font-size:11px;font-weight:600;'
+                f'letter-spacing:0.5px;text-transform:uppercase;">'
+                f'{badge_icon} {badge_label}</div>'
+                f'<div style="color:{C_TEXT};font-size:13px;margin-top:4px;">{reason}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+            with st.expander("Per-check breakdown", expanded=False):
+                checks = sel_diag.get("checks") or {}
+                if checks:
+                    st.json(checks, expanded=True)
+                else:
+                    st.caption("No per-check data available.")
 
             dcol1, dcol2 = st.columns(2)
 
