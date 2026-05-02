@@ -330,9 +330,9 @@ def render_sidebar() -> None:
 
         # ── Bot status ─────────────────────────────────────────────────────────
         if kill_switch_active():
-            st.markdown(f'<span class="status-dot-red"></span>**KILL SWITCH ACTIVE**',
+            st.markdown(f'<span class="status-dot-red"></span>**TRADING PAUSED**',
                         unsafe_allow_html=True)
-            if st.button("🗑️ Clear Kill Switch", use_container_width=True):
+            if st.button("▶ Resume Trading", use_container_width=True):
                 clear_kill_switch()
                 st.rerun()
         elif bot_running():
@@ -701,14 +701,22 @@ def tab_paper() -> None:
                     st.rerun()
 
     with ctrl2:
+        # Standardised Pause / Resume verbiage to match the mobile app.
+        # Mechanism is unchanged (KILL_SWITCH file blocks new trade entries
+        # but doesn't kill the process); only the user-facing label moved
+        # from "Kill Switch" to "Pause Trading" so both surfaces talk about
+        # the same concept the same way. See CONSISTENCY.md Pass A.4.
         if kill_switch_active():
-            if st.button("🗑️ Clear Kill Switch", use_container_width=True):
+            if st.button("▶ Resume Trading (all bots)",
+                         type="primary", use_container_width=True):
                 clear_kill_switch()
                 st.rerun()
         elif bot_running():
-            if st.button("🛑 Emergency Stop (Kill Switch)", use_container_width=True):
+            if st.button("⏸ Pause Trading (all bots)",
+                         use_container_width=True,
+                         help="Blocks new trade entries on every bot. Open positions still settle naturally. The bot process keeps running."):
                 (BOT_DIR / "KILL_SWITCH").write_text(
-                    f"Manual kill from dashboard at {datetime.utcnow().isoformat()}\n"
+                    f"Paused from dashboard at {datetime.utcnow().isoformat()}\n"
                     "Delete this file to resume trading."
                 )
                 st.rerun()
@@ -721,7 +729,7 @@ def tab_paper() -> None:
 
     # ── Status header ─────────────────────────────────────────────────────────
     if kill_switch_active():
-        st.error("🛑 **KILL SWITCH ACTIVE** — Trading halted. Clear it in the sidebar to resume.")
+        st.error("⏸ **TRADING PAUSED** — New entries blocked across all bots. Click Resume to continue.")
     elif bot_running():
         start = st.session_state.get("bot_start_time")
         elapsed = ""
@@ -1860,18 +1868,48 @@ def tab_fleet() -> None:
         "scatter (high return, low margin used) is the thesis you're hunting for."
     )
 
-    # ── Refresh control ─────────────────────────────────────────────────────
+    # ── Refresh + global pause state ────────────────────────────────────────
     # Manual-only by design: the previous auto-refresh attempt (tab_paper)
     # caused UI hangs because it re-ran the whole script. A future enhancement
     # could use st.fragment(run_every=...) for in-place refresh, but that's
     # parked for now — manual refresh is reliable.
-    rcol1, rcol2 = st.columns([1, 4])
+    rcol1, rcol2, rcol3 = st.columns([1, 1, 3])
     with rcol1:
         if st.button("🔄 Refresh", key="fleet_refresh_btn", use_container_width=True):
             st.rerun()
     with rcol2:
-        st.caption(f"Loaded {datetime.utcnow().strftime('%H:%M:%S')} UTC — "
-                   f"farm/status.json refreshes every 60s")
+        # Global Pause/Resume pill+button (matches mobile Farm tab's verbiage).
+        if kill_switch_active():
+            if st.button("▶ Resume", key="fleet_resume_btn",
+                         type="primary", use_container_width=True,
+                         help="Resume new trade entries across all bots."):
+                clear_kill_switch()
+                st.rerun()
+        else:
+            if st.button("⏸ Pause all", key="fleet_pause_btn",
+                         use_container_width=True,
+                         help="Block new trade entries on every bot. Open positions still settle."):
+                (BOT_DIR / "KILL_SWITCH").write_text(
+                    f"Paused from Fleet tab at {datetime.utcnow().isoformat()}\n"
+                    "Delete this file to resume trading."
+                )
+                st.rerun()
+    with rcol3:
+        paused = kill_switch_active()
+        pill_bg = C_AMBER if paused else C_GREEN
+        pill_label = "⏸ TRADING PAUSED" if paused else "🟢 TRADING ACTIVE"
+        st.markdown(
+            f'<div style="display:flex;align-items:center;height:38px;'
+            f'gap:12px;margin-top:0;">'
+            f'<span style="background:{pill_bg};color:#0d1117;font-weight:600;'
+            f'font-size:11px;padding:4px 10px;border-radius:999px;'
+            f'letter-spacing:0.5px;">{pill_label}</span>'
+            f'<span style="color:{C_MUTED};font-size:11px;">'
+            f'Loaded {datetime.utcnow().strftime("%H:%M:%S")} UTC · '
+            f'farm/status.json refreshes every 60s'
+            f'</span></div>',
+            unsafe_allow_html=True,
+        )
 
     farm_dir = BOT_DIR / "farm"
     status_path = farm_dir / "status.json"
@@ -2950,24 +2988,29 @@ def tab_settings() -> None:
 
     st.divider()
 
-    # ── Kill Switch ────────────────────────────────────────────────────────────
-    st.markdown("#### Kill Switch")
+    # ── Pause Trading ──────────────────────────────────────────────────────────
+    # Renamed from "Kill Switch" 2026-05-03 to match the mobile app's
+    # Pause/Resume verbiage. Mechanism unchanged (KILL_SWITCH file blocks new
+    # trade entries on every bot; bot processes keep running).
+    st.markdown("#### Pause Trading (all bots)")
     if kill_switch_active():
         ks_path = BOT_DIR / "KILL_SWITCH"
         try:
             ks_msg = ks_path.read_text().strip()
         except Exception:
             ks_msg = "(no message)"
-        st.error(f"🛑 **Kill switch is ACTIVE**\n\n```\n{ks_msg}\n```")
-        if st.button("🗑️ Clear Kill Switch", type="primary", use_container_width=True):
+        st.error(f"⏸ **Trading is PAUSED**\n\n```\n{ks_msg}\n```")
+        st.caption("Open positions still settle naturally. Only new entries are blocked.")
+        if st.button("▶ Resume Trading", type="primary", use_container_width=True):
             clear_kill_switch()
-            st.success("Kill switch cleared. Bot can now trade.")
+            st.success("Trading resumed. Bots can open new positions.")
             st.rerun()
     else:
-        st.success("✅ Kill switch is clear — trading is permitted.")
-        if st.button("🛑 Activate Kill Switch", type="secondary", use_container_width=True):
+        st.success("✅ Trading is active across all bots.")
+        if st.button("⏸ Pause Trading", type="secondary", use_container_width=True,
+                     help="Blocks new trade entries on every bot. Existing positions still settle. Bot processes keep running."):
             (BOT_DIR / "KILL_SWITCH").write_text(
-                f"Manual kill from Settings tab at {datetime.utcnow().isoformat()}\n"
+                f"Paused from Settings tab at {datetime.utcnow().isoformat()}\n"
                 "Delete this file to resume trading."
             )
             st.rerun()
