@@ -33,6 +33,65 @@ If a change requires user judgment (strategy params, irreversible ops, anything 
 
 ---
 
+## Round 8 — Cross-surface consistency Pass B.2 + B.4 — 2026-05-04
+
+### What I did
+The user's directive — "I need the dashboard and the mobile app to be more
+similar" — has been a multi-pass effort. Pass A (feature parity) finished in
+prior sessions; this round closed Pass B (design system).
+
+### Completed
+- 09390c3 — feat(consistency): Pass B.2 + B.4 — shared Card + StatusBadge
+  primitives.
+  - `theme.json` now carries a `sizing` block (`card_radius_px`,
+    `card_padding_px`, `pill_radius_px`, `border_width_px`).
+  - Mobile gets three new primitives:
+    - `mobile-app/src/lib/theme.ts` — typed Severity union +
+      `severityTone(severity, palette)` helper.
+    - `mobile-app/src/components/Card.tsx` — canonical card chrome.
+    - `mobile-app/src/components/StatusBadge.tsx` — pill + block variants
+      driven by `severityTone()`.
+  - Dashboard gets the Python equivalents in `dashboard_ui.py`:
+    `severity_tone()`, `status_pill()`, `status_block()`, `card_div()`.
+  - `Forecasts.tsx` migrated as the reference example: status counts strip
+    + snapshot cards now use the canonical primitives.
+  - PWA dist rebuilt; `dist/sw.js` cache version bumped.
+
+### Verification
+- `pytest tests/ -q` → 128/128 passing.
+- `npm run build` → TypeScript strict pass, vite build clean,
+  PWA service worker regenerated (30 entries, 2160 KiB precache).
+- CONSISTENCY.md updated: Pass A complete (4/4), Pass B complete (4/4).
+
+### Result
+Adding a new severity tier or tweaking card geometry is now a one-line
+JSON change that propagates to both surfaces automatically. Both surfaces
+share the same hex values, the same radius, the same padding — produced
+from one canonical source (`theme.json`).
+
+### Observations (logged, not acted on)
+- The remaining mobile components (Trading.tsx, Performance.tsx,
+  Pipeline.tsx, Settings.tsx) still use inline Tailwind classes for
+  card chrome. They render correctly today because Tailwind colours
+  are also wired to `theme.json`, but migrating them to the `Card` +
+  `StatusBadge` primitives would eliminate their last bespoke styling.
+  Better to do it incrementally — when each component is next edited
+  for any reason — rather than as a single sweep that touches everything.
+- Dashboard still has bespoke inline `<div style="...">` blocks in many
+  places that could be replaced with `card_div()`. Same incremental
+  approach: migrate when next touched.
+
+### Did NOT change
+- The paper bot at PID 19888 — still untouched, still running, still in
+  paper mode at $100k starting equity.
+- Any scheduled routine, KILL_SWITCH, or strategy parameters.
+- bot.py / risk_manager.py / api.py business logic.
+
+### Deferred — needs user review
+None this round.
+
+---
+
 ## Round 7 — Validate post-fix backtest numbers — 2026-05-02 00:10
 
 ### What I did
