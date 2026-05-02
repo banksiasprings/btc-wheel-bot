@@ -1860,6 +1860,19 @@ def tab_fleet() -> None:
         "scatter (high return, low margin used) is the thesis you're hunting for."
     )
 
+    # ── Refresh control ─────────────────────────────────────────────────────
+    # Manual-only by design: the previous auto-refresh attempt (tab_paper)
+    # caused UI hangs because it re-ran the whole script. A future enhancement
+    # could use st.fragment(run_every=...) for in-place refresh, but that's
+    # parked for now — manual refresh is reliable.
+    rcol1, rcol2 = st.columns([1, 4])
+    with rcol1:
+        if st.button("🔄 Refresh", key="fleet_refresh_btn", use_container_width=True):
+            st.rerun()
+    with rcol2:
+        st.caption(f"Loaded {datetime.utcnow().strftime('%H:%M:%S')} UTC — "
+                   f"farm/status.json refreshes every 60s")
+
     farm_dir = BOT_DIR / "farm"
     status_path = farm_dir / "status.json"
     if not status_path.exists():
@@ -2165,6 +2178,293 @@ def tab_fleet() -> None:
             st.plotly_chart(fig, use_container_width=True)
     except Exception as exc:
         st.warning(f"Couldn't render equity curves: {exc}")
+
+    st.divider()
+
+    # ── Trades timeline ─────────────────────────────────────────────────────
+    # Strip plot — when did each bot fire trades, how big was each fill?
+    # Lets the user spot herd behaviour (everyone trades the same day) vs.
+    # each thesis catching different setups.
+    st.markdown("#### ⏱ Trade timeline (last 30 days)")
+    st.caption(
+        "One dot per closed trade. X = close time, Y = bot, dot size = |P&L|, "
+        "colour = green/red for win/loss. Cluster of dots on the same day = "
+        "fleet-wide signal; isolated dots = thesis-specific catches."
+    )
+    try:
+        import plotly.graph_objects as go
+        from datetime import datetime as _dt, timedelta as _td
+
+        cutoff = datetime.utcnow() - _td(days=30)
+        events: list[dict] = []
+        for b in bots_meta:
+            slug = b.get("id", "")
+            tcsv = farm_dir / slug / "data" / "trades.csv"
+            if not tcsv.exists():
+                continue
+            try:
+                import csv as _csv
+                with open(tcsv, newline="") as f:
+                    for row in _csv.DictReader(f):
+                        try:
+                            ts = _dt.fromisoformat(row["timestamp"].replace("Z", "+00:00"))
+                            ts_naive = ts.replace(tzinfo=None) if ts.tzinfo else ts
+                            if ts_naive < cutoff:
+                                continue
+                            pnl = float(row.get("pnl_usd") or 0)
+                            events.append({
+                                "bot": slug,
+                                "ts": ts_naive,
+                                "pnl": pnl,
+                                "instr": row.get("instrument", "?"),
+                                "reason": row.get("reason", ""),
+                            })
+                        except (ValueError, KeyError, TypeError):
+                            continue
+            except Exception:
+                continue
+
+        if not events:
+            st.info("No trades closed in the last 30 days yet — populates as bots fire.")
+        else:
+            # Sort bots so that y-axis is consistent (most-active first)
+            from collections import Counter
+            bot_counts = Counter(e["bot"] for e in events)
+            bot_order = [b for b, _ in bot_counts.most_common()]
+
+            fig = go.Figure()
+            for sign, name, color in [(1, "Win",  C_GREEN), (-1, "Loss", C_RED)]:
+                evs = [e for e in events if (e["pnl"] >= 0) == (sign > 0)]
+                if not evs:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[e["ts"] for e in evs],
+                    y=[e["bot"] for e in evs],
+                    mode="markers",
+                    name=name,
+                    marker=dict(
+                        size=[max(8, min(30, abs(e["pnl"]) / 5)) for e in evs],
+                        color=color,
+                        opacity=0.65,
+                        line=dict(width=1, color=C_GRID),
+                    ),
+                    customdata=[(e["instr"], e["pnl"], e["reason"]) for e in evs],
+                    hovertemplate=(
+                        "<b>%{y}</b><br>%{x}<br>"
+                        "%{customdata[0]}<br>P&L $%{customdata[1]:+,.2f}<br>"
+                        "<i>%{customdata[2]}</i><extra></extra>"
+                    ),
+                ))
+            fig.update_layout(
+                height=max(220, 30 * len(bot_order) + 80),
+                margin=dict(l=10, r=10, t=20, b=10),
+                paper_bgcolor=C_BG,
+                plot_bgcolor=C_CARD,
+                font=dict(color=C_TEXT, size=11),
+                xaxis=dict(title="", gridcolor=C_GRID),
+                yaxis=dict(
+                    title="",
+                    categoryorder="array",
+                    categoryarray=bot_order,
+                    gridcolor=C_GRID,
+                ),
+                showlegend=True,
+                legend=dict(orientation="h", bgcolor="rgba(0,0,0,0)"),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                f"{len(events)} trades closed across {len(bot_order)} bot(s) in the last 30 days."
+            )
+    except Exception as exc:
+        st.warning(f"Couldn't render trade timeline: {exc}")
+
+    st.divider()
+
+    # ── Variance budget ─────────────────────────────────────────────────────
+    # Which bots are contributing most to (or absorbing most of) the fleet's
+    # equity volatility? Sums each bot's pnl over the trading window, then
+    # ranks by absolute contribution. The user can spot which thesis is
+    # carrying the fleet, and which is bleeding.
+    st.markdown("#### 📉 Variance budget — who moves the fleet")
+    st.caption(
+        "Each bar = one bot's net P&L contribution (sum of pnl_usd). "
+        "Right (green) = profit contribution to fleet; left (red) = drag. "
+        "If one bot dominates, the fleet's results are really just that bot."
+    )
+    try:
+        import plotly.graph_objects as go
+        contributions: list[tuple[str, float, int]] = []
+        for b in bots_meta:
+            slug = b.get("id", "")
+            tcsv = farm_dir / slug / "data" / "trades.csv"
+            if not tcsv.exists():
+                continue
+            try:
+                import csv as _csv
+                pnls = []
+                with open(tcsv, newline="") as f:
+                    for row in _csv.DictReader(f):
+                        try:
+                            pnls.append(float(row.get("pnl_usd") or 0))
+                        except (ValueError, TypeError):
+                            continue
+                if pnls:
+                    contributions.append((slug, sum(pnls), len(pnls)))
+            except Exception:
+                continue
+
+        if not contributions:
+            st.info(
+                "No closed trades yet — variance budget is empty. "
+                "Will populate as bots accumulate fills."
+            )
+        else:
+            contributions.sort(key=lambda x: x[1])
+            fig = go.Figure(go.Bar(
+                x=[c[1] for c in contributions],
+                y=[c[0] for c in contributions],
+                orientation="h",
+                marker=dict(
+                    color=[C_GREEN if c[1] >= 0 else C_RED for c in contributions],
+                ),
+                text=[f"${c[1]:+,.0f} ({c[2]} trades)" for c in contributions],
+                textposition="outside",
+                hovertemplate="<b>%{y}</b><br>P&L $%{x:+,.2f}<extra></extra>",
+            ))
+            total = sum(c[1] for c in contributions)
+            fig.add_vline(x=0, line=dict(color=C_GRID, width=1))
+            fig.update_layout(
+                height=max(220, 26 * len(contributions) + 80),
+                margin=dict(l=10, r=80, t=20, b=20),
+                paper_bgcolor=C_BG,
+                plot_bgcolor=C_CARD,
+                font=dict(color=C_TEXT, size=11),
+                xaxis=dict(title="Net P&L contribution ($)", gridcolor=C_GRID),
+                yaxis=dict(title="", gridcolor=C_GRID, automargin=True),
+                showlegend=False,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                f"Fleet aggregate net P&L: **${total:+,.2f}** across "
+                f"{sum(c[2] for c in contributions)} closed trades."
+            )
+    except Exception as exc:
+        st.warning(f"Couldn't render variance budget: {exc}")
+
+    st.divider()
+
+    # ── Per-bot drill-down ──────────────────────────────────────────────────
+    # Lets the user pick any bot from the leaderboard and inspect that one's
+    # config, recent trades, log tail, and equity curve in isolation. Without
+    # this, the only way to drill into a single bot is to manually `cd
+    # farm/<slug>/` and tail logs.
+    st.markdown("#### 🔬 Per-bot drill-down")
+    bot_options = [r["Bot"] for r in rows]
+    if not bot_options:
+        st.info("No bots in fleet to drill into.")
+    else:
+        selected_bot = st.selectbox(
+            "Pick a bot to inspect",
+            bot_options,
+            key="fleet_drilldown_select",
+        )
+        if selected_bot:
+            slug = selected_bot
+            slug_dir = farm_dir / slug
+            sel_meta = next((b for b in bots_meta if b.get("id") == slug), {})
+            sel_metrics = sel_meta.get("metrics", {}) or {}
+            sel_cfg = sel_meta.get("config_summary", {}) or {}
+
+            # Header card
+            roi = ((sel_metrics.get("current_equity", 0) - sel_metrics.get("starting_equity", 0))
+                   / sel_metrics.get("starting_equity", 1) * 100.0
+                   if sel_metrics.get("starting_equity") else 0.0)
+            roi_col = C_GREEN if roi >= 0 else C_RED
+            st.markdown(
+                f'<div style="background:{C_CARD};border:1px solid {C_GRID};'
+                f'border-radius:8px;padding:14px 18px;margin-bottom:12px;">'
+                f'<div style="color:{C_TEXT};font-weight:600;font-size:15px;">{slug}</div>'
+                f'<div style="color:{C_MUTED};font-size:12px;margin-top:4px;">'
+                f'status: <span style="color:{C_TEXT}">{sel_meta.get("status","?")}</span> · '
+                f'pid: <span style="color:{C_TEXT}">{sel_meta.get("pid","?")}</span> · '
+                f'uptime: <span style="color:{C_TEXT}">{sel_meta.get("uptime_hours",0):.1f}h</span> · '
+                f'equity: <span style="color:{C_TEXT}">${sel_metrics.get("current_equity",0):,.0f}</span> · '
+                f'ROI: <span style="color:{roi_col};font-weight:600;">{roi:+.2f}%</span> · '
+                f'trades: <span style="color:{C_TEXT}">{sel_metrics.get("num_trades",0)}</span>'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+
+            dcol1, dcol2 = st.columns(2)
+
+            # Config summary
+            with dcol1:
+                st.markdown("**Config summary**")
+                st.json(sel_cfg, expanded=False)
+
+            # Open position (if any)
+            with dcol2:
+                st.markdown("**Open position**")
+                cp = slug_dir / "data" / "current_position.json"
+                if cp.exists():
+                    try:
+                        cp_data = json.loads(cp.read_text())
+                        if cp_data.get("open"):
+                            st.json({
+                                "instrument":      cp_data.get("instrument_name"),
+                                "strike":          cp_data.get("strike"),
+                                "contracts":       cp_data.get("contracts"),
+                                "entry_price_btc": cp_data.get("entry_price_btc"),
+                                "current_delta":   cp_data.get("current_delta"),
+                                "DTE":             cp_data.get("days_to_expiry"),
+                                "unrealized_usd":  cp_data.get("unrealized_pnl_usd"),
+                                "premium_usd":     cp_data.get("premium_collected"),
+                            }, expanded=False)
+                        else:
+                            st.caption("Currently flat.")
+                    except Exception as exc:
+                        st.warning(f"Couldn't parse current_position.json: {exc}")
+                else:
+                    st.caption("No current_position.json yet.")
+
+            # Recent trades
+            st.markdown("**Recent trades (last 15)**")
+            tcsv_path = slug_dir / "data" / "trades.csv"
+            if tcsv_path.exists():
+                try:
+                    tdf = pd.read_csv(tcsv_path)
+                    if len(tdf) > 0:
+                        cols = [c for c in [
+                            "timestamp", "instrument", "option_type", "strike",
+                            "contracts", "pnl_usd", "equity_after", "reason",
+                        ] if c in tdf.columns]
+                        st.dataframe(
+                            tdf[cols].tail(15),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.caption("No trades closed yet.")
+                except Exception as exc:
+                    st.warning(f"Couldn't read trades.csv: {exc}")
+            else:
+                st.caption("No trades.csv yet — bot hasn't closed a trade.")
+
+            # Log tail
+            st.markdown("**Log tail (last 30 lines)**")
+            log_path = slug_dir / "logs" / "bot.log"
+            if log_path.exists():
+                try:
+                    lines = log_path.read_text().splitlines()[-30:]
+                    # Strip ANSI colour codes for clean display
+                    import re as _re
+                    ansi_re = _re.compile(r"\x1b\[[0-9;]*m|\[[0-9]+m")
+                    cleaned = "\n".join(ansi_re.sub("", L) for L in lines)
+                    st.code(cleaned, language=None)
+                except Exception as exc:
+                    st.warning(f"Couldn't read bot.log: {exc}")
+            else:
+                st.caption("No bot.log yet for this bot.")
 
 
 def tab_forecasts() -> None:
