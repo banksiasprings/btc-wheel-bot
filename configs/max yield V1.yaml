@@ -20,7 +20,7 @@ backtest:
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 1000.0
+  starting_equity: 100000.0
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -72,7 +72,7 @@ sizing:
   min_free_equity_fraction: 0.0
   regime_ma_days: 50
   use_regime_filter: false
-starting_equity: 1000
+starting_equity: 100000
 strategy:
   expiry_execution_hour: 8
   expiry_preference:

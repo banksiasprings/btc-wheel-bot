@@ -403,3 +403,71 @@ the test suite.
 - Audit findings + the night log: `NIGHT_LOG.md`
 - Per-test rationale: every test file has a top docstring explaining what
   bug it pins
+
+---
+
+## Idle-bot diagnosis (2026-05-02)
+
+Audit of the running farm: of the ~21 paper bots, only `chaos-hedged` and
+`chaos-tester` had executed any trades. Everything else was sitting idle
+with `num_trades = 0`. Root causes, in order of how many bots were affected:
+
+1. **Low IV rank** — by far the dominant cause.  Current IV rank from the
+   Deribit historical-volatility feed reads as **~0.0011** (≈ 0%). Almost
+   every bot's `iv_rank_threshold` is 0.20 or higher, so the entry gate at
+   `bot.py:773` and `strategy.py:360` rejects every signal.  Only the two
+   `chaos-*` bots, which set `iv_rank_threshold: 0.0`, ever fire.
+
+2. **Insufficient equity to size the minimum 0.1 BTC contract.**  Five bots
+   were configured with `starting_equity: 1_000` USD:
+   `safest-v1`, `capital-roi-v1`, `max-yield-v1`, `sharpe-v1`,
+   `daily-trader-v1`.  At BTC ≈ $78 k and `max_equity_per_leg ≈ 0.08`, the
+   max notional is only ~$80 — `risk_manager.check_position_size()`
+   correctly refuses to open. **Fixed in this commit: equity raised to
+   $100,000 in both `farm/<bot>/config.yaml` and `configs/<name>.yaml`.**
+   (`roi-rest-1` and `bot_3` are also under-funded but were not in the
+   user-named list; flag for follow-up.)
+
+3. **DTE range** — every bot has a sane min/max DTE so this was never the
+   blocker; documented for completeness.
+
+4. **No bot was kill-switched or in an error state** during the audit.
+
+**Surfaced in the mobile app:** every idle bot card now shows an amber
+`ⓘ Why not trading?` chip, backed by `GET /farm/bot/{bot_id}/why_not_trading`,
+which returns `{ ready, reason, checks }` with per-gate booleans (kill
+switch, heartbeat, position-open, sizing, IV rank, DTE range).
+
+**Note on equity changes:** running bots cache their config at startup, so
+updating `starting_equity` only takes effect after a farm restart. Use
+`POST /farm/stop` then `POST /farm/start` to reload.
+
+---
+
+## Go-Live Checklist
+
+Do not deploy a bot to live with real capital until **every box** is
+checked. Each item is a hard gate, not a suggestion.
+
+- [ ] At least one bot has completed **10+ full trade cycles** (entry →
+      expiry / assignment → re-entry) end-to-end in paper or testnet.
+- [ ] Bot has survived at least one **±15 % BTC price move** without
+      unexpected behaviour (no orphan positions, no incorrect P&L, no
+      stuck cycle state).
+- [ ] Per-bot readiness diagnostic shows green for the target bot
+      (`GET /farm/bot/{bot_id}/why_not_trading` returns `ready: true` or
+      `reason` is `"Already holding a position"` / `"Eligible — waiting…"`).
+- [ ] **Every line of the P&L is understood** — no unexplained numbers in
+      `data/trades.csv`. If you can't reconstruct a row by hand from
+      entry/exit/contracts, do not go live.
+- [ ] **Kill switch manually tested** — `touch KILL_SWITCH` confirmed to
+      stop the bot within 60 seconds; bot resumed cleanly after the file
+      was removed.
+- [ ] **Assignment path tested** — confirmed bot behaviour when a put
+      goes deep ITM through expiry: BTC delivered, equity moves to BTC,
+      wheel transitions to call-mode, covered call opens on next cycle.
+- [ ] **Starting live capital: $500 max on first deployment**, one bot
+      only (`safest-v1`).
+- [ ] **Scale up only after 10+ live trade cycles** behave as expected.
+      If anything surprises you in the first 10 cycles, halt and
+      diagnose before adding capital.

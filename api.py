@@ -1914,6 +1914,199 @@ def get_bot_readiness(bot_id: str) -> dict:
     }
 
 
+@app.get("/farm/bot/{bot_id}/why_not_trading", dependencies=[Depends(_require_api_key)])
+def get_bot_why_not_trading(bot_id: str) -> dict:
+    """
+    Plain-English diagnostic explaining why a bot is not currently trading.
+
+    Distinct from /readiness (which is a live-readiness validator over trade
+    history). This checks the *current* gating conditions:
+      - kill switch active?
+      - heartbeat fresh?
+      - already in a position?
+      - equity sufficient to size at least 0.1 BTC at current spot?
+      - is current IV rank above the bot's iv_rank_threshold?
+
+    Returns:
+      {
+        "ready":   bool,       # ready/eligible to enter a new trade right now
+        "reason":  str,        # short human-readable summary
+        "checks":  { ... }     # per-check booleans + supporting numbers
+      }
+    """
+    bot_dir = FARM_DIR / bot_id
+    if not bot_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Bot directory not found: {bot_id}")
+
+    cfg = _read_yaml(bot_dir / "config.yaml") or {}
+    if not cfg:
+        raise HTTPException(status_code=500, detail="Bot config.yaml unreadable")
+
+    strategy_cfg = cfg.get("strategy") or {}
+    sizing_cfg   = cfg.get("sizing")   or {}
+    backtest_cfg = cfg.get("backtest") or {}
+    risk_cfg     = cfg.get("risk")     or {}
+
+    iv_rank_threshold   = float(strategy_cfg.get("iv_rank_threshold", 0.0))
+    min_dte             = int(strategy_cfg.get("min_dte", 0))
+    max_dte             = int(strategy_cfg.get("max_dte", 0))
+    max_equity_per_leg  = float(sizing_cfg.get("max_equity_per_leg", 0.0))
+    min_lot             = float(sizing_cfg.get("contract_size_btc", 0.1))
+    starting_equity_cfg = float(backtest_cfg.get("starting_equity", 0.0))
+    kill_switch_name    = str(risk_cfg.get("kill_switch_file", "KILL_SWITCH"))
+
+    # ── Current state from runtime files ─────────────────────────────────────
+    state    = _read_json(bot_dir / "data" / "bot_state.json") or {}
+    pos      = _read_json(bot_dir / "data" / "current_position.json") or {}
+    has_open = bool(pos.get("instrument") or pos.get("strike"))
+
+    # Most recent tick row gives current btc_price + iv_rank + equity
+    tick_path = bot_dir / "data" / "tick_log.csv"
+    btc_price: float | None = None
+    iv_rank:   float | None = None
+    equity_usd: float | None = None
+    if tick_path.exists():
+        try:
+            with tick_path.open("rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                # Walk back to find last full line (handles small files too)
+                back = min(4096, size)
+                fh.seek(size - back)
+                tail_lines = fh.read().decode(errors="ignore").splitlines()
+                if tail_lines:
+                    last = tail_lines[-1].split(",")
+                    if len(last) >= 7:
+                        btc_price  = float(last[1]) if last[1] else None
+                        equity_usd = float(last[2]) if last[2] else None
+                        iv_rank    = float(last[6]) if last[6] else None
+        except Exception:
+            pass
+
+    if equity_usd is None:
+        equity_usd = starting_equity_cfg
+
+    # Heartbeat freshness (paper mode writes last_heartbeat in bot_state.json)
+    last_hb = state.get("last_heartbeat")
+    hb_age_seconds: float | None = None
+    if last_hb:
+        try:
+            hb_dt = datetime.fromisoformat(last_hb.replace("Z", "+00:00"))
+            hb_age_seconds = (datetime.now(hb_dt.tzinfo) - hb_dt).total_seconds()
+        except Exception:
+            pass
+
+    # ── Individual checks ────────────────────────────────────────────────────
+    checks: dict[str, Any] = {}
+
+    # 1. Kill switch
+    global_kill = (BASE_DIR / kill_switch_name).exists()
+    bot_kill    = (bot_dir / kill_switch_name).exists()
+    kill_active = global_kill or bot_kill
+    checks["kill_switch"] = {
+        "active": bool(kill_active),
+        "global": bool(global_kill),
+        "per_bot": bool(bot_kill),
+    }
+
+    # 2. Heartbeat fresh
+    hb_fresh = bool(hb_age_seconds is not None and hb_age_seconds < 300)
+    checks["heartbeat"] = {
+        "fresh": hb_fresh,
+        "age_seconds": hb_age_seconds,
+        "running": bool(state.get("running")),
+    }
+
+    # 3. Already in a position
+    checks["position_open"] = {
+        "open": has_open,
+        "instrument": pos.get("instrument"),
+    }
+
+    # 4. Sizing — can equity fund at least the minimum lot at current spot?
+    # Mirrors risk_manager.check_position_size: collateral_per_contract = strike,
+    # max_notional = equity * max_equity_per_leg, and we need raw_contracts ≥ 0.1.
+    sizing_ok    = False
+    raw_contracts: float | None = None
+    needed_equity_usd: float | None = None
+    if btc_price and btc_price > 0 and equity_usd > 0 and max_equity_per_leg > 0:
+        # Approximate strike ≈ current spot for an ATM put
+        max_notional      = equity_usd * max_equity_per_leg
+        raw_contracts     = max_notional / btc_price
+        sizing_ok         = raw_contracts >= min_lot
+        # What equity would be required to just barely size 0.1 contract?
+        needed_equity_usd = (min_lot * btc_price) / max_equity_per_leg if max_equity_per_leg > 0 else None
+    checks["sizing"] = {
+        "sufficient": sizing_ok,
+        "equity_usd": equity_usd,
+        "btc_price": btc_price,
+        "max_equity_per_leg": max_equity_per_leg,
+        "raw_contracts_at_spot": raw_contracts,
+        "min_lot": min_lot,
+        "equity_needed_usd": needed_equity_usd,
+    }
+
+    # 5. IV rank above threshold
+    iv_ok = bool(iv_rank is not None and iv_rank >= iv_rank_threshold)
+    checks["iv_rank"] = {
+        "above_threshold": iv_ok,
+        "current": iv_rank,
+        "threshold": iv_rank_threshold,
+    }
+
+    # 6. DTE range plausible (we can only check that it's well-formed —
+    # eligibility against actual instruments needs the live order book).
+    dte_well_formed = max_dte >= min_dte and min_dte >= 0
+    checks["dte_range"] = {
+        "configured": dte_well_formed,
+        "min_dte": min_dte,
+        "max_dte": max_dte,
+    }
+
+    # ── Summary reason (most blocking issue first) ───────────────────────────
+    if kill_active:
+        reason = "Kill switch active — bot halted"
+        ready  = False
+    elif not state.get("running", False):
+        reason = "Bot is not running"
+        ready  = False
+    elif hb_age_seconds is not None and hb_age_seconds > 300:
+        reason = f"Heartbeat stale ({int(hb_age_seconds)}s old)"
+        ready  = False
+    elif has_open:
+        reason = "Already holding a position"
+        ready  = True  # not idle by error — just busy
+    elif not sizing_ok:
+        if needed_equity_usd:
+            reason = (
+                f"Insufficient equity — ${equity_usd:,.0f} can size only "
+                f"{(raw_contracts or 0):.4f} BTC at current spot; need "
+                f"≈${needed_equity_usd:,.0f} for the 0.1 BTC minimum"
+            )
+        else:
+            reason = "Insufficient equity to size minimum lot"
+        ready = False
+    elif not iv_ok:
+        reason = (
+            f"Low IV — current IV rank {(iv_rank or 0):.1%} is below "
+            f"the bot's threshold of {iv_rank_threshold:.1%}"
+        )
+        ready = False
+    elif not dte_well_formed:
+        reason = f"DTE range mis-configured (min={min_dte}, max={max_dte})"
+        ready  = False
+    else:
+        reason = "Eligible — waiting for next entry signal"
+        ready  = True
+
+    return {
+        "bot_id": bot_id,
+        "ready":  ready,
+        "reason": reason,
+        "checks": checks,
+    }
+
+
 @app.post("/farm/start", dependencies=[Depends(_require_api_key)])
 def farm_start() -> dict:
     """Start the bot farm supervisor (bot_farm.py) as a subprocess."""

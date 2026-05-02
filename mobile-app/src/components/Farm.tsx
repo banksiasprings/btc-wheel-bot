@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState } from '../api'
+import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBotWhyNotTrading, getBtcPrice, FarmStatus, BotFarmEntry, BotLiveState, WhyNotTrading } from '../api'
 import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -107,10 +107,42 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
   const [promoteMsg, setPromoteMsg] = useState('')
   const [liveState, setLiveState]   = useState<BotLiveState | null>(null)
   const [liveLoading, setLiveLoading] = useState(false)
+  const [whyNot, setWhyNot]           = useState<WhyNotTrading | null>(null)
+  const [whyDetailOpen, setWhyDetailOpen] = useState(false)
 
   const m = bot.metrics
   const r = bot.readiness
   const daysToReady = r.ready ? 0 : Math.max(0, 30 - (m.days_running ?? 0))
+
+  // "Why isn't this bot trading?" — fetched whenever the bot has 0 trades and
+  // no open position. Shown as an amber chip in the header; tap-to-expand
+  // shows the per-check breakdown inside the card.
+  const isIdle = (m.num_trades ?? 0) === 0 && !bot.has_open_position
+  useEffect(() => {
+    if (!isIdle) {
+      setWhyNot(null)
+      return
+    }
+    let cancelled = false
+    getBotWhyNotTrading(bot.id)
+      .then(d => { if (!cancelled) setWhyNot(d) })
+      .catch(() => { if (!cancelled) setWhyNot(null) })
+    return () => { cancelled = true }
+  }, [isIdle, bot.id])
+
+  // Short label for the amber chip — derive from the long reason
+  const whyChipLabel = (() => {
+    if (!whyNot) return null
+    const r = whyNot.reason.toLowerCase()
+    if (r.startsWith('insufficient equity')) return 'Insufficient equity'
+    if (r.startsWith('low iv'))               return 'Low IV'
+    if (r.startsWith('kill switch'))          return 'Kill-switch'
+    if (r.startsWith('heartbeat stale'))      return 'Stale heartbeat'
+    if (r.startsWith('bot is not running'))   return 'Stopped'
+    if (r.startsWith('dte range'))            return 'Bad DTE config'
+    if (r.startsWith('eligible'))             return 'Awaiting signal'
+    return whyNot.reason.slice(0, 40)
+  })()
 
   // Fetch live state when card is expanded
   useEffect(() => {
@@ -165,6 +197,15 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
                   </span>
                 )
               })()}
+              {/* "Why not trading" amber chip — visible on idle bots only */}
+              {isIdle && whyChipLabel && !whyNot?.ready && (
+                <span
+                  className="text-xs px-1.5 py-0.5 rounded-full border font-medium flex-shrink-0 bg-amber-950/80 text-amber-200 border-amber-700"
+                  title={whyNot?.reason ?? whyChipLabel}
+                >
+                  ⓘ {whyChipLabel}
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-500 truncate">{bot.description}</p>
           </div>
@@ -208,6 +249,62 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
       {/* Expandable section */}
       {expanded && (
         <div className="border-t border-border/40 px-4 py-3 space-y-1.5">
+
+          {/* ── Why not trading? (idle bots only) ── */}
+          {isIdle && whyNot && !whyNot.ready && (
+            <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl px-3 py-2.5 mb-3">
+              <button
+                onClick={() => setWhyDetailOpen(o => !o)}
+                className="w-full flex items-start justify-between text-left gap-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-amber-300 text-xs font-bold">ⓘ Why not trading?</p>
+                  <p className="text-amber-200/90 text-xs mt-0.5">{whyNot.reason}</p>
+                </div>
+                <span className="text-amber-400 text-xs flex-shrink-0">{whyDetailOpen ? '▲' : '▼'}</span>
+              </button>
+              {whyDetailOpen && (
+                <div className="mt-2 pt-2 border-t border-amber-900/60 space-y-1 text-xs">
+                  {(() => {
+                    const c = whyNot.checks
+                    const rows: Array<{ ok: boolean; label: string; hint?: string }> = [
+                      { ok: !c.kill_switch.active, label: 'Kill switch clear',
+                        hint: c.kill_switch.active
+                          ? (c.kill_switch.global ? 'global' : 'per-bot')
+                          : undefined },
+                      { ok: c.heartbeat.fresh && c.heartbeat.running,
+                        label: 'Heartbeat fresh',
+                        hint: c.heartbeat.age_seconds != null
+                          ? `${Math.round(c.heartbeat.age_seconds)}s ago`
+                          : 'no heartbeat' },
+                      { ok: c.sizing.sufficient,
+                        label: 'Equity can size 0.1 BTC',
+                        hint: c.sizing.equity_needed_usd
+                          ? `eq $${Math.round(c.sizing.equity_usd ?? 0).toLocaleString()} · need $${Math.round(c.sizing.equity_needed_usd).toLocaleString()}`
+                          : undefined },
+                      { ok: c.iv_rank.above_threshold,
+                        label: `IV rank ≥ ${(c.iv_rank.threshold * 100).toFixed(1)}%`,
+                        hint: c.iv_rank.current != null
+                          ? `now ${(c.iv_rank.current * 100).toFixed(2)}%`
+                          : 'unknown' },
+                      { ok: c.dte_range.configured,
+                        label: 'DTE range valid',
+                        hint: `${c.dte_range.min_dte}–${c.dte_range.max_dte}d` },
+                    ]
+                    return rows.map((row, i) => (
+                      <div key={i} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span>{row.ok ? '✅' : '❌'}</span>
+                          <span className={row.ok ? 'text-slate-300' : 'text-amber-200'}>{row.label}</span>
+                        </div>
+                        {row.hint && <span className="text-slate-500 font-mono">{row.hint}</span>}
+                      </div>
+                    ))
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ── Kill switch banner ── */}
           {liveState?.kill_switch_active && (

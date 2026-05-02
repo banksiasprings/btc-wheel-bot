@@ -478,6 +478,39 @@ export const getFarmStatus = () => request<FarmStatus>('/farm/status')
 export const getBotReadiness = (botId: string) =>
   request<ReadinessReport>(`/farm/bot/${botId}/readiness`)
 
+// "Why is this bot not currently trading?" — distinct from /readiness, which
+// is a live-readiness validator over historical trade quality.
+export interface WhyNotTradingChecks {
+  kill_switch:   { active: boolean; global: boolean; per_bot: boolean }
+  heartbeat:     { fresh: boolean; age_seconds: number | null; running: boolean }
+  position_open: { open: boolean; instrument: string | null }
+  sizing: {
+    sufficient: boolean
+    equity_usd: number | null
+    btc_price: number | null
+    max_equity_per_leg: number
+    raw_contracts_at_spot: number | null
+    min_lot: number
+    equity_needed_usd: number | null
+  }
+  iv_rank: {
+    above_threshold: boolean
+    current: number | null
+    threshold: number
+  }
+  dte_range: { configured: boolean; min_dte: number; max_dte: number }
+}
+
+export interface WhyNotTrading {
+  bot_id: string
+  ready:  boolean
+  reason: string
+  checks: WhyNotTradingChecks
+}
+
+export const getBotWhyNotTrading = (botId: string) =>
+  request<WhyNotTrading>(`/farm/bot/${botId}/why_not_trading`)
+
 export const getBotLiveState = (botId: string) =>
   request<BotLiveState>(`/farm/bot/${botId}/state`)
 
