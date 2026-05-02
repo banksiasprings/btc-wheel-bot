@@ -56,5 +56,33 @@
     "stopped":   "🔴",
     "pending":   "🕐",
     "unknown":   "⚫"
+  },
+
+  "_severity_token": {
+    "_comment": "Maps a status word to the canonical theme token name. Pair with `dark[token]` or `light[token]` to get the actual hex.",
+    "ready":     "green",
+    "ok":        "green",
+    "pass":      "green",
+    "active":    "green",
+    "running":   "green",
+    "caution":   "amber",
+    "warning":   "amber",
+    "due":       "amber",
+    "paused":    "amber",
+    "danger":    "red",
+    "fail":      "red",
+    "stopped":   "red",
+    "pending":   "muted",
+    "unknown":   "muted"
+  },
+
+  "sizing": {
+    "_comment": "Card / pill / panel chrome — both surfaces produce identical geometry.",
+    "card_radius_px":     12,
+    "card_padding_px":    14,
+    "pill_radius_px":     999,
+    "pill_padding_y_px":  4,
+    "pill_padding_x_px":  10,
+    "border_width_px":    1
   }
 }

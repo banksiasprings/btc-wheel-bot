@@ -85,6 +85,119 @@ C_GREEN = _theme["green"]
 C_RED   = _theme["red"]
 C_AMBER = _theme["amber"]
 
+
+# ── Shared sizing + severity tokens (CONSISTENCY.md Pass B.2 / B.4) ───────────
+# Mirrors mobile-app/src/lib/theme.ts so dashboard cards / pills / badges
+# render with identical geometry to their PWA counterparts.
+
+def _load_theme_extras() -> dict:
+    """Load sizing + severity_token blocks from theme.json. Falls back to
+    sensible defaults if absent."""
+    try:
+        with open(BOT_DIR / "theme.json") as _f:
+            t = json.load(_f)
+        return {
+            "sizing":        t.get("sizing", {}),
+            "status_emoji":  t.get("_status_emoji", {}),
+            "severity_token": t.get("_severity_token", {}),
+        }
+    except Exception:
+        return {"sizing": {}, "status_emoji": {}, "severity_token": {}}
+
+_theme_extras = _load_theme_extras()
+_SIZING       = _theme_extras["sizing"]
+_STATUS_EMOJI = _theme_extras["status_emoji"]
+_SEVERITY_TOK = _theme_extras["severity_token"]
+
+CARD_RADIUS    = _SIZING.get("card_radius_px", 12)
+CARD_PADDING   = _SIZING.get("card_padding_px", 14)
+PILL_RADIUS    = _SIZING.get("pill_radius_px", 999)
+PILL_PADDING_Y = _SIZING.get("pill_padding_y_px", 4)
+PILL_PADDING_X = _SIZING.get("pill_padding_x_px", 10)
+BORDER_WIDTH   = _SIZING.get("border_width_px", 1)
+
+
+def severity_tone(severity: str) -> tuple[str, str, str]:
+    """
+    Resolve a severity word ('active' / 'paused' / 'fail' / etc.) to its
+    canonical (hex, emoji, token_name) tuple. Mirrors the mobile
+    severityTone() helper in mobile-app/src/lib/theme.ts.
+    """
+    token = _SEVERITY_TOK.get(severity, "muted")
+    hex_  = _theme.get(token, C_MUTED)
+    emoji = _STATUS_EMOJI.get(severity, "⚫")
+    return hex_, emoji, token
+
+
+def card_div(
+    inner_html: str,
+    *,
+    border_hex: str | None = None,
+    margin_bottom: int = 8,
+) -> str:
+    """
+    Return the HTML for a canonical card matching the mobile <Card> primitive.
+    Same border-radius, padding, border-width — all sourced from theme.json.
+
+    Use with `st.markdown(card_div(...), unsafe_allow_html=True)` anywhere
+    the dashboard would have an inline `<div style="background:..">` block.
+    """
+    border = border_hex or C_GRID
+    return (
+        f'<div style="background:{C_CARD};'
+        f'border:{BORDER_WIDTH}px solid {border};'
+        f'border-radius:{CARD_RADIUS}px;'
+        f'padding:{CARD_PADDING}px {CARD_PADDING + 4}px;'
+        f'margin-bottom:{margin_bottom}px;">'
+        f'{inner_html}</div>'
+    )
+
+
+def status_pill(severity: str, label: str | None = None, no_emoji: bool = False) -> str:
+    """
+    Return the HTML for a canonical status pill matching the mobile
+    <StatusBadge variant="pill"> primitive. 15%-alpha tinted background,
+    40%-alpha border, uppercase text, theme-aligned colour.
+    """
+    hex_, emoji, _ = severity_tone(severity)
+    text = label or (severity[:1].upper() + severity[1:])
+    icon = "" if no_emoji else f"{emoji} "
+    return (
+        f'<span style="display:inline-flex;align-items:center;gap:4px;'
+        f'background:{hex_}26;color:{hex_};'
+        f'border-radius:{PILL_RADIUS}px;'
+        f'padding:{PILL_PADDING_Y}px {PILL_PADDING_X}px;'
+        f'font-size:11px;font-weight:600;'
+        f'letter-spacing:0.3px;text-transform:uppercase;'
+        f'border:{BORDER_WIDTH}px solid {hex_}66;">'
+        f'{icon}<span>{text}</span></span>'
+    )
+
+
+def status_block(severity: str, label: str | None = None, subtitle: str | None = None) -> str:
+    """
+    Return the HTML for a canonical status block matching the mobile
+    <StatusBadge variant="block"> — left-border-coloured raised card.
+    """
+    hex_, emoji, _ = severity_tone(severity)
+    text = label or (severity[:1].upper() + severity[1:])
+    sub  = (
+        f'<p style="color:{C_TEXT};font-size:13px;margin-top:2px;">{subtitle}</p>'
+        if subtitle else ""
+    )
+    return (
+        f'<div style="background:{C_CARD};'
+        f'border-left:{BORDER_WIDTH * 4}px solid {hex_};'
+        f'border-radius:{CARD_RADIUS}px;'
+        f'padding:{CARD_PADDING}px {CARD_PADDING + 4}px;'
+        f'display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;">'
+        f'<span style="font-size:16px;line-height:1.2;">{emoji}</span>'
+        f'<div style="flex:1;min-width:0;">'
+        f'<p style="color:{hex_};font-weight:600;font-size:11px;'
+        f'letter-spacing:0.5px;text-transform:uppercase;margin:0;">{text}</p>'
+        f'{sub}</div></div>'
+    )
+
 # ── Custom CSS (dynamic) ───────────────────────────────────────────────────────
 
 st.markdown(f"""

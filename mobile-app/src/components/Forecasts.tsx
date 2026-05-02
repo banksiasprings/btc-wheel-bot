@@ -4,16 +4,20 @@ import {
   getForecastSnapshotDetail,
   ForecastSnapshotSummary,
 } from '../api'
+import { severityTone } from '../lib/theme'
+import StatusBadge from './StatusBadge'
+import Card from './Card'
 
-// Status badge colours mirror the dashboard's Forecasts tab so a user
-// switching between mobile and desktop sees the same colour story.
-const STATUS_META: Record<ForecastSnapshotSummary['status'], { icon: string; bg: string; border: string; text: string; label: string }> = {
-  pending:  { icon: '🕐', bg: 'bg-slate-800/60',   border: 'border-slate-600',   text: 'text-slate-400', label: 'Pending'  },
-  due:      { icon: '⏰', bg: 'bg-amber-900/40',  border: 'border-amber-600',  text: 'text-amber-300', label: 'Due'       },
-  pass:     { icon: '🟢', bg: 'bg-green-900/30',  border: 'border-green-600',  text: 'text-green-300', label: 'Pass'      },
-  warning:  { icon: '🟡', bg: 'bg-amber-900/40',  border: 'border-amber-600',  text: 'text-amber-300', label: 'Warning'   },
-  fail:     { icon: '🔴', bg: 'bg-red-900/30',    border: 'border-red-600',    text: 'text-red-300',   label: 'Fail'      },
-  unknown:  { icon: '⚫', bg: 'bg-slate-800/60',   border: 'border-slate-600',   text: 'text-slate-400', label: 'Unknown'   },
+// Severity → display label mapping (the rest of the visual styling now
+// comes from severityTone() / StatusBadge / Card primitives — single source
+// of truth in theme.json + lib/theme.ts).
+const STATUS_LABEL: Record<ForecastSnapshotSummary['status'], string> = {
+  pending: 'Pending',
+  due:     'Due',
+  pass:    'Pass',
+  warning: 'Warning',
+  fail:    'Fail',
+  unknown: 'Unknown',
 }
 
 function fmtPct(n: number | null | undefined, dec = 2): string {
@@ -55,7 +59,7 @@ function SnapshotCard({ s, onExpand, expanded, detail }: {
   expanded: boolean
   detail: Record<string, unknown> | null
 }) {
-  const meta = STATUS_META[s.status] ?? STATUS_META.unknown
+  const tone = severityTone(s.status)
   const days = daysUntil(s.validate_after)
 
   // Derive the "compare" line ergonomically based on status
@@ -74,10 +78,10 @@ function SnapshotCard({ s, onExpand, expanded, detail }: {
   const badFindings = findings.filter(f => f.severity !== 'pass')
 
   return (
-    <div className={`${meta.bg} border ${meta.border} rounded-xl p-3 mb-2`}>
+    <Card borderHex={tone.hex} className="mb-2">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-lg">{meta.icon}</span>
+          <span className="text-lg">{tone.emoji}</span>
           <div className="min-w-0">
             <p className="text-sm font-bold text-white truncate">{s.snapshot_id}</p>
             <p className="text-xs text-slate-400 truncate">
@@ -87,7 +91,7 @@ function SnapshotCard({ s, onExpand, expanded, detail }: {
             </p>
           </div>
         </div>
-        <span className={`text-xs font-semibold uppercase tracking-wide ${meta.text}`}>{meta.label}</span>
+        <StatusBadge severity={s.status} label={STATUS_LABEL[s.status]} noEmoji />
       </div>
 
       <div className="mt-2 grid grid-cols-3 gap-2 text-center">
@@ -151,7 +155,7 @@ function SnapshotCard({ s, onExpand, expanded, detail }: {
           )}
         </div>
       ) : null}
-    </div>
+    </Card>
   )
 }
 
@@ -216,20 +220,21 @@ export default function Forecasts() {
       </header>
 
       <div className="px-4 py-3">
-        {/* Status counts */}
+        {/* Status counts — uses canonical StatusBadge for cross-surface consistency */}
         <div className="flex gap-2 mb-3 flex-wrap text-[11px]">
           {(['pass', 'warning', 'fail', 'due', 'pending'] as const).map(s => {
-            const meta = STATUS_META[s]
             const n = counts[s] || 0
             if (n === 0) return null
             return (
-              <span key={s} className={`${meta.bg} ${meta.text} border ${meta.border} rounded-full px-2 py-0.5`}>
-                {meta.icon} {n} {meta.label}
-              </span>
+              <StatusBadge
+                key={s}
+                severity={s}
+                label={`${n} ${STATUS_LABEL[s]}`}
+              />
             )
           })}
           {snapshots.length === 0 && !loading ? null :
-            <span className="text-slate-500">{snapshots.length} total</span>
+            <span className="text-slate-500 self-center">{snapshots.length} total</span>
           }
         </div>
 

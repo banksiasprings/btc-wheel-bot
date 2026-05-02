@@ -125,15 +125,33 @@ Suggesting two passes:
   metric, and process term. Future copy follows this dictionary; old
   drift gets cleaned up incrementally.
 
-## Pass B remaining
+### 2026-05-04
 
-- **B.2** — Card / section header style sync (currently each surface
-  has its own padding / border-radius conventions; aim is one `Card`
-  primitive on each surface that produces visually identical chrome).
-- **B.4** — Status-badge palette reconciliation. The four severity
-  tiers (active / paused / warning / fail) are documented in
-  TERMINOLOGY.md with their hex values; remaining work is a sweep
-  through both surfaces to use those exact hexes via `theme-*`
-  Tailwind classes / `C_*` Python constants instead of inline values.
-- Old-label cleanup pass per TERMINOLOGY.md "Migration" section —
+- **B.2 Card primitive synced** — `theme.json` now carries a `sizing`
+  block (`card_radius_px`, `card_padding_px`, `pill_radius_px`,
+  `border_width_px`, etc.). Mobile gets `Card.tsx`; dashboard gets a
+  `card_div(...)` helper in `dashboard_ui.py`. Both produce identical
+  chrome (12-px radius, 14-px padding, 1-px border) sourced from the
+  same JSON keys.
+- **B.4 Status-badge palette synced** — mobile gets `StatusBadge.tsx`
+  with `pill` and `block` variants + a typed `severityTone(severity)`
+  helper that resolves any severity word to its canonical hex + emoji.
+  Dashboard gets the equivalent `severity_tone()` / `status_pill()` /
+  `status_block()` helpers. Both surfaces drive their colours from
+  `theme.json`'s `_severity_token` map — adding a new severity tier
+  is a one-line JSON change. `Forecasts.tsx` migrated to the new
+  primitives as a reference example.
+
+## Pass B status: complete (4/4)
+
+All four sub-passes shipped. Future colour/sizing changes go in
+`theme.json` and propagate to both surfaces automatically.
+
+## Ongoing
+
+- Old-label cleanup pass per `TERMINOLOGY.md` "Migration" section —
   done incrementally as files are touched for other reasons.
+- Incremental migration of remaining mobile components (Trading,
+  Performance, Pipeline, Settings) to use the `Card` + `StatusBadge`
+  primitives instead of inline classes — happens organically as each
+  component is next edited for any reason.
