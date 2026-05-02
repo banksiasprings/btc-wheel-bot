@@ -336,6 +336,7 @@ export interface ChartConfig {
   iv_rank_threshold: number
   premium_fraction: number
   starting_equity: number
+  max_adverse_delta?: number
 }
 
 export interface ChartData {
@@ -349,6 +350,16 @@ export interface ChartData {
 
 export const getChartData = (days: number, botId?: string) =>
   request<ChartData>(`/chart/btc_history?days=${days}${botId ? `&bot_id=${encodeURIComponent(botId)}` : ''}`)
+
+// ── IV rank history (for the gauge sparkline) ────────────────────────────────
+export interface IvRankPoint { ts: number; iv_rank: number }
+export interface IvRankHistory {
+  points:    IvRankPoint[]
+  available: boolean
+  current:   number | null
+}
+export const getIvRankHistory = (days: number, botId?: string) =>
+  request<IvRankHistory>(`/chart/iv_rank?days=${days}${botId ? `&bot_id=${encodeURIComponent(botId)}` : ''}`)
 
 // ── Farm API ──────────────────────────────────────────────────────────────────
 
@@ -434,11 +445,21 @@ export interface BotLiveState {
     type?: string
     strike?: number
     expiry?: string
+    entry_date?: string
     delta?: number
+    current_delta?: number
+    net_delta?: number | null
     contracts?: number
     entry_price?: number
+    entry_price_btc?: number
+    underlying_at_entry?: number
     current_price?: number
+    current_spot?: number
+    premium_collected?: number
     unrealized_pnl_usd?: number
+    unrealized_pnl_pct?: number
+    days_to_expiry?: number
+    iv_rank_at_entry?: number
     dte?: number
   }
   state: {

@@ -73,8 +73,8 @@ const SECTIONS = [
     title: 'Risk Management & Emergency Controls',
     paras: [
       'Position sizing: Max Equity Per Leg caps how much capital any single option position uses. Min Free Equity keeps a cash reserve so you\'re never fully deployed. These limits are enforced on every trade entry.',
-      'Risk warnings: The Dashboard shows real-time position health. If an open option is approaching its strike or losing premium faster than expected, a visual warning appears with the option\'s current status.',
-      'Emergency close: A dedicated emergency button on the Dashboard closes all open positions immediately — both the option and its hedge. Designed for moments when you need to exit fast without navigating menus.',
+      'Risk warnings: The Trading tab shows real-time position health. If an open option is approaching its strike or losing premium faster than expected, a visual warning appears with the option\'s current status.',
+      'Emergency close: A dedicated emergency button on the Trading tab closes the open option position immediately. Designed for moments when you need to exit fast without navigating menus.',
       'Kill switch: The Stop Bot button halts all new trade activity instantly. Existing positions stay open but no new trades will be placed. Use this if you want to pause the bot and manage positions manually.',
       'IV Rank filter: The bot won\'t trade unless conditions meet the configured threshold. This natural gate prevents trading into low-premium, unfavourable conditions.',
     ],
