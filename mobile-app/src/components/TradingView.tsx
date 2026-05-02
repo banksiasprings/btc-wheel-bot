@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, ReferenceArea,
+  ResponsiveContainer, ReferenceLine, ReferenceArea, ReferenceDot,
 } from 'recharts'
 import {
   getChartData, ChartData, getFarmStatus, FarmStatus, BotFarmEntry,
@@ -42,6 +42,9 @@ interface ChartPoint {
   tradeWon?: boolean
   tradePnl?: number
   tradeStrike?: number
+  // Pre-computed dot radius for the exit triangle, bucketed by P&L percentile
+  // across all visible trades. See pnlSizeBucket() in the chart builder.
+  tradeSizePx?: number
   // Marker for the currently-open position's entry candle.
   liveEntryY?: number
 }
@@ -56,6 +59,16 @@ interface InfoPanel { type: InfoType; payload?: ChartPoint }
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const K = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toFixed(0)}`
+
+// Compact axis formatter: drops the leading "$" and rounds to integer kilos
+// so y-axis ticks read "72k" / "73k" / "74k" instead of "$72.1k" / "$72.4k".
+// Frees ~14 px of axis width on a phone-narrow viewport.
+const Kaxis = (n: number) => n >= 1000 ? `${Math.round(n / 1000)}k` : `${Math.round(n)}`
+
+// Display labels for the day-window toggle. Underlying values stay 7/30/90
+// (consumed by the chart endpoint), but the UI uses finance-conventional
+// short labels.
+const DAY_LABELS: Record<number, string> = { 7: '7d', 30: '1m', 90: '3m' }
 
 function fmtUsd(n: number | null | undefined, signed = false): string {
   if (n == null || !isFinite(n)) return '—'
@@ -125,21 +138,16 @@ function dteFromTs(expiryTs: number, refNow: number): number {
 // can each be rendered as its own recharts Line series. Each only paints when
 // its field is set on the payload, so they only appear at the right candles.
 
-// Bucketed sizes by absolute USD P&L — three steps so a $30 win and a $300 win
-// look meaningfully different (the old continuous /12 formula compressed both
-// into 8–13px and read as identical).
-function tradeSize(pnl: number | undefined): number {
-  const a = Math.abs(pnl ?? 0)
-  if (a >= 200) return 13
-  if (a >= 60)  return 10
-  return 7
-}
-
+// Trade-marker dot sizes are bucketed by P&L *percentile* across the trades
+// visible on the chart, computed in the chart builder (pnlSizeBucket() in the
+// allChartData closure) and stored on the candle as `tradeSizePx`. Absolute
+// USD thresholds biased against small bots — a $40 win in a $1k-equity bot
+// is a big trade, but the old `>= 60 ? 10 : 7` code rendered it tiny.
 function ExitDot(props: any) {
   const { cx, cy, payload } = props
   if (payload?.exitY == null || payload?.isFuture) return null
   const won = payload.tradeWon as boolean
-  const sz  = tradeSize(payload.tradePnl)
+  const sz  = payload.tradeSizePx ?? 10
   const fill = won ? '#22c55e' : '#ef4444'
   // Up-triangle for a winning exit, down for losing.
   const pts = won
@@ -551,12 +559,35 @@ export default function TradingView() {
     // the exit (carries the won/lost info). On collisions across trades the
     // most-recent trade wins for that candle — visual fidelity is acceptable
     // since users can drill into the full list elsewhere.
+    //
+    // Marker sizes are bucketed by P&L *percentile* (33rd / 66th) so the
+    // ranking adapts to bot equity scale. With $1k-equity bots a $40 win is
+    // a big trade; with $50k-equity bots it's tiny. Absolute USD thresholds
+    // biased one or the other.
+    const allPnls = trade_markers
+      .map(m => Math.abs(m.pnl_usd ?? 0))
+      .filter(v => v > 0)
+      .sort((a, b) => a - b)
+    const pctile = (q: number): number =>
+      allPnls.length === 0
+        ? 0
+        : allPnls[Math.min(allPnls.length - 1, Math.floor(q * allPnls.length))]
+    const p33 = pctile(0.33)
+    const p66 = pctile(0.66)
+    const pnlSizeBucket = (pnl: number | undefined): number => {
+      const a = Math.abs(pnl ?? 0)
+      if (p66 > 0 && a >= p66) return 13   // top third
+      if (p33 > 0 && a >= p33) return 10   // middle third
+      return 7                             // bottom third
+    }
+
     const connectors: TradeConnector[] = []
     for (const m of trade_markers) {
       const ei = indexAt(m.entry_time)
       const xi = indexAt(m.exit_time ?? m.entry_time)
       // A trade entirely outside the window contributes nothing.
       if (ei === -1 && xi === -1) continue
+      const sz = pnlSizeBucket(m.pnl_usd)
       // Same-candle: only the exit (so the colour is correct).
       if (ei === xi || ei === -1 || xi === -1) {
         const target = xi !== -1 ? xi : ei
@@ -565,6 +596,7 @@ export default function TradingView() {
         c.tradeWon    = m.won
         c.tradePnl    = m.pnl_usd
         c.tradeStrike = m.strike ?? undefined
+        c.tradeSizePx = sz
         continue
       }
       // Distinct candles — set both endpoints, plus a connector segment.
@@ -574,10 +606,12 @@ export default function TradingView() {
       eC.tradeWon    = m.won
       eC.tradePnl    = m.pnl_usd
       eC.tradeStrike = m.strike ?? undefined
+      eC.tradeSizePx = sz
       xC.exitY       = xC.close
       xC.tradeWon    = m.won
       xC.tradePnl    = m.pnl_usd
       xC.tradeStrike = m.strike ?? undefined
+      xC.tradeSizePx = sz
       if (eC.close != null && xC.close != null) {
         connectors.push({ x1: eC.time, y1: eC.close, x2: xC.time, y2: xC.close, won: m.won })
       }
@@ -667,11 +701,16 @@ export default function TradingView() {
   const yDomain = (() => {
     if (!allChartData.length) return ['auto', 'auto'] as [string, string]
     const o = chartData?.overlays
+    const hedgeY = hedgeData?.enabled
+      && hedgeData.perp_position_btc !== 0
+      && hedgeData.avg_entry_price > 0
+      ? hedgeData.avg_entry_price
+      : null
     const vals = [
       ...allChartData.map(c => c.close ?? c.projected ?? 0).filter(v => v > 0),
       ...allChartData.flatMap(c => c.range ?? []),
       o?.active_strike, o?.breakeven, o?.zone_upper, o?.zone_lower,
-      estStrike, estBreakeven,
+      estStrike, estBreakeven, hedgeY,
     ].filter((v): v is number => v != null && v > 0)
     const mn = Math.min(...vals), mx = Math.max(...vals)
     const pad = (mx - mn) * 0.06
@@ -784,7 +823,7 @@ export default function TradingView() {
             <button key={d} onClick={() => { setDays(d); setInfoPanel(null) }}
               className={`flex-1 text-xs py-1.5 rounded-lg font-medium transition-colors ${
                 days === d ? 'bg-green-800 text-green-200' : 'bg-slate-800 text-slate-400 hover:text-slate-200'
-              }`}>{d}d</button>
+              }`}>{DAY_LABELS[d] ?? `${d}d`}</button>
           ))}
         </div>
       </div>
@@ -1046,9 +1085,9 @@ export default function TradingView() {
                 />
                 <YAxis
                   domain={yDomain}
-                  tickFormatter={v => K(v)}
+                  tickFormatter={Kaxis}
                   tick={{ fill: '#64748b', fontSize: 10 }}
-                  tickLine={false} axisLine={false} width={54} tickCount={5}
+                  tickLine={false} axisLine={false} width={40} tickCount={4}
                 />
 
                 <Tooltip content={<ChartTooltip resolution={res}/>}/>
@@ -1157,6 +1196,32 @@ export default function TradingView() {
                 {o?.breakeven != null && (
                   <ReferenceLine y={o.breakeven} stroke="#34d399" strokeDasharray="5 4" strokeWidth={2}
                     label={{ value: `BE ${K(o.breakeven)}`, position: 'insideBottomLeft', fill: '#34d399', fontSize: 10 }}
+                  />
+                )}
+
+                {/* Hedge entry marker — small teal dot at the avg perp entry
+                    price level, only when the BTC-PERP delta hedge has a
+                    non-zero position. Anchored at "Now" on the x-axis since
+                    we don't track the hedge's individual entry timestamps;
+                    the value tells the user where the hedge was opened
+                    relative to current spot. Teal (not purple — that's the
+                    expiry vline). Distinct shape from the strike h-line. */}
+                {hedgeData?.enabled && hedgeData.perp_position_btc !== 0 && hedgeData.avg_entry_price > 0 && (
+                  <ReferenceDot
+                    x={liveNowTs}
+                    y={hedgeData.avg_entry_price}
+                    r={5}
+                    fill="#14b8a6"
+                    stroke="white"
+                    strokeWidth={1.5}
+                    isFront
+                    label={{
+                      value: `Hedge ${K(hedgeData.avg_entry_price)}`,
+                      position: 'left',
+                      fill: '#5eead4',
+                      fontSize: 10,
+                      offset: 8,
+                    }}
                   />
                 )}
 
