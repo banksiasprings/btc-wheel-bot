@@ -244,6 +244,54 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// Backtest (cross-surface — mirrors what the dashboard's Backtest tab
+// returns). All param overrides are optional; the server falls back to
+// config.yaml defaults for anything omitted.
+export interface BacktestParams {
+  iv_rank_threshold?:        number
+  target_delta_min?:         number
+  target_delta_max?:         number
+  min_dte?:                  number
+  max_dte?:                  number
+  max_equity_per_leg?:       number
+  min_free_equity_fraction?: number
+  lookback_months?:          number
+  starting_equity?:          number
+}
+
+export interface BacktestMetrics {
+  num_cycles:               number
+  starting_equity:          number
+  ending_equity:            number
+  total_return_pct:         number
+  annualized_return_pct:    number
+  sharpe_ratio:             number
+  sortino_ratio:            number
+  max_drawdown_pct:         number
+  win_rate_pct:             number
+  avg_premium_yield_pct:    number
+  trades_per_year:          number
+  avg_pnl_per_trade_usd:    number
+  total_margin_deployed:    number
+  avg_margin_utilization:   number
+  premium_on_margin:        number
+  min_viable_capital:       number
+  annualised_margin_roi:    number
+}
+
+export interface BacktestResult {
+  ok:          boolean
+  params_used: Required<BacktestParams>
+  metrics:     BacktestMetrics
+}
+
+export const runBacktest = (params: BacktestParams) =>
+  request<BacktestResult>('/backtest/run', {
+    method: 'POST',
+    body:   JSON.stringify(params),
+  })
+
+
 // Forecast snapshots (cross-surface consistency — mirrors what the
 // dashboard's Forecasts tab shows). Each snapshot freezes the backtest
 // forecast at a point in time; `validate_after` is when it becomes

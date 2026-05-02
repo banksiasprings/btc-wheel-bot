@@ -2537,6 +2537,111 @@ def black_swan_results(config_name: str):
     return report
 
 
+# ── Backtest (cross-surface — mobile mirrors dashboard's Backtest tab) ─────
+
+
+class BacktestParams(BaseModel):
+    """
+    Override knobs for an ad-hoc backtest. Each is optional — anything not
+    provided uses the values from config.yaml. Values are sanitised against
+    sensible bounds before the run so a fat-fingered slider can't break
+    the simulator.
+    """
+    iv_rank_threshold:        float | None = None   # 0.0 - 1.0
+    target_delta_min:         float | None = None   # 0.0 - 0.5
+    target_delta_max:         float | None = None   # 0.0 - 0.6
+    min_dte:                  int   | None = None   # 1 - 60
+    max_dte:                  int   | None = None   # 1 - 90
+    max_equity_per_leg:       float | None = None   # 0.01 - 1.0
+    min_free_equity_fraction: float | None = None   # 0.0 - 0.5
+    lookback_months:          int   | None = None   # 1 - 36
+    starting_equity:          float | None = None   # 100 - 10_000_000
+
+
+@app.post("/backtest/run", dependencies=[Depends(_require_api_key)])
+def run_backtest(params: BacktestParams) -> dict:
+    """
+    Run a one-shot backtest with the supplied param overrides and return
+    the headline metrics. Designed for the mobile Backtest tab — same
+    capability as the dashboard's `Run Backtest` button. Synchronous
+    (typical run is ~2-5 s) so the client gets results in one round trip.
+    """
+    import copy as _copy
+    from config import cfg as _cfg
+    from backtester import Backtester as _Backtester
+
+    custom_cfg = _copy.deepcopy(_cfg)
+
+    # Strategy params
+    if params.iv_rank_threshold is not None:
+        custom_cfg.strategy.iv_rank_threshold = max(0.0, min(1.0, params.iv_rank_threshold))
+    if params.target_delta_min is not None:
+        custom_cfg.strategy.target_delta_min = max(0.0, min(0.5, params.target_delta_min))
+    if params.target_delta_max is not None:
+        custom_cfg.strategy.target_delta_max = max(
+            custom_cfg.strategy.target_delta_min,
+            min(0.6, params.target_delta_max),
+        )
+    if params.min_dte is not None:
+        custom_cfg.strategy.min_dte = max(1, min(60, params.min_dte))
+    if params.max_dte is not None:
+        custom_cfg.strategy.max_dte = max(custom_cfg.strategy.min_dte, min(90, params.max_dte))
+
+    # Sizing params
+    if params.max_equity_per_leg is not None:
+        custom_cfg.sizing.max_equity_per_leg = max(0.01, min(1.0, params.max_equity_per_leg))
+    if params.min_free_equity_fraction is not None:
+        custom_cfg.sizing.min_free_equity_fraction = max(0.0, min(0.5, params.min_free_equity_fraction))
+
+    # Backtest window
+    if params.lookback_months is not None:
+        custom_cfg.backtest.lookback_months = max(1, min(36, params.lookback_months))
+    if params.starting_equity is not None:
+        custom_cfg.backtest.starting_equity = max(100.0, min(10_000_000.0, params.starting_equity))
+
+    try:
+        bt = _Backtester(config=custom_cfg)
+        results = bt.run()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Backtest failed: {exc}")
+
+    return {
+        "ok": True,
+        "params_used": {
+            "iv_rank_threshold":        custom_cfg.strategy.iv_rank_threshold,
+            "target_delta_min":         custom_cfg.strategy.target_delta_min,
+            "target_delta_max":         custom_cfg.strategy.target_delta_max,
+            "min_dte":                  custom_cfg.strategy.min_dte,
+            "max_dte":                  custom_cfg.strategy.max_dte,
+            "max_equity_per_leg":       custom_cfg.sizing.max_equity_per_leg,
+            "min_free_equity_fraction": custom_cfg.sizing.min_free_equity_fraction,
+            "lookback_months":          custom_cfg.backtest.lookback_months,
+            "starting_equity":          custom_cfg.backtest.starting_equity,
+        },
+        "metrics": {
+            "num_cycles":              results.num_cycles,
+            "starting_equity":         results.starting_equity,
+            "ending_equity":           results.ending_equity,
+            "total_return_pct":        results.total_return_pct,
+            "annualized_return_pct":   results.annualized_return_pct,
+            "sharpe_ratio":            results.sharpe_ratio,
+            "sortino_ratio":           results.sortino_ratio,
+            "max_drawdown_pct":        results.max_drawdown_pct,
+            "win_rate_pct":            results.win_rate_pct,
+            "avg_premium_yield_pct":   results.avg_premium_yield_pct,
+            "trades_per_year":         results.trades_per_year,
+            "avg_pnl_per_trade_usd":   results.avg_pnl_per_trade_usd,
+            # Capital-efficiency metrics — mobile Backtest tab surfaces these
+            # so the user can hunt for small-capital × high-margin-ROI configs.
+            "total_margin_deployed":   results.total_margin_deployed,
+            "avg_margin_utilization":  results.avg_margin_utilization,
+            "premium_on_margin":       results.premium_on_margin,
+            "min_viable_capital":      results.min_viable_capital,
+            "annualised_margin_roi":   results.annualised_margin_roi,
+        },
+    }
+
+
 # ── Forecasts (cross-surface — both dashboard and mobile read from here) ───
 # Reads forecast_validator.py snapshot files. Returns one merged list across
 # the main bot's data/forecasts/ and every farm bot's farm/<slug>/data/
