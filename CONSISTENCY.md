@@ -99,12 +99,41 @@ Suggesting two passes:
 - B.4 — Cross-surface terminology dictionary (e.g. "Open Pos" vs
   "Active Position", "Margin" vs "Collateral")
 
-## What I'm doing right now
+## Progress log
 
-Implementing **Pass A.1** (forecast endpoints + mobile Forecasts panel)
-because:
-- It's the biggest functional gap (mobile has zero forecast surface)
-- The endpoint is small (~30 lines)
-- The panel is a single new component
-- Both ship in the same commit so the user sees consistency improve
-  in one increment, not over weeks
+### 2026-05-02
+
+- **A.1 Forecasts on mobile** — `/forecasts/snapshots` endpoint + mobile
+  `Forecasts.tsx` (commit `c5deb42`).
+- **A.4 Pause/Resume verbiage** — dashboard adopts mobile language
+  (commit `4b959d8`).
+- **A.3 Rich position card on dashboard** — buffer pill + IV gauge
+  pulled from mobile TradingView into dashboard Paper Trading tab
+  (commit `d93f54a`).
+
+### 2026-05-03
+
+- **A.2 Mobile Backtest tab** — `POST /backtest/run` endpoint + mobile
+  `Backtest.tsx` with sliders + presets. **Pass A complete (4/4)**.
+- **B.1 Shared theme tokens** — `theme.json` at the repo root is the
+  canonical palette. `dashboard_ui.py` reads it for `C_BG/C_CARD/...`;
+  `mobile-app/tailwind.config.js` reads it via ES-module `readFileSync`
+  for `bg-navy`, `bg-card`, `border-border`, plus new `theme-*`
+  semantic aliases.
+- **B.3 Terminology dictionary** — `TERMINOLOGY.md` codifies the
+  canonical word for every status state, position concept, capital
+  metric, and process term. Future copy follows this dictionary; old
+  drift gets cleaned up incrementally.
+
+## Pass B remaining
+
+- **B.2** — Card / section header style sync (currently each surface
+  has its own padding / border-radius conventions; aim is one `Card`
+  primitive on each surface that produces visually identical chrome).
+- **B.4** — Status-badge palette reconciliation. The four severity
+  tiers (active / paused / warning / fail) are documented in
+  TERMINOLOGY.md with their hex values; remaining work is a sweep
+  through both surfaces to use those exact hexes via `theme-*`
+  Tailwind classes / `C_*` Python constants instead of inline values.
+- Old-label cleanup pass per TERMINOLOGY.md "Migration" section —
+  done incrementally as files are touched for other reasons.

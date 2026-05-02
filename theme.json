@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "Single source of truth for cross-surface colour tokens.",
+    "Both dashboard_ui.py and mobile-app/tailwind.config.js read from here so",
+    "the dashboard and the PWA share the same palette. Edit values here once",
+    "and rebuild the PWA + reload the dashboard to see them update everywhere.",
+    "",
+    "Token naming: semantic, not visual. 'bg' is the deepest background, 'card'",
+    "is one shade up for raised surfaces, 'border' is the dividing line, 'text'",
+    "is body copy, 'muted' is secondary copy, the four semantic colours map to",
+    "status states (blue=info, green=success, red=danger, amber=warning).",
+    "",
+    "Dark palette is canonical (most users are in dark mode); light is mirrored",
+    "with similar contrast ratios."
+  ],
+
+  "dark": {
+    "bg":      "#0f172a",
+    "card":    "#1e293b",
+    "border":  "#334155",
+    "text":    "#e2e8f0",
+    "muted":   "#94a3b8",
+    "blue":    "#3b82f6",
+    "green":   "#22c55e",
+    "red":     "#ef4444",
+    "amber":   "#f59e0b",
+    "emerald": "#10b981"
+  },
+
+  "light": {
+    "bg":      "#f8fafc",
+    "card":    "#ffffff",
+    "border":  "#cbd5e1",
+    "text":    "#0f172a",
+    "muted":   "#64748b",
+    "blue":    "#2563eb",
+    "green":   "#16a34a",
+    "red":     "#dc2626",
+    "amber":   "#d97706",
+    "emerald": "#059669"
+  },
+
+  "_status_emoji": {
+    "_comment": "Standardised severity icons used in both dashboard banners and mobile cards.",
+    "ready":     "🟢",
+    "ok":        "🟢",
+    "pass":      "🟢",
+    "active":    "🟢",
+    "running":   "🟢",
+    "caution":   "🟡",
+    "warning":   "🟡",
+    "due":       "🟡",
+    "paused":    "🟡",
+    "danger":    "🔴",
+    "fail":      "🔴",
+    "stopped":   "🔴",
+    "pending":   "🕐",
+    "unknown":   "⚫"
+  }
+}

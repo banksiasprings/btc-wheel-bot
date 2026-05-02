@@ -54,27 +54,36 @@ _theme    = st.session_state.get("theme", "🌙 Dark")
 _is_light = "☀️" in _theme
 
 # ── Colour palette (switches with theme) ───────────────────────────────────────
+# Loaded from /theme.json — single source of truth shared with the mobile app's
+# tailwind.config.js. CONSISTENCY.md Pass B.1: edit values once at the repo
+# root, both surfaces follow.
 
-if _is_light:
-    C_BG    = "#f6f8fa"
-    C_CARD  = "#ffffff"
-    C_GRID  = "#d0d7de"
-    C_TEXT  = "#24292f"
-    C_MUTED = "#57606a"
-    C_BLUE  = "#0969da"
-    C_GREEN = "#1a7f37"
-    C_RED   = "#cf222e"
-    C_AMBER = "#9a6700"
-else:
-    C_BG    = "#0d1117"
-    C_CARD  = "#161b22"
-    C_GRID  = "#21262d"
-    C_TEXT  = "#c9d1d9"
-    C_MUTED = "#8b949e"
-    C_BLUE  = "#58a6ff"
-    C_GREEN = "#3fb950"
-    C_RED   = "#f85149"
-    C_AMBER = "#d29922"
+def _load_theme_tokens(mode: str) -> dict:
+    """Read theme.json for dark/light tokens. Falls back to GitHub-Dark
+    legacy values if the file is missing or invalid (so a stray rename can't
+    break the dashboard's render)."""
+    try:
+        with open(BOT_DIR / "theme.json") as _f:
+            theme = json.load(_f)
+        return theme[mode] if mode in theme else theme["dark"]
+    except Exception:
+        # Legacy fallback — what the dashboard used before theme.json existed.
+        return {
+            "bg": "#0d1117", "card": "#161b22", "border": "#21262d",
+            "text": "#c9d1d9", "muted": "#8b949e", "blue": "#58a6ff",
+            "green": "#3fb950", "red": "#f85149", "amber": "#d29922",
+        }
+
+_theme = _load_theme_tokens("light" if _is_light else "dark")
+C_BG    = _theme["bg"]
+C_CARD  = _theme["card"]
+C_GRID  = _theme["border"]   # historical name kept; semantically a border
+C_TEXT  = _theme["text"]
+C_MUTED = _theme["muted"]
+C_BLUE  = _theme["blue"]
+C_GREEN = _theme["green"]
+C_RED   = _theme["red"]
+C_AMBER = _theme["amber"]
 
 # ── Custom CSS (dynamic) ───────────────────────────────────────────────────────
 
