@@ -2537,6 +2537,97 @@ def black_swan_results(config_name: str):
     return report
 
 
+# ── Forecasts (cross-surface — both dashboard and mobile read from here) ───
+# Reads forecast_validator.py snapshot files. Returns one merged list across
+# the main bot's data/forecasts/ and every farm bot's farm/<slug>/data/
+# forecasts/. Bot is None for the main bot.
+
+@app.get("/forecasts/snapshots", dependencies=[Depends(_require_api_key)])
+def list_forecast_snapshots() -> dict:
+    """
+    Return every snapshot across the main bot + every paper-status farm bot
+    with derived status (pending / due / pass / warning / fail) and the
+    headline metrics so the mobile app can render a list view.
+
+    Empty list with `available=False` if no snapshots exist anywhere.
+    """
+    out: list[dict] = []
+    now_dt = datetime.utcnow()
+
+    def _read_snap_dir(dir_path: Path, bot_label: str | None) -> None:
+        if not dir_path.exists():
+            return
+        for path in sorted(dir_path.glob("forecast_*.json")):
+            try:
+                snap = json.loads(path.read_text())
+            except Exception:
+                continue
+            validate_after = snap.get("validate_after", "")
+            try:
+                va_dt = datetime.fromisoformat(validate_after.replace("Z", "+00:00"))
+                # Strip tz to compare with naive utcnow
+                if va_dt.tzinfo is not None:
+                    va_dt = va_dt.replace(tzinfo=None)
+            except Exception:
+                va_dt = None
+            validation = snap.get("validation")
+            if validation:
+                status = validation.get("overall_status", "unknown")
+            elif va_dt and now_dt >= va_dt:
+                status = "due"
+            else:
+                status = "pending"
+            forecast = snap.get("forecast") or {}
+            actual = (validation or {}).get("actual") or {}
+            out.append({
+                "bot":             bot_label,
+                "snapshot_id":     snap.get("snapshot_id", path.stem),
+                "created_at":      snap.get("created_at", ""),
+                "validate_after":  validate_after,
+                "horizon_days":    snap.get("horizon_days"),
+                "note":            snap.get("note", ""),
+                "status":          status,
+                "forecast_return": forecast.get("expected_total_return_pct"),
+                "forecast_drawdown": forecast.get("expected_max_drawdown_pct"),
+                "forecast_trades": forecast.get("expected_trades_count"),
+                "actual_return":   actual.get("total_return_pct") if validation else None,
+                "actual_drawdown": actual.get("max_drawdown_pct") if validation else None,
+                "actual_trades":   actual.get("trades_count")     if validation else None,
+                "findings_count":  len(validation.get("findings", [])) if validation else 0,
+            })
+
+    # Main bot
+    _read_snap_dir(DATA_DIR / "forecasts", None)
+
+    # Every paper-status farm bot
+    farm_root = BASE_DIR / "farm"
+    if farm_root.exists():
+        for bot_dir in sorted(farm_root.iterdir()):
+            if bot_dir.is_dir() and not bot_dir.name.startswith("_"):
+                _read_snap_dir(bot_dir / "data" / "forecasts", bot_dir.name)
+
+    out.sort(key=lambda r: r["created_at"], reverse=True)
+    return {"snapshots": out, "available": len(out) > 0, "count": len(out)}
+
+
+@app.get("/forecasts/snapshots/{snapshot_id}", dependencies=[Depends(_require_api_key)])
+def get_forecast_snapshot(snapshot_id: str, bot: str | None = None) -> dict:
+    """
+    Return the full snapshot JSON for one snapshot_id. `bot` query param
+    targets a specific farm bot's data dir; omit to look at the main bot.
+    """
+    if bot:
+        path = BASE_DIR / "farm" / bot / "data" / "forecasts" / f"forecast_{snapshot_id}.json"
+    else:
+        path = DATA_DIR / "forecasts" / f"forecast_{snapshot_id}.json"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot not found: {snapshot_id}")
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Couldn't parse snapshot: {exc}")
+
+
 # ── PWA static file serving ────────────────────────────────────────────────────
 _STATIC_DIR = BASE_DIR / "mobile-app" / "dist"
 

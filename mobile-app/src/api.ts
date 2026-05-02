@@ -244,6 +244,41 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// Forecast snapshots (cross-surface consistency — mirrors what the
+// dashboard's Forecasts tab shows). Each snapshot freezes the backtest
+// forecast at a point in time; `validate_after` is when it becomes
+// comparable to actual trades. Status is derived server-side.
+export interface ForecastSnapshotSummary {
+  bot:               string | null   // null = main bot, else farm slug
+  snapshot_id:       string
+  created_at:        string
+  validate_after:    string
+  horizon_days:      number | null
+  note:              string
+  status:            'pending' | 'due' | 'pass' | 'warning' | 'fail' | 'unknown'
+  forecast_return:   number | null
+  forecast_drawdown: number | null
+  forecast_trades:   number | null
+  actual_return:     number | null
+  actual_drawdown:   number | null
+  actual_trades:     number | null
+  findings_count:    number
+}
+
+export interface ForecastSnapshotsList {
+  snapshots: ForecastSnapshotSummary[]
+  available: boolean
+  count:     number
+}
+
+export const getForecastSnapshots = () =>
+  request<ForecastSnapshotsList>('/forecasts/snapshots')
+
+export const getForecastSnapshotDetail = (snapshotId: string, bot?: string | null) => {
+  const qs = bot ? `?bot=${encodeURIComponent(bot)}` : ''
+  return request<Record<string, unknown>>(`/forecasts/snapshots/${snapshotId}${qs}`)
+}
+
 export const getStatus = () => request<StatusData>('/status')
 export const getPosition = () => request<PositionData>('/position')
 export const getHedge = () => request<HedgeData>('/hedge')

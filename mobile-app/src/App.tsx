@@ -3,17 +3,19 @@ import SetupScreen from './components/SetupScreen'
 import Farm from './components/Farm'
 import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
+import Forecasts from './components/Forecasts'
 import Settings from './components/Settings'
 import TradingView from './components/TradingView'
 import { hasCredentials } from './credentials'
 
-type Tab = 'farm' | 'trading' | 'performance' | 'pipeline' | 'settings'
+type Tab = 'farm' | 'trading' | 'performance' | 'pipeline' | 'forecasts' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   farm:        '🤖',
   trading:     '📊',
   performance: '📈',
   pipeline:    '🗺',
+  forecasts:   '🔮',
   settings:    '⚙',
 }
 
@@ -22,10 +24,13 @@ const TAB_LABELS: Record<Tab, string> = {
   trading:     'Trading',
   performance: 'Performance',
   pipeline:    'Pipeline',
+  forecasts:   'Forecasts',
   settings:    'Settings',
 }
 
-const TABS: Tab[] = ['farm', 'trading', 'performance', 'pipeline', 'settings']
+// Forecasts is wedged before Settings — both surfaces (dashboard + mobile)
+// now have a Forecasts surface for backtest-vs-actual validation.
+const TABS: Tab[] = ['farm', 'trading', 'performance', 'pipeline', 'forecasts', 'settings']
 
 export default function App() {
   const [isSetup, setIsSetup]   = useState(false)
@@ -46,6 +51,7 @@ export default function App() {
         {activeTab === 'trading'     && <TradingView />}
         {activeTab === 'performance' && <Performance />}
         {activeTab === 'pipeline'    && <Pipeline />}
+        {activeTab === 'forecasts'   && <Forecasts />}
         {activeTab === 'settings'    && <Settings />}
       </main>
 
