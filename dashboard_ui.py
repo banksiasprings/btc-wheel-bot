@@ -756,12 +756,111 @@ def tab_paper() -> None:
             hb = json.loads(hb_path.read_text())
             hb_age = time.time() - hb.get("timestamp", 0)
             if hb_age < 120:
-                st.markdown("#### 📡 Live Status")
                 btc_price  = hb.get("btc_price", 0)
                 equity_usd = hb.get("equity_usd", 0)
                 iv_rank    = hb.get("iv_rank")
                 mode_str   = hb.get("mode", "—").upper()
                 pos_data   = hb.get("position")  # dict or None
+
+                # ── Pass A.3: rich visual section pulled from mobile TradingView
+                # Mirrors the buffer pill + IV-rank gauge that mobile users see,
+                # so the dashboard feels like the same product. Renders above
+                # the existing metric-card row (which stays as the dense view
+                # for power users).
+
+                # Buffer pill — strike + breakeven distance, colour-coded
+                if pos_data and btc_price > 0:
+                    _strike   = pos_data.get("strike", 0) or 0
+                    _entry    = pos_data.get("entry_price", 0) or 0
+                    _contracts = pos_data.get("contracts", 0) or 0
+                    _opt_type = pos_data.get("option_type", "put")
+                    # BE = strike − premium_per_BTC (USD per BTC of notional).
+                    # premium_per_BTC = entry_price × btc_price (entry is BTC ratio).
+                    _be = _strike - (_entry * btc_price) if _strike > 0 else 0
+                    if _opt_type == "put":
+                        _strike_pct = (btc_price - _strike) / btc_price * 100 if btc_price else 0
+                        _be_pct     = (btc_price - _be) / btc_price * 100 if (btc_price and _be) else None
+                    else:  # call
+                        _strike_pct = (_strike - btc_price) / btc_price * 100 if btc_price else 0
+                        _be_pct     = (_be - btc_price) / btc_price * 100 if (btc_price and _be) else None
+                    _worst = min(_strike_pct, _be_pct) if _be_pct is not None else _strike_pct
+                    if _worst < 0:
+                        _ring, _label, _txtcol = C_RED, "Below strike — ITM", C_RED
+                    elif _worst < 2:
+                        _ring, _label, _txtcol = C_RED, "Tight buffer", C_RED
+                    elif _worst < 5:
+                        _ring, _label, _txtcol = C_AMBER, "Watch buffer", C_AMBER
+                    else:
+                        _ring, _label, _txtcol = C_GREEN, "Healthy buffer", C_GREEN
+                    _be_html = (
+                        f'<div style="text-align:right;"><div style="color:{_txtcol};'
+                        f'font-weight:700;font-size:14px;">↑ {_be_pct:.1f}%</div>'
+                        f'<div style="color:{C_MUTED};font-size:10px;">above BE</div></div>'
+                    ) if _be_pct is not None else ""
+                    st.markdown(
+                        f'<div style="background:{C_CARD};border:1px solid {_ring};'
+                        f'border-radius:12px;padding:12px 18px;display:flex;'
+                        f'align-items:center;justify-content:space-between;'
+                        f'margin-bottom:10px;">'
+                        f'<div><div style="color:{_txtcol};font-weight:600;'
+                        f'font-size:11px;letter-spacing:0.5px;text-transform:uppercase;">'
+                        f'{_label}</div>'
+                        f'<div style="color:{C_MUTED};font-size:11px;margin-top:2px;">'
+                        f'spot ${btc_price:,.0f} · strike ${_strike:,.0f}'
+                        f'{" · BE $%.0f" % _be if _be > 0 else ""}</div></div>'
+                        f'<div style="display:flex;gap:18px;align-items:center;">'
+                        f'<div style="text-align:right;"><div style="color:{_txtcol};'
+                        f'font-weight:700;font-size:14px;">↑ {_strike_pct:.1f}%</div>'
+                        f'<div style="color:{C_MUTED};font-size:10px;">above strike</div>'
+                        f'</div>{_be_html}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # IV-rank gauge — bar with threshold tick + descriptive caption.
+                # Reads the bot's actual iv_rank_threshold from config, not a
+                # hardcoded value, so the gauge tracks whatever the user set.
+                if iv_rank is not None:
+                    raw_cfg = load_yaml()
+                    iv_thresh = float(raw_cfg.get("strategy", {}).get("iv_rank_threshold", 0.30))
+                    live_pct = max(0.0, min(1.0, iv_rank)) * 100
+                    thr_pct  = max(0.0, min(1.0, iv_thresh)) * 100
+                    if iv_rank >= 0.85:
+                        fill_col, head_col = C_RED, C_RED
+                    elif iv_rank >= iv_thresh:
+                        fill_col, head_col = C_GREEN, C_GREEN
+                    else:
+                        fill_col, head_col = C_AMBER, C_AMBER
+                    if iv_rank >= 0.85:
+                        cap = "Extreme volatility — bot caps to one leg."
+                    elif iv_rank >= iv_thresh:
+                        cap = "Above threshold — bot will open new positions when conditions align."
+                    else:
+                        cap = f"Below threshold — waiting for IV to rise above {thr_pct:.0f}% before entering."
+                    st.markdown(
+                        f'<div style="background:{C_CARD};border:1px solid {C_GRID};'
+                        f'border-radius:12px;padding:12px 18px;margin-bottom:10px;">'
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'align-items:baseline;margin-bottom:6px;">'
+                        f'<div><span style="color:{C_MUTED};font-size:11px;'
+                        f'text-transform:uppercase;letter-spacing:0.5px;">IV Rank</span> '
+                        f'<span style="color:{head_col};font-weight:700;font-size:16px;'
+                        f'margin-left:8px;">{live_pct:.0f}%</span></div>'
+                        f'<div style="color:{C_MUTED};font-size:11px;">'
+                        f'threshold <span style="color:{C_TEXT};font-weight:600;">{thr_pct:.0f}%</span></div>'
+                        f'</div>'
+                        f'<div style="position:relative;height:10px;background:#21262d;'
+                        f'border-radius:999px;overflow:hidden;margin-bottom:6px;">'
+                        f'<div style="position:absolute;top:0;left:0;bottom:0;'
+                        f'width:{live_pct}%;background:{fill_col};transition:width 0.3s;"></div>'
+                        f'<div style="position:absolute;top:0;bottom:0;width:2px;'
+                        f'background:rgba(255,255,255,0.7);left:{thr_pct}%;"></div>'
+                        f'</div>'
+                        f'<div style="color:{C_MUTED};font-size:11px;">{cap}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                st.markdown("#### 📡 Live Status")
 
                 # ── Capital buffer calculations ───────────────────────────────
                 # collateral_locked = strike × contracts (USD notional per contract)
