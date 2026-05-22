@@ -164,9 +164,20 @@ def _report_from_backtest() -> None:
         trade_days: list[int] = []
         day_counter = 0
 
+        import torch as _th
+        model.policy.set_training_mode(False)
+
         terminated = truncated = False
         while not (terminated or truncated):
-            action, _ = model.predict(obs, deterministic=True)
+            # Bridge-free inference: avoid torch.from_numpy() ABI mismatch
+            try:
+                _obs_t = _th.FloatTensor(obs.tolist() if hasattr(obs, "tolist") else list(obs)).unsqueeze(0)
+                with _th.no_grad():
+                    _acts, _, _ = model.policy.forward(_obs_t, deterministic=True)
+                action = int(_acts.squeeze().item())
+            except Exception:
+                action_arr, _ = model.predict(obs, deterministic=True)
+                action = int(action_arr)
             obs, reward, terminated, truncated, info = env.step(action)
             eq = info.get("equity", STARTING_EQUITY)
 
