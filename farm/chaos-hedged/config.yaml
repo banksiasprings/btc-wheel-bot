@@ -26,7 +26,7 @@ deribit:
   ws_url_testnet: wss://test.deribit.com/ws/api/v2
 execution:
   order_confirm_timeout: 30
-  poll_interval: 30
+  poll_interval: 90
   slippage_tolerance: 0.01
 hedge:
   enabled: true
@@ -67,7 +67,7 @@ strategy:
   initial_cycle: put
   iv_dynamic_delta: false
   iv_rank_threshold: 0.0
-  liquidity_top_n: 200
+  liquidity_top_n: 30
   max_dte: 7
   min_dte: 1
   target_delta_max: 0.5

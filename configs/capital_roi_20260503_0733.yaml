@@ -1,21 +1,26 @@
 _meta:
-  created_at: '2026-04-25T07:09:21.549836+00:00'
-  fitness: 8.833
-  goal: null
-  name: sharpe V1
-  notes: 'Evolved — goal: sharpe'
-  sharpe: 2.68
+  created_at: '2026-05-03T07:33:37.158444+00:00'
+  drawdown: -0.5
+  fitness: 0.6402
+  generations: 8
+  goal: capital_roi
+  name: capital_roi_20260503_0733
+  notes: ''
+  seeded_from: capital ROI V1
+  sharpe: -3.38
   source: evolved
-  status: paper
-  total_return_pct: 135.16
+  status: draft
+  total_return: 2.19
+  version: 3
+  win_rate: 88.9
 backtest:
-  approx_otm_offset: 0.0338
+  approx_otm_offset: 0.164
   lookback_months: 12
   premium_fraction_of_spot: 0.0289
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 100000.0
+  starting_equity: 90561.0021
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -51,13 +56,13 @@ risk:
   roll_enabled: false
   roll_min_dte: 3
 sizing:
-  collateral_buffer: 1.0
+  collateral_buffer: 1.5
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.0828
-  max_open_legs: 1
-  min_free_equity_fraction: 0.1007
+  max_equity_per_leg: 0.0991
+  max_open_legs: 10
+  min_free_equity_fraction: 0.2311
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -67,9 +72,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.701
+  iv_rank_threshold: 0.2906
   liquidity_top_n: 30
-  max_dte: 37
-  min_dte: 3
-  target_delta_max: 0.4057
-  target_delta_min: 0.1883
+  max_dte: 14
+  min_dte: 5
+  target_delta_max: 0.45
+  target_delta_min: 0.2111

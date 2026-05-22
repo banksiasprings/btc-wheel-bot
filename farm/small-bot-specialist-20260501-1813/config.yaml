@@ -1,21 +1,26 @@
 _meta:
-  created_at: '2026-04-25T07:09:21.549836+00:00'
-  fitness: 8.833
-  goal: null
-  name: sharpe V1
-  notes: 'Evolved — goal: sharpe'
-  sharpe: 2.68
+  created_at: '2026-05-01T18:13:23.124371+00:00'
+  drawdown: 0.0
+  fitness: 0.6725
+  generations: 8
+  goal: small_bot_specialist
+  name: small_bot_specialist_20260501_1813
+  notes: '[paper-promoted 2026-05-02 from evolve auto-run]'
+  seeded_from: null
+  sharpe: -5.78
   source: evolved
   status: paper
-  total_return_pct: 135.16
+  total_return: 1.43
+  version: 1
+  win_rate: 100.0
 backtest:
-  approx_otm_offset: 0.0338
+  approx_otm_offset: 0.0821
   lookback_months: 12
-  premium_fraction_of_spot: 0.0289
+  premium_fraction_of_spot: 0.0122
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 100000.0
+  starting_equity: 65904.3892
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -55,9 +60,9 @@ sizing:
   contract_size_btc: 0.1
   ladder_enabled: false
   ladder_legs: 2
-  max_equity_per_leg: 0.0828
+  max_equity_per_leg: 0.1095
   max_open_legs: 1
-  min_free_equity_fraction: 0.1007
+  min_free_equity_fraction: 0.1958
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -67,9 +72,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.701
+  iv_rank_threshold: 0.5341
   liquidity_top_n: 30
-  max_dte: 37
+  max_dte: 27
   min_dte: 3
-  target_delta_max: 0.4057
-  target_delta_min: 0.1883
+  target_delta_max: 0.3205
+  target_delta_min: 0.1376

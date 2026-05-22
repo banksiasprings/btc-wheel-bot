@@ -1,14 +1,14 @@
 {
-  "updated_at": "2026-05-01T18:32:55.335479+00:00",
+  "updated_at": "2026-05-22T09:17:35.544162+00:00",
   "bots": [
     {
       "id": "safest-v1",
       "name": "Safest V1",
       "description": "Paper trading: Safest V1",
       "status": "running",
-      "pid": 52105,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99113,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "Safest V1",
       "config_status": "paper",
       "config_summary": {
@@ -16,7 +16,7 @@
         "target_delta_min": 0.1883,
         "target_delta_max": 0.4057,
         "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
+        "starting_equity": 100000.0
       },
       "metrics": {
         "num_trades": 0,
@@ -24,8 +24,8 @@
         "total_return_pct": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
       },
       "readiness": {
         "score": 2,
@@ -44,16 +44,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "atm-premium-hunter",
       "name": "atm_premium_hunter",
       "description": "Paper trading: atm_premium_hunter",
       "status": "running",
-      "pid": 52106,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99114,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "atm_premium_hunter",
       "config_status": "paper",
       "config_summary": {
@@ -87,18 +88,29 @@
           "no_kill_switch": true
         }
       },
-      "has_open_position": false,
-      "open_position": null,
-      "position_risk": "ok"
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 77000.0,
+        "expiry": "2026-05-25",
+        "dte": 2,
+        "pnl_usd": -6.95,
+        "pnl_pct": -0.09,
+        "current_spot": 77177.0,
+        "current_delta": 0.4568,
+        "premium_collected": 47.85
+      },
+      "position_risk": "danger",
+      "paused": false
     },
     {
       "id": "capital-roi-v1",
       "name": "capital ROI V1",
       "description": "Paper trading: capital ROI V1",
       "status": "running",
-      "pid": 52108,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99115,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "capital ROI V1",
       "config_status": "paper",
       "config_summary": {
@@ -106,7 +118,7 @@
         "target_delta_min": 0.1883,
         "target_delta_max": 0.4057,
         "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
+        "starting_equity": 100000.0
       },
       "metrics": {
         "num_trades": 0,
@@ -114,8 +126,8 @@
         "total_return_pct": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
       },
       "readiness": {
         "score": 2,
@@ -134,16 +146,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "capital-roi-20260501-1813",
       "name": "capital_roi_20260501_1813",
       "description": "Paper trading: capital_roi_20260501_1813",
       "status": "running",
-      "pid": 52109,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99117,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "capital_roi_20260501_1813",
       "config_status": "paper",
       "config_summary": {
@@ -179,16 +192,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "chaos-hedged",
       "name": "chaos-hedged",
       "description": "Paper trading: chaos-hedged",
       "status": "running",
-      "pid": 52110,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99119,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "chaos-hedged",
       "config_status": "paper",
       "config_summary": {
@@ -199,12 +213,12 @@
         "starting_equity": 100000.0
       },
       "metrics": {
-        "num_trades": 1,
-        "win_rate": 1.0,
-        "total_return_pct": 0.06,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 100062.4,
+        "num_trades": 5,
+        "win_rate": 0.8,
+        "total_return_pct": -0.25,
+        "sharpe": -0.2095,
+        "max_drawdown": 0.0031,
+        "current_equity": 99754.77,
         "starting_equity": 100000.0
       },
       "readiness": {
@@ -225,25 +239,26 @@
       "has_open_position": true,
       "open_position": {
         "type": "short_put",
-        "strike": 76500.0,
-        "expiry": "2026-05-03",
-        "dte": 1,
-        "pnl_usd": 61.26,
-        "pnl_pct": 0.8,
-        "current_spot": 78544.09,
-        "current_delta": 0.061,
-        "premium_collected": 65.19
+        "strike": 77000.0,
+        "expiry": "2026-05-23",
+        "dte": 0,
+        "pnl_usd": -3.86,
+        "pnl_pct": -0.05,
+        "current_spot": 77157.06,
+        "current_delta": 0.4317,
+        "premium_collected": 26.23
       },
-      "position_risk": "caution"
+      "position_risk": "caution",
+      "paused": false
     },
     {
       "id": "chaos-tester",
       "name": "chaos-tester",
       "description": "Paper trading: chaos-tester",
       "status": "running",
-      "pid": 52111,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99124,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "chaos-tester",
       "config_status": "paper",
       "config_summary": {
@@ -254,12 +269,12 @@
         "starting_equity": 100000.0
       },
       "metrics": {
-        "num_trades": 1,
-        "win_rate": 1.0,
-        "total_return_pct": 0.06,
-        "sharpe": 0.0,
-        "max_drawdown": 0.0,
-        "current_equity": 100062.4,
+        "num_trades": 5,
+        "win_rate": 0.8,
+        "total_return_pct": -0.25,
+        "sharpe": -0.2236,
+        "max_drawdown": 0.0037,
+        "current_equity": 99754.7,
         "starting_equity": 100000.0
       },
       "readiness": {
@@ -280,25 +295,26 @@
       "has_open_position": true,
       "open_position": {
         "type": "short_put",
-        "strike": 76500.0,
-        "expiry": "2026-05-03",
-        "dte": 1,
-        "pnl_usd": 61.26,
-        "pnl_pct": 0.8,
-        "current_spot": 78544.09,
-        "current_delta": 0.0617,
-        "premium_collected": 65.19
+        "strike": 77000.0,
+        "expiry": "2026-05-23",
+        "dte": 0,
+        "pnl_usd": -3.86,
+        "pnl_pct": -0.05,
+        "current_spot": 77156.54,
+        "current_delta": 0.4322,
+        "premium_collected": 26.23
       },
-      "position_risk": "caution"
+      "position_risk": "caution",
+      "paused": false
     },
     {
       "id": "daily-trader-v1",
       "name": "daily trader V1",
       "description": "Paper trading: daily trader V1",
       "status": "running",
-      "pid": 52112,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99127,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "daily trader V1",
       "config_status": "paper",
       "config_summary": {
@@ -306,7 +322,7 @@
         "target_delta_min": 0.1883,
         "target_delta_max": 0.4057,
         "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
+        "starting_equity": 100000.0
       },
       "metrics": {
         "num_trades": 0,
@@ -314,8 +330,8 @@
         "total_return_pct": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
       },
       "readiness": {
         "score": 2,
@@ -334,16 +350,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "deep-otm-safety",
       "name": "deep_otm_safety",
       "description": "Paper trading: deep_otm_safety",
       "status": "running",
-      "pid": 52113,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99128,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "deep_otm_safety",
       "config_status": "paper",
       "config_summary": {
@@ -377,18 +394,29 @@
           "no_kill_switch": true
         }
       },
-      "has_open_position": false,
-      "open_position": null,
-      "position_risk": "ok"
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 75500.0,
+        "expiry": "2026-05-25",
+        "dte": 2,
+        "pnl_usd": -0.77,
+        "pnl_pct": -0.01,
+        "current_spot": 77173.24,
+        "current_delta": 0.1729,
+        "premium_collected": 15.43
+      },
+      "position_risk": "caution",
+      "paused": false
     },
     {
       "id": "long-dte-monthly",
       "name": "long_dte_monthly",
       "description": "Paper trading: long_dte_monthly",
       "status": "running",
-      "pid": 52114,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99129,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "long_dte_monthly",
       "config_status": "paper",
       "config_summary": {
@@ -422,18 +450,29 @@
           "no_kill_switch": true
         }
       },
-      "has_open_position": false,
-      "open_position": null,
-      "position_risk": "ok"
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 74000.0,
+        "expiry": "2026-06-12",
+        "dte": 20,
+        "pnl_usd": -6.96,
+        "pnl_pct": -0.09,
+        "current_spot": 77294.84,
+        "current_delta": 0.2963,
+        "premium_collected": 124.44
+      },
+      "position_risk": "caution",
+      "paused": false
     },
     {
       "id": "max-yield-v1",
       "name": "max yield V1",
       "description": "Paper trading: max yield V1",
       "status": "running",
-      "pid": 52115,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99131,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "max yield V1",
       "config_status": "paper",
       "config_summary": {
@@ -441,7 +480,7 @@
         "target_delta_min": 0.1895,
         "target_delta_max": 0.4115,
         "max_equity_per_leg": 0.0412,
-        "starting_equity": 1000.0
+        "starting_equity": 100000.0
       },
       "metrics": {
         "num_trades": 0,
@@ -449,8 +488,8 @@
         "total_return_pct": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
       },
       "readiness": {
         "score": 2,
@@ -469,16 +508,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "max-stack",
       "name": "max_stack",
       "description": "Paper trading: max_stack",
       "status": "running",
-      "pid": 52116,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99137,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "max_stack",
       "config_status": "paper",
       "config_summary": {
@@ -514,16 +554,17 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     },
     {
       "id": "no-hedge-naked",
       "name": "no_hedge_naked",
       "description": "Paper trading: no_hedge_naked",
       "status": "running",
-      "pid": 52117,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99139,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "no_hedge_naked",
       "config_status": "paper",
       "config_summary": {
@@ -557,26 +598,37 @@
           "no_kill_switch": true
         }
       },
-      "has_open_position": false,
-      "open_position": null,
-      "position_risk": "ok"
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 76500.0,
+        "expiry": "2026-05-25",
+        "dte": 2,
+        "pnl_usd": -3.86,
+        "pnl_pct": -0.05,
+        "current_spot": 77156.42,
+        "current_delta": 0.3403,
+        "premium_collected": 33.18
+      },
+      "position_risk": "caution",
+      "paused": false
     },
     {
-      "id": "sharpe-v1",
-      "name": "sharpe V1",
-      "description": "Paper trading: sharpe V1",
+      "id": "rl-agent-v1",
+      "name": "RL Agent V1",
+      "description": "Paper trading: RL Agent V1",
       "status": "running",
-      "pid": 52118,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
-      "config_name": "sharpe V1",
+      "pid": 99319,
+      "uptime_hours": 6.52,
+      "days_running": 0.27,
+      "config_name": "RL Agent V1",
       "config_status": "paper",
       "config_summary": {
-        "iv_rank_threshold": 0.701,
-        "target_delta_min": 0.1883,
-        "target_delta_max": 0.4057,
-        "max_equity_per_leg": 0.0828,
-        "starting_equity": 1000.0
+        "iv_rank_threshold": 0.0,
+        "target_delta_min": 0.15,
+        "target_delta_max": 0.45,
+        "max_equity_per_leg": 0.1,
+        "starting_equity": 100000.0
       },
       "metrics": {
         "num_trades": 0,
@@ -584,8 +636,8 @@
         "total_return_pct": 0.0,
         "sharpe": 0.0,
         "max_drawdown": 0.0,
-        "current_equity": 1000.0,
-        "starting_equity": 1000.0
+        "current_equity": 100000.0,
+        "starting_equity": 100000.0
       },
       "readiness": {
         "score": 2,
@@ -602,25 +654,36 @@
           "no_kill_switch": true
         }
       },
-      "has_open_position": false,
-      "open_position": null,
-      "position_risk": "ok"
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 74000.0,
+        "expiry": "2026-05-29",
+        "dte": 6,
+        "pnl_usd": -3.09,
+        "pnl_pct": -0.04,
+        "current_spot": 77185.22,
+        "current_delta": 0.1877,
+        "premium_collected": 36.28
+      },
+      "position_risk": "caution",
+      "paused": false
     },
     {
-      "id": "short-dte-theta",
-      "name": "short_dte_theta",
-      "description": "Paper trading: short_dte_theta",
+      "id": "sharpe-v1",
+      "name": "sharpe V1",
+      "description": "Paper trading: sharpe V1",
       "status": "running",
-      "pid": 52119,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
-      "config_name": "short_dte_theta",
+      "pid": 99142,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
+      "config_name": "sharpe V1",
       "config_status": "paper",
       "config_summary": {
-        "iv_rank_threshold": 0.2,
-        "target_delta_min": 0.18,
-        "target_delta_max": 0.4,
-        "max_equity_per_leg": 0.1,
+        "iv_rank_threshold": 0.701,
+        "target_delta_min": 0.1883,
+        "target_delta_max": 0.4057,
+        "max_equity_per_leg": 0.0828,
         "starting_equity": 100000.0
       },
       "metrics": {
@@ -649,16 +712,73 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
+    },
+    {
+      "id": "short-dte-theta",
+      "name": "short_dte_theta",
+      "description": "Paper trading: short_dte_theta",
+      "status": "running",
+      "pid": 99147,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
+      "config_name": "short_dte_theta",
+      "config_status": "paper",
+      "config_summary": {
+        "iv_rank_threshold": 0.2,
+        "target_delta_min": 0.18,
+        "target_delta_max": 0.4,
+        "max_equity_per_leg": 0.1,
+        "starting_equity": 100000.0
+      },
+      "metrics": {
+        "num_trades": 1,
+        "win_rate": 0.0,
+        "total_return_pct": -0.17,
+        "sharpe": 0.0,
+        "max_drawdown": 0.0017,
+        "current_equity": 99827.6,
+        "starting_equity": 100000.0
+      },
+      "readiness": {
+        "score": 2,
+        "total": 8,
+        "ready": false,
+        "checks": {
+          "min_trades": false,
+          "min_days": false,
+          "sharpe": false,
+          "drawdown": true,
+          "win_rate": false,
+          "walk_forward": false,
+          "reconcile": false,
+          "no_kill_switch": true
+        }
+      },
+      "has_open_position": true,
+      "open_position": {
+        "type": "short_put",
+        "strike": 77000.0,
+        "expiry": "2026-05-23",
+        "dte": 0,
+        "pnl_usd": -3.86,
+        "pnl_pct": -0.05,
+        "current_spot": 77168.23,
+        "current_delta": 0.4311,
+        "premium_collected": 26.24
+      },
+      "position_risk": "caution",
+      "paused": false
     },
     {
       "id": "small-bot-specialist-20260501-1813",
       "name": "small_bot_specialist_20260501_1813",
       "description": "Paper trading: small_bot_specialist_20260501_1813",
       "status": "running",
-      "pid": 52121,
-      "uptime_hours": 0.05,
-      "days_running": 0.0,
+      "pid": 99149,
+      "uptime_hours": 6.56,
+      "days_running": 0.27,
       "config_name": "small_bot_specialist_20260501_1813",
       "config_status": "paper",
       "config_summary": {
@@ -694,7 +814,8 @@
       },
       "has_open_position": false,
       "open_position": null,
-      "position_risk": "ok"
+      "position_risk": "ok",
+      "paused": false
     }
   ]
 }

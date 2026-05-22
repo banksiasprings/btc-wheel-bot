@@ -1,25 +1,500 @@
-[TIDY 2026-05-02 03:35] Terminals: was 0, closed 0, now 0 | Quit: TextEdit | Not running: Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, System Settings, Calendar, QuickTime Player, Preview
-[HEALTH 2026-05-02 03:36]
-Uptime: 03:35 up 1 day, 13:56, 1 user, load averages: 5.53 4.03 2.91
-Top CPU processes:
-  Claude Helper (Renderer) 14.9%
-  com.apple.Virtualization.VirtualMachine 1.5% (19.3% MEM)
-  Claude (main) 1.3%
-  claude (CLI) 7.2%
-  openclaw-gateway 0.0%
-Memory: 6629 MB free (free%=85%, no pressure)
-Disk: 13Gi used / 697Gi available (2%)
-Thermal: No thermal warning level recorded; CPU_Scheduler_Limit=100
-[TIDY 2026-05-02 04:05] Terminals: was 0, closed 0, now 0 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Calendar, QuickTime Player, Preview
-[HEALTH 2026-05-02 04:06]
-Uptime: 4:06 up 1 day, 14:26, load 2.58 2.62 2.30
-Top CPU processes:
-  Claude Helper (Renderer) 77.2% CPU 4.0% MEM
-  osascript 24.3% CPU 0.1% MEM
-  sh 16.9% CPU
-  claude 6.2% CPU 1.2% MEM
-  Claude 5.9% CPU 2.7% MEM
-Memory: ~6592 MB free (85% system-wide free, pressure NORMAL)
-Disk: 13Gi Used / 697Gi Avail (2% capacity)
-Thermal: No performance warning, CPU_Speed_Limit=100
 
+[TIDY 2026-05-11 14:34] Terminals: was 1, closed 0, now 1 | Quit: (none running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, QuickTime Player, Calendar
+[HEALTH 2026-05-11 14:35]
+Uptime: 14:35 up 18:05, 2 users, load averages: 1.98 2.72 2.73
+Top CPU processes:
+  21.2% sh (PID 31095)
+  21.1% osascript (PID 31094)
+  14.9% Claude Helper (Renderer) (PID 692)
+  5.7%  claude (PID 30987)
+  5.6%  syspolicyd (PID 230)
+Memory: ~2030 MB free (519580 pages free, 90% system-wide free)
+Disk: /  855Gi total, 13Gi used, 699Gi available (2% used)
+Thermal: N/A (no recent thermal log entries)
+Memory pressure: NORMAL (90% free)
+[TIDY 2026-05-11 15:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar | Preview: 0 windows kept
+[HEALTH 2026-05-11 15:05]
+Uptime: 15:05  up 18:35, 2 users, load averages: 2.63 2.81 2.86
+Top CPU processes:
+  19.9% CPU, 0.0% MEM - sh
+  17.4% CPU, 0.0% MEM - awk
+  17.1% CPU, 0.0% MEM - head
+  16.8% CPU, 0.0% MEM - sort
+  16.4% CPU, 0.0% MEM - psMemory: 1905 MB free
+Disk: Used 13Gi / Avail 699Gi (2% used)
+MemPressure: System-wide memory free percentage: 90%
+Thermal: 	CPU_Speed_Limit 	= 100
+EOF
+[TIDY 2026-05-11 15:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, System Preferences, Books, QuickTime Player
+[HEALTH 2026-05-11 15:41]
+Uptime: 15:41  up 19:11, 2 users, load averages: 1.83 3.42 3.29
+Top processes (PID %CPU %MEM COMM):
+  PID  %CPU %MEM COMM
+  692  45.0  3.1 /Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)
+39336  14.4  0.1 osascript
+39337  13.2  0.0 bash
+  165   5.8  0.3 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+39344   2.9  0.0 head
+Memory: 1911 MB free
+Disk: 13Gi used, 699Gi available (2% used)
+MemPressure: OK
+Thermal: N/A (requires sudo)
+
+[TIDY 2026-05-11 16:10] Terminals: was 1, closed 0, now 1 | Quit: (none running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit | Preview: running with 0 windows, left as-is
+[HEALTH 2026-05-11 16:10]
+Uptime: 16:09  up 19:39, 2 users, load averages: 3.39 3.44 3.27
+Top CPU processes:
+  692 Claude Helper (R  89.3 %CPU  3.2 %MEM (this monitor task itself)
+  43109 sh  20.2 %CPU
+  43108 osascript  18.4 %CPU
+  165 WindowServer  8.7 %CPU
+  1538 Google Chrome Helper  6.1 %CPU
+Memory: 2040 MB free (90% system-wide free per memory_pressure); total 30 GB
+Disk: 13Gi used / 699Gi avail (2% used) on /
+Thermal: N/A (pmset -g thermlog unavailable)
+
+[TIDY 2026-05-11 16:34] Terminals: was 1, closed 0, now 1 | Quit: Preview(trimmed), TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books
+[HEALTH 2026-05-11 16:36]
+Uptime: 16:35 up 20:05, 2 users, load averages: 2.74 2.55 2.50
+Top CPU processes:
+  sh 24.6% / osascript 21.3% / Claude 17.3% / WindowServer 8.7% / Google Chrome 6.6%
+Memory: 2175 MB free (system-wide free 90%)
+Disk: 13Gi used / 699Gi available (2%)
+Thermal: N/A
+[TIDY 2026-05-11 17:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Preview, Calendar
+[HEALTH 2026-05-11 17:06]
+Uptime: 17:06  up 20:36, 2 users, load averages: 3.21 3.09 2.94
+Top CPU processes:
+50039 sh                21.9  0.0
+50020 osascript          8.6  0.1
+50040 ps                 8.0  0.0
+50041 head               7.4  0.0
+50042 tail               7.3  0.0
+Memory: 2163 MB free (90% system-wide free)
+Disk: Used 13Gi, Avail 699Gi (698 GB)
+Thermal: CPU_Speed_Limit=100%
+
+[TIDY 2026-05-11 17:34] Terminals: 1 windows (≤3, no action) | Quit: none | Skipped (not running or skipped): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, System Preferences, Books, TextEdit, Calendar, Preview(0win), QuickTime Player
+[HEALTH 2026-05-11 17:34]
+Uptime: 17:34  up 21:05, 2 users, load averages: 2.48 2.90 2.88
+Top CPU processes:
+COMMAND       %CPU MEM  
+tail          0.0  1324K
+pmset         0.0  2012K
+bash          0.0  1356K
+webinspectord 0.0  3236K
+tail          0.0  1360K
+Memory: 2020 MB free
+Disk: Used 13Gi / Avail 699Gi (2% used)
+Thermal: N/A
+[TIDY 2026-05-11 18:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player, Preview
+[HEALTH 2026-05-11 18:05]
+Uptime: 18:05  up 21:35, 2 users, load averages: 3.06 3.57 3.01
+Top CPU processes:
+  692  62.8%  3.1%  Claude Helper (Renderer)
+  57611 22.8%  0.1%  osascript
+  57612 13.0%  0.0%  sh
+  57563  6.7%  1.2%  claude
+  165    5.7%  0.3%  WindowServer
+Memory: 1494 MB free (System-wide free: 90%)
+Disk: 13Gi used / 699Gi available (2% capacity)
+Thermal: CPU_Speed_Limit=100, No thermal warnings
+---
+[TIDY 2026-05-11 18:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Preview: 0 windows kept | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, Books, System Settings, Calendar, QuickTime Player
+[HEALTH 2026-05-11 18:35]
+Uptime: 18:34  up 22:04, 2 users, load averages: 1.14 2.15 2.53
+Top CPU processes:
+  webinspectord 0.0% 3236K
+  tail 0.0% 1324K
+  pmset 0.0% 2012K
+  bash 0.0% 1356K
+  (idle - no high-CPU processes)
+Memory: ~2141 MB free (548070 pages free)
+Disk: 13Gi used / 699Gi available of 855Gi (2% used)
+Thermal: N/A (pmset thermlog unavailable)
+Memory pressure: normal
+[TIDY 2026-05-11 19:04] Terminals: was 1, closed 0, now 1 | Quit: (none running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Calendar, QuickTime Player | Preview: 0 windows (ok)
+[HEALTH 2026-05-11 19:04]
+Uptime: 19:04 up 22:34, 2 users, load averages: 4.13 4.74 3.75
+Top CPU processes:
+  Claude Helper (Renderer) 71.5%
+  sh 21.4%
+  osascript 18.8%
+  WindowServer 11.7%
+  claude 6.8%
+Memory: ~5286 MB free (90% system-wide free, no pressure)
+Disk: 13Gi used / 699Gi avail (2%)
+Thermal: OK (CPU_Speed_Limit 100, no thermal warnings)
+
+[TIDY 2026-05-11 19:38] Terminals: was 1, closed 0, now 1 | Quit: (none, no target apps running) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Calendar, Reminders, App Store, System Settings, Books, QuickTime Player, TextEdit, Preview (running but 0 windows, no action)
+[HEALTH 2026-05-11 19:38]
+Uptime: 19:38  up 23:09, 2 users, load averages: 3.09 3.14 3.33
+Top CPU processes:
+    PID COMM              %CPU %MEM
+  69422 head              17.8  0.0
+  69423 sed               17.6  0.0
+  69421 ps                17.4  0.0
+  69415 osascript         15.3  0.1
+  69416 sh                11.7  0.0
+Memory: 6785 MB free
+Disk: Used 13Gi / Avail 699Gi
+Thermal: N/A (pmset thermlog unavailable)
+
+[TIDY 2026-05-11 20:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar, Preview
+[HEALTH 2026-05-11 20:06]
+Uptime: 20:05  up 23:35, 2 users, load averages: 5.25 3.99 3.78
+Top CPU processes:
+  Google Chrome Helper (Renderer) 126.6% / 112.9% (sustained)
+  Claude Helper (Renderer) 47.6%
+  Claude 33.6%
+  WindowServer 18.4%
+  Chrome GPU Helper 13.8%
+Memory: ~6700 MB free (85% system-wide free, no pressure)
+Disk: 13Gi used / 699Gi available of 855Gi (2%)
+Thermal: N/A (pmset -g thermlog produced no output)
+Mem pressure: System-wide memory free percentage: 85%
+
+[TIDY 2026-05-11 20:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, Calendar, QuickTime Player, Preview
+[HEALTH 2026-05-11 20:41]
+Uptime: 20:41  up 1 day, 11 mins, 2 users, load averages: 4.59 7.38 7.67
+Top CPU processes:
+  COMMAND       %CPU MEM  
+  tail          0.0  1324K
+  pmset         0.0  2020K
+  bash          0.0  1356K
+  webinspectord 0.0  3708K
+  tail          0.0  1360K
+Memory: 6064MB free, 8958MB inactive
+Disk: 13Gi used / 699Gi available
+[HEALTH 2026-05-11 20:44]
+Uptime: 20:44  up 1 day, 14 mins, 2 users, load averages: 7.57 8.25 7.99
+Top CPU processes:
+  152.1% CPU, 2.0% MEM: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/147.0.7727.139/Helper
+  19.0% CPU, 0.0% MEM: /bin/bash
+  15.5% CPU, 0.4% MEM: /Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/147.0.7727.139/Helpers
+  15.4% CPU, 0.3% MEM: /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+  11.0% CPU, 0.1% MEM: osascript
+Memory: 5994 MB free (System-wide memory free percentage: 86%)
+Disk: Used 13Gi, Avail 699Gi (2% used)
+Thermal: 	CPU_Speed_Limit 	= 100
+[TIDY 2026-05-11  21:04 ] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player, Preview
+[HEALTH 2026-05-11 21:05]
+Uptime: 21:05  up 1 day, 35 mins, 2 users, load averages: 8.41 9.19 8.27
+Top CPU processes:
+    PID COMM              %CPU %MEM
+   1549 /Applications/Go 155.4  1.9
+    165 /System/Library/  16.1  0.3
+   1527 /Applications/Go  14.8  0.4
+  80023 sh                14.6  0.0
+  80022 osascript         14.5  0.1
+Memory: ~4.8GB free (1262320 pages * 4KB), system-wide free 85%
+Disk: 13Gi used / 699Gi avail (2% used)
+Thermal: N/A (pmset thermlog empty)
+[TIDY 2026-05-11 21:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player
+[HEALTH 2026-05-11 21:34]
+Uptime: up 1 day, 1:04, load avg 5.89 7.20 7.51
+Top CPU processes:
+  Google Chrome Helper (Renderer) 171.5% CPU 1.7% MEM
+  osascript 22.5%
+  sh 18.8%
+  WindowServer 15.2%
+  Google Chrome Helper 15.1%
+Memory: 7153 MB free (81% system-wide free)
+Disk: 13Gi used / 699Gi available
+Thermal: CPU_Speed_Limit=100 (nominal)
+[TIDY 2026-05-11 22:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, QuickTime Player, Preview, Calendar
+[HEALTH 2026-05-12 02:35]
+Uptime: 22:04 up 1 day, 1:34, 2 users, load avg: 2.88 4.10 5.23
+Top CPU processes:
+  Claude (PID 692): 61.8% CPU, 2.2% MEM
+  osascript (PID 87261): 22.3% CPU, 0.1% MEM
+  sh (PID 87262): 10.3% CPU
+  WindowServer (PID 324): 6.9% CPU, 0.5% MEM
+  Claude Helper (PID 87214): 6.5% CPU, 1.2% MEM
+Memory: ~7.2GB free (1879869 pages free), system-wide free: 81%
+Disk: 13GB Used / 699GB Available of 855GB (2% used)
+Thermal: N/A (no recent thermal events)
+[TIDY 2026-05-11  22:34 ] Terminals: 1 open (none closed) | Quit: none | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, QuickTime Player | Preview: 0 windows (ok)
+[HEALTH 2026-05-11 22:35]
+Uptime: 22:35 up 1 day, 2:05, 2 users, load averages: 6.31 6.69 6.32
+Top CPU processes:
+  1549 Google Chrome Helper (Renderer)  113.8% / 1.7% mem
+  692  Claude Helper (Renderer)          44.6% / 2.7% mem
+  566  Claude                            41.5% / 3.2% mem
+  165  WindowServer                      15.3% / 0.2% mem
+  1527 Google Chrome Helper              14.9% / 0.3% mem
+Memory: ~7276 MB free (1862616 pages)
+Disk: 13Gi used / 699Gi available (2% full)
+Swap: 0.00M used (no pressure)
+Thermal: N/A (no recent throttling)
+[TIDY 2026-05-11 23:04] Terminals: was 1, closed 0, now 1 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Calendar, QuickTime, Preview
+
+[HEALTH 2026-05-11 23:04]
+Uptime: 23:05 up 1 day, 2:35, 2 users, load avg: 4.56 6.89 7.05
+Top CPU processes:
+  1549   Google Chrome He   102.5-149.1%   (sustained > 80% - ALERT)
+  692    Claude Helper (R)  ~25%   891M
+  165    WindowServer       ~19%   101M
+  566    Claude             ~18%   700M
+  1527   Google Chrome He   ~14%   132M
+Memory: ~7928 MB free (Pages free 2029604 x 4096 bytes); System-wide free: 80%
+Disk: 13Gi used / 699Gi available (2% used of 855Gi)
+Thermal: OK (CPU_Speed_Limit=100, no thermal/perf warnings recorded)
+Alerts: 1 sent (high CPU on Chrome Helper PID 1549)
+[TIDY 2026-05-11 23:34] Terminals: was 1, closed 0, now 1 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Preview, QuickTime Player, Calendar
+[HEALTH 2026-05-11 23:35]
+Uptime: 23:34 up 1 day, 3:04, 2 users, load averages: 9.25 8.92 7.96
+Top CPU processes:
+  Google Chrome Helper: 114.0% CPU
+  Claude Helper (Renderer): 24.3% CPU
+  WindowServer: 18.4% CPU
+  top: 17.4% CPU
+  Claude: 14.2% CPU
+Memory: ~7800 MB free (1996961 pages free, 80% system-wide free)
+Disk: 13Gi used / 699Gi available on /
+Thermal: No performance warning recorded; CPU_Speed_Limit=100
+ALERT SENT: High CPU — Google Chrome Helper at 114%
+[TIDY 2026-05-12 00:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player
+[HEALTH 2026-05-12 00:10]
+Uptime: 0:10 up 1 day, 3:40, 2 users, load averages: 7.36 8.18 7.68
+Top CPU processes:
+  Google Chrome Helper: 101.5% CPU (sustained > 80% - ALERT)
+  top: 22.7% CPU
+  WindowServer: 18.1% CPU
+  Google Chrome Helper: 12.7% CPU
+  osascript: 5.3% CPU
+Memory: 7831 MB free (System-wide free: 80%, no pressure)
+Disk: 13Gi used / 699Gi available (2% used of 855Gi)
+Thermal: N/A (no recent throttling)
+ALERT SENT: High CPU — Google Chrome Helper at 101.5%
+---
+[TIDY 2026-05-12 00:34] Terminals: was 1, closed 0, now 1 | Quit: (none) | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Preview, QuickTime Player, Calendar
+[HEALTH 2026-05-12 00:37]
+Uptime: 0:35 up 1 day, 4:05, 2 users, load averages: 6.96 6.43 6.43
+Top CPU processes (top -l 1 sample, single-snapshot, low signal):
+  tail 0.0% 1420K
+  pmset 0.0% 2044K
+  bash 0.0% 1364K
+  tail 0.0% 1324K
+  pmset 0.0% 2020K
+Memory: ~7740 MB free (1981453 pages free, 80% free system-wide)
+Disk: Used 13Gi, Avail 699Gi (2% used)
+Thermal: CPU_Speed_Limit=100, no warnings recorded
+[TIDY 2026-05-12 01:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar | Preview: not active
+[HEALTH 2026-05-12 01:06]
+Uptime:  1:06  up 1 day,  4:36, 2 users, load averages: 4.44 6.47 7.02
+Top CPU processes:
+COMMAND %CPU MEM  
+tail    0.0  1420K
+pmset   0.0  2044K
+bash    0.0  1364K
+tail    0.0  1324K
+pmset   0.0  2020K
+Memory: 7467 MB free
+Disk: Used 13Gi / Avail 699Gi (2% used)
+MemPressure: Pageouts: 1628   System-wide memory free percentage: 80% 
+Thermal: N/A
+[TIDY 2026-05-12 01:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, Calendar, QuickTime Player, Preview
+[HEALTH 2026-05-12 01:35]
+Uptime:  1:35  up 1 day,  5:06, 2 users, load averages: 6.32 6.20 6.80
+Top CPU processes:
+COMMAND          %CPU MEM   
+Google Chrome He 94.0 292M+ 
+top              21.5 5548K+
+WindowServer     19.1 101M+ 
+Claude Helper (R 15.7 806M+ 
+Google Chrome He 14.8 135M  
+Memory: 7438 MB free (System-wide memory free percentage: 80%)
+Disk: Used 13Gi / Avail 699Gi (2% used)
+Thermal: Note: No thermal warning level has been recorded Note: No performance warning level has been recorded 	CPU_Scheduler_Limit 	= 100 
+[TIDY 2026-05-12 02:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player
+[HEALTH 2026-05-12 02:06]
+Uptime: 2:06  up 1 day,  5:36, 2 users, load averages: 6.66 7.46 7.30
+Top CPU processes: Google Chrome Helper (Renderer) 104.3% / com.apple.Safari 19.8% / WindowServer 18.6% / Google Chrome Helper 15.6% / osascript 5.1%
+Memory: 7653 MB free | Pressure: Normal (no CRITICAL/WARN)
+Disk: Used: 13Gi, Avail: 699Gi (2% full)
+Thermal: no thermal throttling detected
+[TIDY 2026-05-12 02:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Preview, Calendar
+[HEALTH 2026-05-12 02:35]
+Uptime: 2:34 up 1 day, 6:04, 2 users, load averages: 11.25 9.96 8.47
+Top CPU processes:
+  Google Chrome Helper  113.1%  302M
+  Claude Helper (R)      23.1%  794M
+  WindowServer           18.7%  101M
+  Google Chrome Helper   18.0%  125M
+  Claude                 10.6%  690M
+Memory: ~7489 MB free (80% system-wide)
+Disk: 13Gi used / 699Gi available
+Thermal: N/A
+Alert sent: High CPU (Chrome Helper 113%)
+[TIDY 2026-05-12 03:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player
+[HEALTH 2026-05-12 03:05]
+Uptime:  3:05  up 1 day,  6:35, 2 users, load averages: 4.46 7.45 7.42
+Top CPU processes:
+PID    COMMAND %CPU MEM  
+98101  tail    0.0  1420K
+98100  pmset   0.0  2044K
+98099  bash    0.0  1364K
+96786  tail    0.0  1324K
+96785  pmset   0.0  2020K
+Memory: 5394 MB free
+Disk: Used=13Gi Avail=699Gi Pct=2%
+Thermal: Note: No thermal warning level has been recorded Note: No performance warning level has been recorded 
+
+[TIDY 2026-05-12 03:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar, Preview(0win)
+[HEALTH 2026-05-12 03:36]
+Uptime: 3:35  up 1 day, 7:05, 2 users, load averages: 11.36 10.96 8.47
+Top CPU processes:
+  Claude 126.0% CPU / 3.3% MEM
+  Google Chrome 93.7% / 3.6%
+  WindowServer 24.6% / 26.0%
+  sh 21.8%
+  osascript 14.9%
+Memory: 3582 MB free
+Disk: 13Gi used / 699Gi available (2% used)
+Thermal: CPU_Speed_Limit=100 (no thermal/performance warnings)
+[TIDY 2026-05-12 04:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, Calendar, QuickTime
+[HEALTH 2026-05-12 04:07]
+Uptime:  4:07  up 1 day,  7:37, 2 users, load averages: 4.31 6.92 7.67
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 4468MB free, 9189MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:07]
+Uptime:  4:07  up 1 day,  7:37, 2 users, load averages: 6.00 7.00 7.66
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 4150MB free, 9335MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:08]
+Uptime:  4:08  up 1 day,  7:38, 2 users, load averages: 17.14 9.87 8.69
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 4062MB free, 9404MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:08]
+Uptime:  4:08  up 1 day,  7:38, 2 users, load averages: 10.49 9.08 8.46
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 3697MB free, 9597MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:09]
+Uptime:  4:09  up 1 day,  7:39, 2 users, load averages: 8.71 8.76 8.36
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 4418MB free, 9207MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:09]
+Uptime:  4:09  up 1 day,  7:40, 2 users, load averages: 6.07 8.07 8.12
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 4057MB free, 9415MB inactive
+Disk: 13Gi used / 698Gi available
+[HEALTH 2026-05-12 04:10]
+Uptime:  4:10  up 1 day,  7:40, 2 users, load averages: 6.47 7.90 8.06
+Top CPU processes:
+  COMMAND %CPU MEM  
+  tail    0.0  1420K
+  pmset   0.0  2044K
+  bash    0.0  1364K
+  tail    0.0  1324K
+  pmset   0.0  2020K
+Memory: 3775MB free, 9559MB inactive
+Disk: 13Gi used / 698Gi available
+[TIDY 2026-05-12 04:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player | Preview: 0 windows OK
+[HEALTH 2026-05-12 04:36]
+Uptime: 4:35  up 1 day, 8:05, load avg 6.90 8.74 8.61
+Top CPU processes:
+  Google Chrome (PID 24619) 141.1% then 116.6% CPU (sustained)
+  WindowServer (PID 165) 18.0% CPU
+  Google Chrome Helper (PID 1527) 17.2% CPU
+  Claude (PID 692) 9.6% CPU
+  WindowServer (PID 701) 6.8% CPU
+Memory: 4337 MB free (~80% system-wide free)
+Disk: Used 13Gi / Avail 698Gi / 855Gi total
+Thermal: CPU_Speed_Limit=100, no thermal warnings
+[TIDY 2026-05-12 05:04] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Preferences, System Settings, Books, QuickTime Player, Calendar, Preview
+
+[HEALTH 2026-05-12 05:06]
+Uptime: 5:06  up 1 day,  8:36, 2 users, load averages: 5.97 6.86 7.40
+Top CPU processes:
+COMMAND          %CPU MEM   Google Chrome He 81.3 423M- Claude Helper (R 27.1 738M+ top              21.8 5804K+WindowServer     18.1 103M  Claude           16.5 766M+ 
+Memory: 6851 MB free
+Disk: Used: 13Gi, Avail: 698Gi (2%)
+Thermal: Note: No thermal warning level has been recorded Note: No performance warning level has been recorded 2026-05-12 05:06:33 +1000 CPU Power notify 	CPU_Scheduler_Limit 	= 100 	CPU_Available_CPUs 	= 4 	C
+[TIDY 2026-05-12 05:34] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, QuickTime Player, Calendar | Preview: 0 windows
+[HEALTH 2026-05-12 05:34]
+Uptime: 5:34  up 1 day,  9:04, 2 users, load averages: 7.07 8.23 8.17
+Top CPU processes (sample shows only self-invoked tail/pmset/bash from concurrent monitor runs; no foreground hog observed):
+  98101 tail 0.0% 1420K
+  98100 pmset 0.0% 2044K
+  96786 tail 0.0% 1324K
+  94550 tail 0.0% 1360K
+  94549 pmset 0.0% 2024K
+Memory: ~7200 MB free (1843252 pages free * 4096 bytes); compressor occupying 846539 pages
+Disk: 13Gi used / 698Gi available of 855Gi (2% used)
+Thermal: N/A (pmset thermlog unavailable)
+MemPressure: nominal (free=1846088 pages, no CRITICAL/WARN signal)
+[TIDY 2026-05-12 06:04] Terminals: was 1, closed 0, now 1 | Quit: none | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, TextEdit, Preview, QuickTime Player, Calendar
+[HEALTH 2026-05-12 06:05]
+Uptime:  6:05  up 1 day,  9:35, 2 users, load averages: 5.30 7.71 8.21
+Top CPU processes:
+  All processes <1% CPU (system idle, top by mem: webinspectord 3.7M)
+Memory: 6262 MB free (77% free)
+Disk: Used 855Gi Avail 698Gi
+Thermal: OK - CPU_Speed_Limit=100, no perf warnings
+---
+[TIDY 2026-05-12  06:34 ] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime Player, Preview
+[HEALTH 2026-05-12 06:35]
+Uptime:  6:35  up 1 day, 10:05, 2 users, load averages: 2.97 4.87 6.19
+Top CPU processes:
+   19.4 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
+   19.2 ps
+   18.9 sort
+   18.6 head
+   16.6 awk
+Memory: 0 MB free (system-wide free: System-wide memory free percentage: 78%)
+Disk: used=13Gi avail=698Gi
+Thermal: N/A
+[TIDY 2026-05-12 07:05] Terminals: was 1, closed 0, now 1 | Quit: TextEdit | Skipped (not running): Music, Podcasts, Photos, News, Stocks, Maps, Reminders, App Store, System Settings, Books, Calendar, QuickTime
+[HEALTH 2026-05-12 07:05]
+Uptime: 7:05  up 1 day, 10:35, 2 users, load averages: 2.93 4.50 5.01
+Top CPU processes:
+  Google Chrome Helper (Renderer) 49.3%
+  osascript 24.1%
+  sh 15.5%
+  Claude Helper (Renderer) 9.6%
+  claude 6.9%
+Memory: ~5479 MB free (system-wide free 76%)
+Disk: 13Gi used / 697Gi available
+Thermal: N/A (no recent thermlog)

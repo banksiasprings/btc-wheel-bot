@@ -38,6 +38,7 @@ from typing import Any
 import yaml
 
 from readiness_validator import validate_bot, ReadinessReport
+from farm.risk_monitor import RiskMonitor
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -602,6 +603,11 @@ class BotFarm:
     def run(self) -> None:
         """Main supervisor loop."""
         self.setup()
+
+        # Start real-time risk alert monitor (daemon thread — dies with the process)
+        monitor = RiskMonitor(interval_seconds=60)
+        monitor.start()
+        print("[farm] Risk monitor started.", flush=True)
 
         # If we have legacy farm_config.yaml bots, start them
         if self._bots:

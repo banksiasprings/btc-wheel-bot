@@ -57,9 +57,9 @@ strategy:
   - monthly
   initial_cycle: put
   iv_dynamic_delta: true
-  iv_rank_threshold: 0.3
+  iv_rank_threshold: 0.29  # optimizer best genome: 0.2906 (was 0.30)
   liquidity_top_n: 30
-  max_dte: 37
-  min_dte: 3
-  target_delta_max: 0.4057
-  target_delta_min: 0.1883
+  max_dte: 14  # optimizer validated: cap at bi-weekly (was 37); aligns with IMPROVEMENTS #1
+  min_dte: 5  # optimizer best genome: 5 (was 3)
+  target_delta_max: 0.45  # optimizer best genome: 0.45 (was 0.4057)
+  target_delta_min: 0.2111  # optimizer best genome: 0.2111 (was 0.1883)

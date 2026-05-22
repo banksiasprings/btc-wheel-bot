@@ -2446,6 +2446,85 @@ def get_farm_bot_state(bot_id: str) -> dict:
     }
 
 
+@app.get("/farm/equity", dependencies=[Depends(_require_api_key)])
+def get_farm_equity() -> dict:
+    """
+    Aggregate equity time-series across all farm bots.
+
+    Walks every bot's `data/trades.csv`, builds a per-bot equity step
+    function from `equity_after`, then sums across bots at each unique
+    timestamp. Returns the headline numbers a non-technical user needs:
+    total starting equity, current equity, % return, and a sparse
+    time-series suitable for a sparkline.
+    """
+    if not FARM_DIR.exists():
+        return {"points": [], "total_starting": 0.0, "total_current": 0.0, "total_pnl_usd": 0.0, "total_return_pct": 0.0}
+
+    import csv as _csv
+    from datetime import datetime
+
+    bots: list[dict] = []
+    if FARM_STATUS.exists():
+        status = _read_json(FARM_STATUS) or {}
+        for b in status.get("bots", []):
+            bots.append({
+                "id": b.get("id"),
+                "starting": float(b.get("metrics", {}).get("starting_equity") or 0.0),
+                "current":  float(b.get("metrics", {}).get("current_equity")  or 0.0),
+            })
+    if not bots:
+        for d in sorted(FARM_DIR.iterdir()):
+            if d.is_dir() and not d.name.startswith("."):
+                bots.append({"id": d.name, "starting": 100_000.0, "current": 100_000.0})
+
+    # Build per-bot equity events from trades.csv
+    events: list[tuple[float, str, float]] = []  # (ts, bot_id, equity_after)
+    for b in bots:
+        path = FARM_DIR / b["id"] / "data" / "trades.csv"
+        if not path.exists():
+            continue
+        try:
+            with open(path, newline="") as f:
+                for row in _csv.DictReader(f):
+                    try:
+                        ts = datetime.fromisoformat(row["timestamp"].replace("Z", "+00:00")).timestamp()
+                        eq = float(row.get("equity_after") or 0.0)
+                    except (KeyError, ValueError, TypeError):
+                        continue
+                    if eq > 0:
+                        events.append((ts, b["id"], eq))
+        except Exception:
+            continue
+
+    # Walk through events in time order, summing each bot's last-known equity
+    total_starting = sum(b["starting"] for b in bots)
+    total_current  = sum(b["current"]  for b in bots)
+    last_eq = {b["id"]: b["starting"] for b in bots}
+
+    points: list[dict] = []
+    if events:
+        events.sort()
+        for ts, bot_id, eq in events:
+            last_eq[bot_id] = eq
+            total = sum(last_eq.values())
+            points.append({"ts": ts, "equity": round(total, 2)})
+
+    # Always include the current live total as the last point so the chart
+    # extends to "now" even between trade events.
+    if not points or points[-1]["equity"] != total_current:
+        points.append({"ts": datetime.now().timestamp(), "equity": round(total_current, 2)})
+
+    total_pnl = total_current - total_starting
+    return {
+        "points":           points,
+        "total_starting":   round(total_starting, 2),
+        "total_current":    round(total_current, 2),
+        "total_pnl_usd":    round(total_pnl, 2),
+        "total_return_pct": round(total_pnl / total_starting * 100, 4) if total_starting > 0 else 0.0,
+        "bot_count":        len(bots),
+    }
+
+
 # ── Black Swan stress test ─────────────────────────────────────────────────────
 
 import threading as _threading

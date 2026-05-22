@@ -1,17 +1,17 @@
 _meta:
-  created_at: '2026-04-25T03:10:00.000000+00:00'
+  created_at: '2026-05-01T18:25:26.810900+00:00'
   fitness: null
-  goal: 'Stress-test bot: bypasses IV rank, shortest expiries, trades as fast as possible'
-  name: chaos-tester
-  notes: 'TEST ONLY — iv_rank_threshold=0, min_dte=1, max_dte=7, poll every 30s. Purpose:
-    fire real paper trades quickly to verify trade logging, TradingView overlays,
-    farm metrics, and P&L accounting end-to-end. Not a production config.'
-  source: manual
+  goal: null
+  name: max_stack
+  notes: 'max_open_legs=20, max_equity_per_leg=0.04 → up to 20 simultaneous positions
+    at ~4% equity each. Hypothesis: very high margin utilisation will trigger collateral
+    / free-margin checks; logs will show exactly where the bot stops opening new legs.'
+  source: thesis
   status: paper
 backtest:
-  approx_otm_offset: 0.05
+  approx_otm_offset: 0.0338
   lookback_months: 12
-  premium_fraction_of_spot: 0.02
+  premium_fraction_of_spot: 0.0289
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
@@ -27,36 +27,36 @@ deribit:
   ws_url_testnet: wss://test.deribit.com/ws/api/v2
 execution:
   order_confirm_timeout: 30
-  poll_interval: 90
-  slippage_tolerance: 0.01
+  poll_interval: 60
+  slippage_tolerance: 0.005
 hedge:
-  enabled: false
-  rebalance_threshold: 0.1
+  enabled: true
+  rebalance_threshold: 0.05
 logging:
-  level: DEBUG
+  level: INFO
   log_dir: logs
   retention: 30 days
   rotation: 1 day
   trade_log_csv: data/trades.csv
 overseer:
   check_interval_minutes: 60
-  drawdown_warning_threshold: 0.2
-  enabled: false
-  iv_spike_warning_threshold: 0.99
+  drawdown_warning_threshold: 0.05
+  enabled: true
+  iv_spike_warning_threshold: 0.85
 risk:
   kill_switch_file: KILL_SWITCH
-  max_adverse_delta: 0.9
-  max_daily_drawdown: 0.5
-  max_loss_per_leg: 0.5
+  max_adverse_delta: 0.4
+  max_daily_drawdown: 0.1
+  max_loss_per_leg: 0.02
   roll_enabled: false
-  roll_min_dte: 1
+  roll_min_dte: 3
 sizing:
-  collateral_buffer: 1.0
+  collateral_buffer: 1.5
   contract_size_btc: 0.1
   ladder_enabled: false
-  ladder_legs: 1
-  max_equity_per_leg: 0.1
-  max_open_legs: 1
+  ladder_legs: 2
+  max_equity_per_leg: 0.04
+  max_open_legs: 20
   min_free_equity_fraction: 0.02
   regime_ma_days: 50
   use_regime_filter: false
@@ -66,10 +66,10 @@ strategy:
   - weekly
   - monthly
   initial_cycle: put
-  iv_dynamic_delta: false
-  iv_rank_threshold: 0.0
+  iv_dynamic_delta: true
+  iv_rank_threshold: 0.3
   liquidity_top_n: 30
-  max_dte: 7
-  min_dte: 1
-  target_delta_max: 0.5
-  target_delta_min: 0.2
+  max_dte: 37
+  min_dte: 3
+  target_delta_max: 0.4
+  target_delta_min: 0.18
