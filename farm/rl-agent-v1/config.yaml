@@ -72,3 +72,4 @@ strategy:
   target_delta_max: 0.45
   target_delta_min: 0.15
 strategy_type: rl_agent
+use_deribit_testnet: true

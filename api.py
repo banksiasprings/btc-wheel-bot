@@ -2914,21 +2914,27 @@ def _render_widget_html() -> str:
         rl_pos_html = ""
         if rl_pos:
             pc = vc(rl_pos.get("pnl_usd", 0))
+            _rl_type = rl_pos.get('type', 'option')
+            _rl_type_label = (
+                'Sold put option' if 'put' in _rl_type.lower()
+                else 'Sold call option' if 'call' in _rl_type.lower()
+                else _rl_type
+            )
             rl_pos_html = (
-                f'<div class="pos-line">short_put @${rl_pos.get("strike",0):,.0f} '
-                f'exp {rl_pos.get("expiry","?")} '
-                f'<span style="color:{pc}">{fm(rl_pos.get("pnl_usd",0))}</span></div>'
+                f'<div class="pos-line">{_rl_type_label} — strike ${rl_pos.get("strike",0):,.0f} '
+                f'(expires {rl_pos.get("expiry","?")}) '
+                f'<span style="color:{pc}">Profit/Loss: {fm(rl_pos.get("pnl_usd",0))}</span></div>'
             )
         rl_html = f"""
         <div class="card" id="rl-card">
-          <div class="card-label">RL AGENT V1</div>
+          <div class="card-label">AI BOT (RL AGENT V1)</div>
           <div class="card-row">
             <span class="big-num" style="color:{vc(rl_pnl)}">${rl_eq:,.0f}</span>
             <span class="sub-num" style="color:{vc(rl_roi)}">{fp(rl_roi)}</span>
           </div>
           <div class="meta-row">
-            <span>{rl_trades} trades</span>
-            <span>Ann. ROI: <b style="color:{vc(rl_ann)}">{fp(rl_ann)}</b></span>
+            <span>{rl_trades} trades completed</span>
+            <span>Yearly return rate: <b style="color:{vc(rl_ann)}">{fp(rl_ann)}</b></span>
           </div>
           {rl_pos_html}
         </div>"""
@@ -2943,15 +2949,15 @@ def _render_widget_html() -> str:
         bb_pnl = bb_m.get("current_equity", 0) - bb_m.get("starting_equity", 0)
         best_html = f"""
         <div class="card">
-          <div class="card-label">BEST BOT</div>
+          <div class="card-label">BEST PERFORMING BOT</div>
           <div class="card-row">
             <span class="med-num">{best_bot.get("name", best_bot.get("id","?"))}</span>
             <span class="sub-num" style="color:{vc(bb_roi)}">{fp(bb_roi)}</span>
           </div>
           <div class="meta-row">
-            <span>P&amp;L: <b style="color:{vc(bb_pnl)}">{fm(bb_pnl)}</b></span>
+            <span>Profit/Loss: <b style="color:{vc(bb_pnl)}">{fm(bb_pnl)}</b></span>
             <span>{bb_m.get("num_trades",0)} trades &nbsp;·&nbsp;
-                  W {bb_m.get("win_rate",0)*100:.0f}%</span>
+                  Win rate {bb_m.get("win_rate",0)*100:.0f}%</span>
           </div>
         </div>"""
     else:
@@ -2963,20 +2969,28 @@ def _render_widget_html() -> str:
         lt     = last_trade_bot.get("open_position", {})
         lt_pnl = lt.get("pnl_usd", 0)
         risk   = last_trade_bot.get("position_risk", "ok")
+        # Plain-English position type
+        _pos_type_raw = lt.get("type", "?")
+        _pos_type_label = (
+            "Sold put option" if "put" in _pos_type_raw.lower()
+            else "Sold call option" if "call" in _pos_type_raw.lower()
+            else _pos_type_raw
+        )
+        _risk_label = {"ok": "Safe", "caution": "Watch it", "danger": "High Risk"}.get(risk, risk.upper())
         lt_html = f"""
         <div class="card">
-          <div class="card-label">LATEST POSITION</div>
+          <div class="card-label">CURRENT TRADE</div>
           <div class="card-row">
             <span class="med-num">{last_trade_bot.get("name", last_trade_bot.get("id","?"))}</span>
-            <span class="sub-num" style="color:{vc(lt_pnl)}">{fm(lt_pnl)}</span>
+            <span class="sub-num" style="color:{vc(lt_pnl)}">Profit/Loss: {fm(lt_pnl)}</span>
           </div>
           <div class="meta-row">
-            <span>{lt.get("type","?")} @ ${lt.get("strike",0):,.0f}</span>
-            <span>DTE {lt.get("dte","?")} &nbsp;·&nbsp; &Delta; {lt.get("current_delta",0):.3f}</span>
+            <span>{_pos_type_label} — strike ${lt.get("strike",0):,.0f}</span>
+            <span>{lt.get("dte","?")} days left until expiry</span>
           </div>
           <div class="meta-row">
-            <span>Premium: ${lt.get("premium_collected",0):,.2f}</span>
-            <span>Risk: <b class="risk-{risk}">{risk.upper()}</b></span>
+            <span>Premium collected: ${lt.get("premium_collected",0):,.2f}</span>
+            <span>Risk level: <b class="risk-{risk}">{_risk_label}</b></span>
           </div>
         </div>"""
     else:
@@ -3079,6 +3093,12 @@ def _render_widget_html() -> str:
     {btc_line}
   </div>
 
+  <div class="overview-summary" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:13px;line-height:1.6;">
+    <b>Bot farm is {'RUNNING' if running_count > 0 else 'STOPPED'}.</b>
+    {f'<br>{running_count} of {len(bots)} bots are active.' if bots else ''}
+    {f'<br>Combined profit/loss: <span style="color:{vc(total_pnl)}">{fm(total_pnl)} ({fp(total_pnl_pct)})</span>' if total_starting > 0 else ''}
+    {f'<br>Best bot so far: <b>{best_bot.get("name", best_bot.get("id","?"))}</b> at <span style="color:{vc(bb_roi if best_bot else 0)}">{fp(best_bot["metrics"]["total_return_pct"] if best_bot else 0)}</span>' if best_bot else ''}
+  </div>
   <div class="stat-grid">
     <div class="stat-chip">
       <span class="num" style="color:{'var(--green)' if running_count == len(bots) and bots else 'var(--red)'}">{running_count}/{len(bots)}</span>

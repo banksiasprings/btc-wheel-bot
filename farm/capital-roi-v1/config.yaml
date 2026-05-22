@@ -3,7 +3,7 @@ _meta:
   fitness: 26.073
   goal: null
   name: capital ROI V1
-  notes: 'Evolved — goal: capital_roi'
+  notes: 'Evolved — goal: capital_roi. Kept as evolved-champion baseline for RL comparison.'
   sharpe: 2.44
   source: evolved
   status: paper

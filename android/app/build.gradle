@@ -18,8 +18,8 @@ android {
         applicationId "com.banksiafarm.btcwheel"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
 
         // Inject API config as BuildConfig constants
         // Set these in android/local.properties:
@@ -27,7 +27,8 @@ android {
         //   BOT_API_KEY=your_wheel_api_key_here
         buildConfigField "String", "BOT_API_URL",
             "\"${localProps.getProperty('BOT_API_URL', 'https://bot.banksiaspringsfarm.com')}\""
-        buildConfigField "String", "BOT_API_KEY", "\"btc-bot-2024\""
+        buildConfigField "String", "BOT_API_KEY",
+            "\"${localProps.getProperty('BOT_API_KEY', '')}\""
     }
 
     buildTypes {
