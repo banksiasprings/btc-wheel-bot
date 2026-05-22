@@ -88,6 +88,36 @@ class WheelBot:
         self._risk       = RiskManager()
         self._client     = DeribitClient()
         self._strategy   = WheelStrategy(self._client.rest)
+
+        # ── RL strategy override ──────────────────────────────────────────────
+        # If the active config YAML declares strategy_type: rl_agent, swap in
+        # the PPO-backed RLStrategy instead of the rule-based WheelStrategy.
+        _cfg_path = os.environ.get(
+            "WHEEL_BOT_CONFIG",
+            str(Path(__file__).parent / "config.yaml"),
+        )
+        try:
+            import yaml as _yaml
+            _raw = _yaml.safe_load(Path(_cfg_path).read_text()) or {}
+            if _raw.get("strategy_type") == "rl_agent":
+                from rl_agent.rl_strategy import RLStrategy
+                _model_rel = _raw.get(
+                    "rl_model_path", "rl_agent/checkpoints/best_model.zip"
+                )
+                _model_abs = Path(__file__).parent / _model_rel
+                _starting  = float(
+                    _raw.get("backtest", {}).get("starting_equity", 100_000.0)
+                )
+                self._strategy = RLStrategy(
+                    model_path=str(_model_abs),
+                    starting_equity=_starting,
+                )
+                logger.info(
+                    f"[RLStrategy] Active — model={_model_abs.name} "
+                    f"equity={_starting:,.0f}"
+                )
+        except Exception as _exc:
+            logger.warning(f"RL strategy check failed ({_cfg_path}): {_exc}")
         self._positions: list[Position] = []
         self._equity_usd: float = self._cfg.backtest.starting_equity
         self._equity_history: list[float] = []
@@ -756,6 +786,33 @@ class WheelBot:
                         f"Hedge rebalanced {adjustment:+.3f} BTC | "
                         f"net delta: {net_delta:+.3f} BTC"
                     )
+
+        # ── RL strategy: inject position context + check for close request ──────
+        if hasattr(self._strategy, "update_position_state"):
+            self._strategy.update_position_state(
+                positions=self._positions,
+                equity_usd=self._equity_usd,
+            )
+
+        if (
+            hasattr(self._strategy, "wants_close")
+            and self._strategy.wants_close()
+            and self._positions
+        ):
+            pos = self._positions[0]
+            logger.info(
+                f"[RLStrategy] ACTION_CLOSE → closing {pos.instrument_name}"
+            )
+            hedge_pnl = 0.0
+            if self._hedge is not None:
+                hedge_pnl = await self._hedge.close_all(
+                    underlying_price, self._client.ws
+                )
+            closed = await self._close_position(
+                pos, "rl_close", underlying_price, hedge_pnl_usd=hedge_pnl
+            )
+            if closed:
+                self._positions.remove(pos)
 
         # Open new leg if flat (or if ladder has unfilled slots)
         ladder_enabled = getattr(self._cfg.sizing, "ladder_enabled", False)
