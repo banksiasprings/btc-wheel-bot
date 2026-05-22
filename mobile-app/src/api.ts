@@ -1,4 +1,6 @@
-// API client — reads URL and key from localStorage
+// API client — reads URL and key from localStorage, falls back to hardcoded creds
+
+import { loadApiKey, DEFAULT_URL } from './credentials'
 
 export interface StatusData {
   bot_running: boolean
@@ -217,15 +219,12 @@ export interface PresetsData {
   current: { params: PresetParams }
 }
 
-const DEFAULT_API_URL = 'https://bot.banksiaspringsfarm.com'
-const DEFAULT_API_KEY = ''  // Never hardcode — entered via SetupScreen and stored in localStorage
-
 function getBase(): string {
-  return (localStorage.getItem('api_url') || DEFAULT_API_URL).replace(/\/$/, '')
+  return (localStorage.getItem('api_url') || DEFAULT_URL).replace(/\/$/, '')
 }
 
 function getKey(): string {
-  return localStorage.getItem('api_key') || DEFAULT_API_KEY
+  return loadApiKey()
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {

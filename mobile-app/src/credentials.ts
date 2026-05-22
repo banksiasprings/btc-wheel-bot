@@ -34,18 +34,14 @@ function deleteCookie(name: string) {
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-/** Returns the saved API key, or the hardcoded fallback. */
+/** Returns the hardcoded API key (single source of truth). */
 export function loadApiKey(): string {
-  const fromStorage = localStorage.getItem('api_key') ?? ''
-  if (fromStorage) return fromStorage
-
-  const fromCookie = decodeURIComponent(readCookie(COOKIE_NAME))
-  if (fromCookie) {
-    localStorage.setItem('api_key', fromCookie)
+  // Always use the hardcoded key — overwrite any stale localStorage/cookie value
+  // so PWAs that pre-date the hardcoded-key change pick it up on next load.
+  if (localStorage.getItem('api_key') !== HARDCODED_API_KEY) {
+    localStorage.setItem('api_key', HARDCODED_API_KEY)
     localStorage.setItem('api_url', DEFAULT_URL)
-    return fromCookie
   }
-
   return HARDCODED_API_KEY
 }
 
