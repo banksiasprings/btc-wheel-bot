@@ -29,7 +29,7 @@ import httpx
 import websockets as _websockets
 from fastapi import Depends, FastAPI, HTTPException, Header, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -2731,6 +2731,456 @@ def get_forecast_snapshot(snapshot_id: str, bot: str | None = None) -> dict:
         return json.loads(path.read_text())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Couldn't parse snapshot: {exc}")
+
+
+# ── Phone Widget (home-screen dashboard, no auth) ─────────────────────────────
+
+_FARM_STATUS_PATH = BASE_DIR / "farm" / "status.json"
+
+
+def _render_widget_html() -> str:
+    """Build the phone widget HTML from the current farm status."""
+    from datetime import timezone as _tz
+
+    raw: dict = {}
+    try:
+        raw = json.loads(_FARM_STATUS_PATH.read_text())
+    except Exception:
+        pass
+
+    bots: list = raw.get("bots", [])
+    updated_at: str = raw.get("updated_at", "")
+
+    # ── Freshness ──────────────────────────────────────────────────────────────
+    age_secs = 9999.0
+    age_str  = "unknown"
+    try:
+        dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        age_secs = (datetime.now(_tz.utc) - dt).total_seconds()
+        age_str  = (f"{int(age_secs//60)}m {int(age_secs%60)}s ago"
+                    if age_secs >= 60 else f"{int(age_secs)}s ago")
+    except Exception:
+        pass
+    is_fresh = age_secs < 120
+
+    # ── Aggregates ─────────────────────────────────────────────────────────────
+    running_count  = sum(1 for b in bots if b.get("status") == "running")
+    total_equity   = sum(b["metrics"]["current_equity"]  for b in bots if b.get("metrics"))
+    total_starting = sum(b["metrics"]["starting_equity"] for b in bots if b.get("metrics"))
+    total_pnl      = total_equity - total_starting
+    total_pnl_pct  = (total_pnl / total_starting * 100) if total_starting > 0 else 0.0
+    open_pos_count = sum(1 for b in bots if b.get("has_open_position"))
+    total_trades   = sum(b["metrics"].get("num_trades", 0) for b in bots if b.get("metrics"))
+    danger_bots    = [b for b in bots if b.get("position_risk") == "danger"]
+    kill_bots      = [b for b in bots
+                      if not b.get("readiness", {}).get("checks", {}).get("no_kill_switch", True)]
+
+    # ── RL Agent V1 ────────────────────────────────────────────────────────────
+    rl = next((b for b in bots if b.get("id") == "rl-agent-v1"), None)
+
+    # ── Best bot (by total_return_pct, must have completed trades) ─────────────
+    with_trades = [b for b in bots if b.get("metrics", {}).get("num_trades", 0) > 0]
+    best_bot = (max(with_trades, key=lambda b: b["metrics"]["total_return_pct"])
+                if with_trades else None)
+
+    # ── Latest position (shortest DTE = most recent/urgent activity) ───────────
+    bots_with_pos = [b for b in bots if b.get("has_open_position") and b.get("open_position")]
+    last_trade_bot = (min(bots_with_pos, key=lambda b: b["open_position"].get("dte", 999))
+                      if bots_with_pos else None)
+
+    # ── BTC spot from any open position ────────────────────────────────────────
+    btc_spot: float = 0.0
+    if bots_with_pos:
+        btc_spot = bots_with_pos[0]["open_position"].get("current_spot", 0.0)
+
+    # ── Colour / format helpers ─────────────────────────────────────────────────
+    def vc(v: float) -> str:
+        return "#00ff88" if v >= 0 else "#ff4455"
+
+    def fm(v: float, sign: bool = True) -> str:
+        s = "+" if (sign and v >= 0) else ""
+        return f"{s}${v:,.2f}"
+
+    def fp(v: float, sign: bool = True) -> str:
+        s = "+" if (sign and v >= 0) else ""
+        return f"{s}{v:.2f}%"
+
+    # ── Status badge ────────────────────────────────────────────────────────────
+    if is_fresh:
+        badge = ('<span class="badge live">'
+                 '<span class="pulse-dot"></span>LIVE</span>')
+    else:
+        badge = '<span class="badge stale">STALE</span>'
+
+    # ── Alert bar ───────────────────────────────────────────────────────────────
+    alert_html = ""
+    if danger_bots:
+        names = ", ".join(b.get("name", b.get("id", "?")) for b in danger_bots)
+        alert_html = f'<div class="alert-bar">🚨 DANGER: {names}</div>'
+    elif kill_bots:
+        names = ", ".join(b.get("name", b.get("id", "?")) for b in kill_bots)
+        alert_html = f'<div class="alert-bar warn">⚠️ KILL SWITCH: {names}</div>'
+
+    # ── RL Agent card ───────────────────────────────────────────────────────────
+    if rl:
+        rl_m      = rl.get("metrics", {})
+        rl_eq     = rl_m.get("current_equity", 0)
+        rl_start  = rl_m.get("starting_equity", rl_eq)
+        rl_pnl    = rl_eq - rl_start
+        rl_roi    = rl_m.get("total_return_pct", 0)
+        rl_trades = rl_m.get("num_trades", 0)
+        rl_days   = rl.get("days_running", 0)
+        rl_ann    = (rl_roi / rl_days * 365) if rl_days > 0 and rl_roi != 0 else 0.0
+        rl_pos    = rl.get("open_position") or {}
+        rl_pos_html = ""
+        if rl_pos:
+            pc = vc(rl_pos.get("pnl_usd", 0))
+            rl_pos_html = (
+                f'<div class="pos-line">short_put @${rl_pos.get("strike",0):,.0f} '
+                f'exp {rl_pos.get("expiry","?")} '
+                f'<span style="color:{pc}">{fm(rl_pos.get("pnl_usd",0))}</span></div>'
+            )
+        rl_html = f"""
+        <div class="card" id="rl-card">
+          <div class="card-label">RL AGENT V1</div>
+          <div class="card-row">
+            <span class="big-num" style="color:{vc(rl_pnl)}">${rl_eq:,.0f}</span>
+            <span class="sub-num" style="color:{vc(rl_roi)}">{fp(rl_roi)}</span>
+          </div>
+          <div class="meta-row">
+            <span>{rl_trades} trades</span>
+            <span>Ann. ROI: <b style="color:{vc(rl_ann)}">{fp(rl_ann)}</b></span>
+          </div>
+          {rl_pos_html}
+        </div>"""
+    else:
+        rl_html = ('<div class="card"><div class="card-label">RL AGENT V1</div>'
+                   '<div class="meta-row">Not in farm</div></div>')
+
+    # ── Best bot card ───────────────────────────────────────────────────────────
+    if best_bot:
+        bb_m   = best_bot.get("metrics", {})
+        bb_roi = bb_m.get("total_return_pct", 0)
+        bb_pnl = bb_m.get("current_equity", 0) - bb_m.get("starting_equity", 0)
+        best_html = f"""
+        <div class="card">
+          <div class="card-label">BEST BOT</div>
+          <div class="card-row">
+            <span class="med-num">{best_bot.get("name", best_bot.get("id","?"))}</span>
+            <span class="sub-num" style="color:{vc(bb_roi)}">{fp(bb_roi)}</span>
+          </div>
+          <div class="meta-row">
+            <span>P&amp;L: <b style="color:{vc(bb_pnl)}">{fm(bb_pnl)}</b></span>
+            <span>{bb_m.get("num_trades",0)} trades &nbsp;·&nbsp;
+                  W {bb_m.get("win_rate",0)*100:.0f}%</span>
+          </div>
+        </div>"""
+    else:
+        best_html = ('<div class="card"><div class="card-label">BEST BOT</div>'
+                     '<div class="meta-row">No completed trades yet</div></div>')
+
+    # ── Latest position card ────────────────────────────────────────────────────
+    if last_trade_bot:
+        lt     = last_trade_bot.get("open_position", {})
+        lt_pnl = lt.get("pnl_usd", 0)
+        risk   = last_trade_bot.get("position_risk", "ok")
+        lt_html = f"""
+        <div class="card">
+          <div class="card-label">LATEST POSITION</div>
+          <div class="card-row">
+            <span class="med-num">{last_trade_bot.get("name", last_trade_bot.get("id","?"))}</span>
+            <span class="sub-num" style="color:{vc(lt_pnl)}">{fm(lt_pnl)}</span>
+          </div>
+          <div class="meta-row">
+            <span>{lt.get("type","?")} @ ${lt.get("strike",0):,.0f}</span>
+            <span>DTE {lt.get("dte","?")} &nbsp;·&nbsp; &Delta; {lt.get("current_delta",0):.3f}</span>
+          </div>
+          <div class="meta-row">
+            <span>Premium: ${lt.get("premium_collected",0):,.2f}</span>
+            <span>Risk: <b class="risk-{risk}">{risk.upper()}</b></span>
+          </div>
+        </div>"""
+    else:
+        lt_html = ('<div class="card"><div class="card-label">LATEST POSITION</div>'
+                   '<div class="meta-row">No open positions</div></div>')
+
+    btc_line = (f'<div class="hero-btc">BTC ${btc_spot:,.0f}</div>'
+                if btc_spot else "")
+    ts_short = updated_at[:10] if updated_at else "–"
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Bot Farm">
+  <meta name="theme-color" content="#0d1117">
+  <link rel="manifest" href="/widget.webmanifest">
+  <title>BSF Bot Farm</title>
+  <style>
+    *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+    :root{{
+      --bg:#0d1117;--surface:#161b22;--border:#21262d;
+      --text:#e6edf3;--muted:#8b949e;
+      --green:#00ff88;--red:#ff4455;--yellow:#f0c000;--accent:#58a6ff;
+    }}
+    body{{background:var(--bg);color:var(--text);
+          font-family:-apple-system,BlinkMacSystemFont,'SF Pro','Segoe UI',sans-serif;
+          min-height:100vh;padding:12px;max-width:430px;margin:0 auto}}
+    .header{{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}}
+    .farm-title{{font-size:13px;font-weight:700;letter-spacing:.12em;
+                 color:var(--muted);text-transform:uppercase}}
+    .badge{{display:inline-flex;align-items:center;gap:5px;font-size:11px;
+            font-weight:700;padding:3px 8px;border-radius:4px;letter-spacing:.08em}}
+    .badge.live{{background:rgba(0,255,136,.12);color:var(--green);
+                 border:1px solid rgba(0,255,136,.25)}}
+    .badge.stale{{background:rgba(240,192,0,.12);color:var(--yellow);
+                  border:1px solid rgba(240,192,0,.25)}}
+    .pulse-dot{{width:7px;height:7px;border-radius:50%;background:var(--green);
+                animation:pulse 1.5s ease-in-out infinite}}
+    @keyframes pulse{{0%,100%{{opacity:1;transform:scale(1)}}50%{{opacity:.4;transform:scale(.7)}}}}
+    .hero{{text-align:center;padding:16px 8px 14px;margin-bottom:12px;
+           background:var(--surface);border:1px solid var(--border);border-radius:12px}}
+    .hero-label{{font-size:11px;color:var(--muted);letter-spacing:.1em;
+                 text-transform:uppercase;margin-bottom:4px}}
+    .hero-equity{{font-size:40px;font-weight:800;letter-spacing:-.02em;
+                  line-height:1;margin-bottom:6px}}
+    .hero-pnl{{font-size:16px;font-weight:600}}
+    .hero-btc{{font-size:12px;color:var(--muted);margin-top:5px}}
+    .stat-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}}
+    .stat-chip{{background:var(--surface);border:1px solid var(--border);
+                border-radius:10px;padding:10px 12px;
+                display:flex;flex-direction:column;gap:2px}}
+    .stat-chip .num{{font-size:22px;font-weight:700;line-height:1}}
+    .stat-chip .lbl{{font-size:11px;color:var(--muted);text-transform:uppercase;
+                     letter-spacing:.08em}}
+    .card{{background:var(--surface);border:1px solid var(--border);
+           border-radius:12px;padding:12px 14px;margin-bottom:10px}}
+    .card-label{{font-size:10px;font-weight:700;letter-spacing:.14em;
+                 color:var(--muted);text-transform:uppercase;margin-bottom:6px}}
+    .card-row{{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}}
+    .big-num{{font-size:26px;font-weight:800;line-height:1}}
+    .med-num{{font-size:16px;font-weight:700;color:var(--text);
+              max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+    .sub-num{{font-size:16px;font-weight:700}}
+    .meta-row{{display:flex;justify-content:space-between;
+               font-size:12px;color:var(--muted);margin-top:3px}}
+    .pos-line{{font-size:12px;color:var(--muted);margin-top:5px;
+               padding-top:5px;border-top:1px solid var(--border)}}
+    .alert-bar{{background:rgba(255,68,85,.12);border:1px solid rgba(255,68,85,.3);
+                color:var(--red);border-radius:10px;padding:8px 12px;
+                font-size:13px;font-weight:600;margin-bottom:12px}}
+    .alert-bar.warn{{background:rgba(240,192,0,.12);border-color:rgba(240,192,0,.3);
+                     color:var(--yellow)}}
+    .risk-ok{{color:var(--green)}}.risk-caution{{color:var(--yellow)}}.risk-danger{{color:var(--red)}}
+    #refresh-btn{{display:block;width:100%;margin-top:10px;padding:10px;
+                  background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.2);
+                  border-radius:10px;color:var(--accent);font-size:13px;font-weight:600;
+                  cursor:pointer;letter-spacing:.05em}}
+    #refresh-btn:active{{opacity:.7}}
+    .footer{{text-align:center;font-size:11px;color:var(--muted);
+             margin-top:8px;padding-top:8px}}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="farm-title">🌿 BSF Bot Farm</span>
+    {badge}
+  </div>
+
+  {alert_html}
+
+  <div class="hero">
+    <div class="hero-label">Total Portfolio Equity</div>
+    <div class="hero-equity" style="color:{vc(total_pnl)}">${total_equity:,.0f}</div>
+    <div class="hero-pnl" style="color:{vc(total_pnl)}">{fm(total_pnl)} ({fp(total_pnl_pct)})</div>
+    {btc_line}
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-chip">
+      <span class="num" style="color:{'var(--green)' if running_count == len(bots) and bots else 'var(--red)'}">{running_count}/{len(bots)}</span>
+      <span class="lbl">Bots Running</span>
+    </div>
+    <div class="stat-chip">
+      <span class="num" style="color:{'var(--accent)' if open_pos_count else 'var(--muted)'}">{open_pos_count}</span>
+      <span class="lbl">Open Positions</span>
+    </div>
+    <div class="stat-chip">
+      <span class="num">{total_trades}</span>
+      <span class="lbl">Total Trades</span>
+    </div>
+    <div class="stat-chip">
+      <span class="num" style="color:{'var(--red)' if danger_bots else 'var(--green)'}">{len(danger_bots)}</span>
+      <span class="lbl">Active Alerts</span>
+    </div>
+  </div>
+
+  {rl_html}
+  {best_html}
+  {lt_html}
+
+  <button id="refresh-btn" onclick="location.reload()">&#8635; Refresh</button>
+
+  <div class="footer">
+    Updated {age_str} &nbsp;&middot;&nbsp; {ts_short}
+  </div>
+
+  <script>
+    if ('serviceWorker' in navigator) {{
+      navigator.serviceWorker.register('/widget-sw.js').catch(function(){{}});
+    }}
+    // Auto-refresh: reload the page every 30 seconds
+    setTimeout(function(){{ location.reload(); }}, 30000);
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/widget", include_in_schema=False)
+async def serve_widget():
+    """Phone home-screen dashboard — no authentication required."""
+    return HTMLResponse(
+        content=_render_widget_html(),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@app.get("/widget.webmanifest", include_in_schema=False)
+async def serve_widget_manifest():
+    """PWA web app manifest for the phone widget."""
+    manifest = {
+        "name": "BSF Bot Farm",
+        "short_name": "Bot Farm",
+        "description": "BTC Wheel Bot Farm — live status dashboard",
+        "start_url": "/widget",
+        "scope": "/widget",
+        "display": "standalone",
+        "background_color": "#0d1117",
+        "theme_color": "#0d1117",
+        "orientation": "portrait-primary",
+        "icons": [
+            {"src": "/widget-icon-192.png", "sizes": "192x192", "type": "image/png",
+             "purpose": "any maskable"},
+            {"src": "/widget-icon-512.png", "sizes": "512x512", "type": "image/png",
+             "purpose": "any maskable"},
+        ],
+    }
+    return Response(
+        content=json.dumps(manifest, indent=2),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/widget-sw.js", include_in_schema=False)
+async def serve_widget_sw():
+    """Minimal service worker — network-first, ensures offline fallback."""
+    sw = (
+        "const CACHE = 'bsf-widget-v1';\n"
+        "self.addEventListener('install', e => self.skipWaiting());\n"
+        "self.addEventListener('activate', e => clients.claim());\n"
+        "self.addEventListener('fetch', e => {\n"
+        "  if (!e.request.url.includes('/widget')) return;\n"
+        "  e.respondWith(\n"
+        "    fetch(e.request)\n"
+        "      .then(r => { const c = r.clone();\n"
+        "        caches.open(CACHE).then(cache => cache.put(e.request, c));\n"
+        "        return r; })\n"
+        "      .catch(() => caches.match(e.request))\n"
+        "  );\n"
+        "});\n"
+    )
+    return Response(content=sw, media_type="application/javascript",
+                    headers={"Cache-Control": "no-store"})
+
+
+# ── Daily ntfy.sh push summary ─────────────────────────────────────────────────
+
+def _build_daily_summary() -> str:
+    """Build a plain-English daily farm summary for ntfy.sh push."""
+    from datetime import timezone as _tz
+    try:
+        raw: dict = json.loads(_FARM_STATUS_PATH.read_text())
+    except Exception:
+        return "Bot Farm: could not read status.json"
+
+    bots: list = raw.get("bots", [])
+    if not bots:
+        return "Bot Farm: no bots found in status.json"
+
+    total_equity   = sum(b["metrics"]["current_equity"]  for b in bots if b.get("metrics"))
+    total_starting = sum(b["metrics"]["starting_equity"] for b in bots if b.get("metrics"))
+    total_pnl      = total_equity - total_starting
+    total_trades   = sum(b["metrics"].get("num_trades", 0) for b in bots if b.get("metrics"))
+    running_count  = sum(1 for b in bots if b.get("status") == "running")
+
+    with_trades = [b for b in bots if b.get("metrics", {}).get("num_trades", 0) > 0]
+    best_bot  = (max(with_trades, key=lambda b: b["metrics"]["total_return_pct"])
+                 if with_trades else None)
+    worst_bot = (min(with_trades, key=lambda b: b["metrics"]["total_return_pct"])
+                 if with_trades else None)
+
+    pnl_sign = "+" if total_pnl >= 0 else ""
+
+    # Annualised projection from the best-performing bot with most days running
+    ann_est = None
+    for b in sorted(bots, key=lambda x: x.get("days_running", 0), reverse=True):
+        days = b.get("days_running", 0)
+        roi  = b.get("metrics", {}).get("total_return_pct", 0)
+        if days > 0 and roi != 0:
+            ann_est = roi / days * 365 * total_starting / 100
+            break
+
+    lines = [
+        f"🌿 BSF Bot Farm — Daily Summary",
+        f"",
+        f"Portfolio: ${total_equity:,.0f}  ({pnl_sign}${total_pnl:,.0f})",
+        f"Bots running: {running_count}/{len(bots)}",
+        f"Total trades: {total_trades}",
+    ]
+    if best_bot:
+        bb_roi = best_bot["metrics"]["total_return_pct"]
+        lines.append(f"Best: {best_bot.get('name', best_bot.get('id','?'))} "
+                     f"({'+' if bb_roi >= 0 else ''}{bb_roi:.2f}%)")
+    if worst_bot and worst_bot != best_bot:
+        wb_roi = worst_bot["metrics"]["total_return_pct"]
+        lines.append(f"Worst: {worst_bot.get('name', worst_bot.get('id','?'))} "
+                     f"({'+' if wb_roi >= 0 else ''}{wb_roi:.2f}%)")
+    if ann_est is not None:
+        lines.append(f"On track for ~${ann_est:,.0f}/year")
+
+    return "\n".join(lines)
+
+
+@app.post("/notify/daily-summary", include_in_schema=False)
+async def push_daily_summary():
+    """Push a plain-English farm summary to ntfy.sh (bsf-voice-tasks topic)."""
+    import requests as _req
+    msg = _build_daily_summary()
+    try:
+        r = _req.post(
+            "https://ntfy.sh/bsf-voice-tasks",
+            data=msg.encode("utf-8"),
+            headers={
+                "Title": "Bot Farm Daily Summary",
+                "Priority": "default",
+                "Tags": "chart_with_upwards_trend",
+            },
+            timeout=10,
+        )
+        return {"ok": r.status_code < 300, "status": r.status_code, "message": msg}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"ntfy.sh unreachable: {exc}")
+
+
+@app.get("/notify/daily-summary", include_in_schema=False)
+async def preview_daily_summary():
+    """Preview what the daily summary message will say (GET, no push)."""
+    return {"message": _build_daily_summary()}
 
 
 # ── PWA static file serving ────────────────────────────────────────────────────
