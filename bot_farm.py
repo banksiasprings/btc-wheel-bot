@@ -332,6 +332,35 @@ class BotProcess:
             env["WHEEL_BOT_CONFIG"]   = str(self.bot_dir / "config.yaml")
         env["WHEEL_BOT_DATA_DIR"] = str(self.bot_dir / "data")
 
+        # ── Deribit testnet executor check ────────────────────────────────────
+        # When use_deribit_testnet: true is in the bot's config AND real creds
+        # exist in config/deribit_testnet.json, the subprocess's bot.py will
+        # automatically activate PaperExecutor (no extra env var needed — it
+        # reads the same WHEEL_BOT_CONFIG file).  Log so operators can confirm.
+        _testnet_active = False
+        try:
+            _bot_cfg_path = env.get("WHEEL_BOT_CONFIG", "")
+            if _bot_cfg_path and Path(_bot_cfg_path).exists():
+                _bot_raw = _read_yaml(Path(_bot_cfg_path))
+                if _bot_raw.get("use_deribit_testnet", False):
+                    _creds = BASE_DIR / "config" / "deribit_testnet.json"
+                    _testnet_active = _creds.exists()
+                    if _testnet_active:
+                        print(
+                            f"[farm] {self.bot_id}: use_deribit_testnet=true "
+                            f"AND credentials found — testnet executor ACTIVE",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[farm] {self.bot_id}: use_deribit_testnet=true "
+                            f"but config/deribit_testnet.json missing — "
+                            f"running local paper-only",
+                            flush=True,
+                        )
+        except Exception:
+            pass  # non-fatal — bot subprocess handles this itself
+
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(BASE_DIR),

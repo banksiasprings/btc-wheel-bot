@@ -118,6 +118,26 @@ class WheelBot:
                 )
         except Exception as _exc:
             logger.warning(f"RL strategy check failed ({_cfg_path}): {_exc}")
+
+        # ── Deribit testnet executor (optional, paper mode only) ──────────────
+        # Activated when use_deribit_testnet: true in the bot's config YAML AND
+        # config/deribit_testnet.json exists with real (non-placeholder) creds.
+        # Fail-safe: any error here is caught; executor simply stays None.
+        self._executor = None
+        try:
+            import yaml as _yaml2
+            _raw2 = _yaml2.safe_load(Path(_cfg_path).read_text()) or {}
+            if _raw2.get("use_deribit_testnet", False):
+                from deribit.paper_executor import load_executor_from_config
+                _creds_path  = Path(__file__).parent / "config" / "deribit_testnet.json"
+                _trades_log  = Path(_DATA_DIR).parent / "testnet_trades.jsonl"
+                self._executor = load_executor_from_config(_creds_path, _trades_log)
+        except Exception as _exec_exc:
+            logger.warning(
+                f"[testnet] Executor init failed (non-fatal): {_exec_exc}"
+            )
+            self._executor = None
+
         self._positions: list[Position] = []
         self._equity_usd: float = self._cfg.backtest.starting_equity
         self._equity_history: list[float] = []
@@ -1025,6 +1045,22 @@ class WheelBot:
                 f"| delta={signal.delta:.3f} | IV={signal.mark_iv:.1f}% "
                 f"| cycle={signal.cycle} | DTE={signal.dte}"
             )
+            # ── Testnet executor hook ──────────────────────────────────────────
+            # If PaperExecutor is active, forward the signal to Deribit testnet.
+            # Wrapped in try/except so API errors never crash the local loop.
+            if self._executor is not None:
+                try:
+                    _action = (
+                        "SELL_PUT" if signal.option_type == "put" else "SELL_CALL"
+                    )
+                    self._executor.execute({
+                        "action":    _action,
+                        "delta":     abs(signal.delta),
+                        "dte":       signal.dte,
+                        "contracts": contracts,
+                    })
+                except Exception as _tex:
+                    logger.warning(f"[testnet] executor error (non-fatal): {_tex}")
         else:
             if self._client.ws is None or self._tracker is None:
                 logger.error("WebSocket not connected — cannot place order")
@@ -1147,6 +1183,16 @@ class WheelBot:
                 f"[PAPER CLOSE] BUY BACK {pos.instrument_name} "
                 f"x{pos.contracts} @ {pos.current_price:.4f} BTC | {reason}"
             )
+            # ── Testnet executor hook ──────────────────────────────────────────
+            if self._executor is not None:
+                try:
+                    self._executor.execute({
+                        "action":     "CLOSE",
+                        "instrument": pos.instrument_name,
+                        "reason":     reason,
+                    })
+                except Exception as _tex:
+                    logger.warning(f"[testnet] executor close error (non-fatal): {_tex}")
         else:
             # LIVE_ONLY: buy to close via OrderTracker (confirmed fill)
             if self._client.ws is None or self._tracker is None:

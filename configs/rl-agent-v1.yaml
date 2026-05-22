@@ -10,6 +10,12 @@ _meta:
 strategy_type: rl_agent
 rl_model_path: rl_agent/checkpoints/best_model.zip
 
+# ── Deribit testnet order placement (off by default) ─────────────────────────
+# Set to true AND fill in config/deribit_testnet.json with real testnet creds
+# to have this bot submit real orders to test.deribit.com (fake BTC, real API).
+# See deribit/TESTNET_SETUP.md for step-by-step instructions.
+use_deribit_testnet: false
+
 # ── Standard config (required by load_config()) ───────────────────────────────
 backtest:
   approx_otm_offset: 0.0338

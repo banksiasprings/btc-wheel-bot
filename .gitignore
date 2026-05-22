@@ -18,6 +18,9 @@ env/
 .env.*
 !.env.example
 
+# Deribit API credentials — NEVER commit
+config/deribit_testnet.json
+
 # Kill switch (runtime file)
 KILL_SWITCH
 

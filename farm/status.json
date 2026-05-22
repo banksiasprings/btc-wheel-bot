@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-05-22T09:20:40.492135+00:00",
+  "updated_at": "2026-05-22T09:23:42.891779+00:00",
   "bots": [
     {
       "id": "atm-premium-hunter",
@@ -7,7 +7,7 @@
       "description": "Paper trading: atm_premium_hunter",
       "status": "running",
       "pid": 99114,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "atm_premium_hunter",
       "config_status": "paper",
@@ -48,13 +48,13 @@
         "strike": 77000.0,
         "expiry": "2026-05-25",
         "dte": 2,
-        "pnl_usd": -6.95,
-        "pnl_pct": -0.09,
-        "current_spot": 77180.88,
-        "current_delta": 0.4555,
-        "premium_collected": 47.85
+        "pnl_usd": -4.63,
+        "pnl_pct": -0.06,
+        "current_spot": 77248.9,
+        "current_delta": 0.4403,
+        "premium_collected": 47.89
       },
-      "position_risk": "danger",
+      "position_risk": "caution",
       "paused": false
     },
     {
@@ -63,7 +63,7 @@
       "description": "Paper trading: capital ROI V1",
       "status": "running",
       "pid": 99115,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "capital ROI V1",
       "config_status": "paper",
@@ -109,7 +109,7 @@
       "description": "Paper trading: deep_otm_safety",
       "status": "running",
       "pid": 99128,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "deep_otm_safety",
       "config_status": "paper",
@@ -150,11 +150,11 @@
         "strike": 75500.0,
         "expiry": "2026-05-25",
         "dte": 2,
-        "pnl_usd": -0.77,
-        "pnl_pct": -0.01,
-        "current_spot": 77178.62,
-        "current_delta": 0.1719,
-        "premium_collected": 15.44
+        "pnl_usd": 0.0,
+        "pnl_pct": 0.0,
+        "current_spot": 77242.42,
+        "current_delta": 0.162,
+        "premium_collected": 15.45
       },
       "position_risk": "caution",
       "paused": false
@@ -165,7 +165,7 @@
       "description": "Paper trading: long_dte_monthly",
       "status": "running",
       "pid": 99129,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "long_dte_monthly",
       "config_status": "paper",
@@ -206,11 +206,11 @@
         "strike": 74000.0,
         "expiry": "2026-06-12",
         "dte": 20,
-        "pnl_usd": -6.96,
-        "pnl_pct": -0.09,
-        "current_spot": 77298.73,
-        "current_delta": 0.2959,
-        "premium_collected": 124.45
+        "pnl_usd": -4.64,
+        "pnl_pct": -0.06,
+        "current_spot": 77362.68,
+        "current_delta": 0.2928,
+        "premium_collected": 124.55
       },
       "position_risk": "caution",
       "paused": false
@@ -221,7 +221,7 @@
       "description": "Paper trading: no_hedge_naked",
       "status": "running",
       "pid": 99139,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "no_hedge_naked",
       "config_status": "paper",
@@ -262,11 +262,11 @@
         "strike": 76500.0,
         "expiry": "2026-05-25",
         "dte": 2,
-        "pnl_usd": -4.63,
-        "pnl_pct": -0.06,
-        "current_spot": 77187.0,
-        "current_delta": 0.3402,
-        "premium_collected": 33.19
+        "pnl_usd": -3.09,
+        "pnl_pct": -0.04,
+        "current_spot": 77241.42,
+        "current_delta": 0.329,
+        "premium_collected": 33.21
       },
       "position_risk": "caution",
       "paused": false
@@ -277,8 +277,8 @@
       "description": "Paper trading: RL Agent V1",
       "status": "running",
       "pid": 99319,
-      "uptime_hours": 6.57,
-      "days_running": 0.27,
+      "uptime_hours": 6.62,
+      "days_running": 0.28,
       "config_name": "RL Agent V1",
       "config_status": "paper",
       "config_summary": {
@@ -318,11 +318,11 @@
         "strike": 74000.0,
         "expiry": "2026-05-29",
         "dte": 6,
-        "pnl_usd": -3.09,
-        "pnl_pct": -0.04,
-        "current_spot": 77197.76,
-        "current_delta": 0.1864,
-        "premium_collected": 36.28
+        "pnl_usd": -2.32,
+        "pnl_pct": -0.03,
+        "current_spot": 77248.67,
+        "current_delta": 0.1841,
+        "premium_collected": 36.31
       },
       "position_risk": "caution",
       "paused": false
@@ -333,7 +333,7 @@
       "description": "Paper trading: short_dte_theta",
       "status": "running",
       "pid": 99147,
-      "uptime_hours": 6.61,
+      "uptime_hours": 6.66,
       "days_running": 0.28,
       "config_name": "short_dte_theta",
       "config_status": "paper",
@@ -374,11 +374,11 @@
         "strike": 77000.0,
         "expiry": "2026-05-23",
         "dte": 0,
-        "pnl_usd": -3.09,
-        "pnl_pct": -0.04,
-        "current_spot": 77164.89,
-        "current_delta": 0.43,
-        "premium_collected": 26.24
+        "pnl_usd": -0.77,
+        "pnl_pct": -0.01,
+        "current_spot": 77219.0,
+        "current_delta": 0.4039,
+        "premium_collected": 26.25
       },
       "position_risk": "caution",
       "paused": false
@@ -389,7 +389,7 @@
       "description": "Paper trading: close_at_21dte",
       "status": "running",
       "pid": 62066,
-      "uptime_hours": 0.02,
+      "uptime_hours": 0.07,
       "days_running": 0.0,
       "config_name": "close_at_21dte",
       "config_status": "paper",
@@ -435,7 +435,7 @@
       "description": "Paper trading: high_iv_only",
       "status": "running",
       "pid": 62068,
-      "uptime_hours": 0.02,
+      "uptime_hours": 0.07,
       "days_running": 0.0,
       "config_name": "high_iv_only",
       "config_status": "paper",
@@ -481,7 +481,7 @@
       "description": "Paper trading: rl_agent_stress",
       "status": "running",
       "pid": 62069,
-      "uptime_hours": 0.02,
+      "uptime_hours": 0.07,
       "days_running": 0.0,
       "config_name": "rl_agent_stress",
       "config_status": "paper",
@@ -524,9 +524,9 @@
         "dte": 6,
         "pnl_usd": 0.0,
         "pnl_pct": 0.0,
-        "current_spot": 77196.91,
-        "current_delta": 0.1869,
-        "premium_collected": 78.74
+        "current_spot": 77249.04,
+        "current_delta": 0.1845,
+        "premium_collected": 78.79
       },
       "position_risk": "caution",
       "paused": false
