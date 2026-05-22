@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBotWhyNotTrading, getBtcPrice, pauseFarmBot, resumeFarmBot, FarmStatus, BotFarmEntry, BotLiveState, WhyNotTrading } from '../api'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
+import { getFarmStatus, startFarm, stopFarm, closeFarmBotPosition, getBotLiveState, getBotWhyNotTrading, getBtcPrice, pauseFarmBot, resumeFarmBot, getFarmEquity, getFarmBotTrades, FarmStatus, BotFarmEntry, BotLiveState, WhyNotTrading, FarmEquity, Trade } from '../api'
 import { loadBotOrder, saveBotOrder, applyBotOrder, sortBotsByMetric } from '../lib/botOrder'
 
 // ── Formatting helpers ─────────────────────────────────────────────────────────
@@ -91,6 +92,279 @@ function StatusDot({ status }: { status: string }) {
     status === 'error'   ? 'bg-red-500' :
     'bg-yellow-400'
   return <span className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${dot}`} />
+}
+
+// ── Smooth expandable wrapper ────────────────────────────────────────────────
+// Max-height + opacity transition. We use a generous max-height ceiling
+// because CSS can't transition to `auto`. Cards expand within ~250ms with
+// ease-out curves — feels like Apple's accordion animations.
+function ExpandablePanel({ open, children }: { open: boolean; children: React.ReactNode }) {
+  return (
+    <div
+      className="overflow-hidden transition-all duration-300 ease-out"
+      style={{
+        maxHeight: open ? '4000px' : '0px',
+        opacity:   open ? 1 : 0,
+      }}
+      aria-hidden={!open}
+    >
+      {children}
+    </div>
+  )
+}
+
+// ── Equity curve (shared between farm summary + per-bot card) ────────────────
+function EquityCurve({ data, height = 140, positive = true }: {
+  data: { ts: number; equity: number }[]
+  height?: number
+  positive?: boolean
+}) {
+  if (data.length < 2) {
+    return (
+      <div className="flex items-center justify-center text-xs text-slate-600" style={{ height }}>
+        Not enough trade history yet
+      </div>
+    )
+  }
+  const stroke = positive ? '#22c55e' : '#ef4444'
+  const fillId = positive ? 'gradPos' : 'gradNeg'
+  return (
+    <div style={{ width: '100%', height }}>
+      <ResponsiveContainer>
+        <AreaChart data={data} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%"   stopColor={stroke} stopOpacity={0.45} />
+              <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis
+            dataKey="ts"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={t => new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            tick={{ fontSize: 10, fill: '#64748b' }}
+            axisLine={{ stroke: '#1e293b' }}
+            tickLine={false}
+            minTickGap={36}
+          />
+          <YAxis
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={v => v >= 1000 ? `$${(v / 1000).toFixed(0)}k` : `$${v.toFixed(0)}`}
+            tick={{ fontSize: 10, fill: '#64748b' }}
+            axisLine={false}
+            tickLine={false}
+            width={44}
+          />
+          <Tooltip
+            contentStyle={{
+              background: '#0f172a',
+              border:     '1px solid #334155',
+              borderRadius: 8,
+              fontSize: 11,
+              color: '#e2e8f0',
+            }}
+            labelFormatter={t => new Date((t as number) * 1000).toLocaleString()}
+            formatter={(v: number) => [`$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`, 'Equity']}
+          />
+          <Area type="monotone" dataKey="equity" stroke={stroke} strokeWidth={2} fill={`url(#${fillId})`} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ── Farm summary card (expandable) ───────────────────────────────────────────
+function FarmSummaryCard({ botCount, runningBots, readyBots, bots }: {
+  botCount: number
+  runningBots: number
+  readyBots: number
+  bots: BotFarmEntry[]
+}) {
+  const [expanded, setExpanded]     = useState(false)
+  const [equity, setEquity]         = useState<FarmEquity | null>(null)
+  const [loading, setLoading]       = useState(false)
+  const [loadError, setLoadError]   = useState(false)
+
+  // Fast headline numbers from /farm/status (already loaded) so the collapsed
+  // card has no loading state. /farm/equity fetched lazily when expanded.
+  const totalCurrent = bots.reduce((s, b) => s + (b.metrics.current_equity ?? 0), 0)
+  const totalStarting = bots.reduce((s, b) => s + (b.metrics.starting_equity ?? 0), 0)
+  const totalPnl = totalCurrent - totalStarting
+  const totalReturnPct = totalStarting > 0 ? (totalPnl / totalStarting) * 100 : 0
+  const pnlPositive = totalPnl >= 0
+
+  useEffect(() => {
+    if (!expanded || equity || loading) return
+    setLoading(true)
+    setLoadError(false)
+    getFarmEquity()
+      .then(setEquity)
+      .catch(() => setLoadError(true))
+      .finally(() => setLoading(false))
+  }, [expanded, equity, loading])
+
+  return (
+    <div className="bg-card rounded-2xl border border-border overflow-hidden">
+      <button
+        className="w-full px-4 py-3 text-left"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-slate-400 font-medium uppercase tracking-wide">Farm Equity</p>
+          <span className="text-slate-500 text-xs">{expanded ? '▲' : '▼'}</span>
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="text-2xl font-bold text-white font-mono tracking-tight">
+              {fmt$(totalCurrent)}
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">{botCount} bot{botCount !== 1 ? 's' : ''} · {runningBots} running · {readyBots} ready</p>
+          </div>
+          <div className="text-right">
+            <p className={`text-sm font-bold font-mono ${pnlPositive ? 'text-green-400' : 'text-red-400'}`}>
+              {pnlPositive ? '+' : ''}{fmt$(totalPnl)}
+            </p>
+            <p className={`text-xs font-mono ${pnlPositive ? 'text-green-500' : 'text-red-500'}`}>
+              {fmtPct(totalReturnPct, 2)}
+            </p>
+          </div>
+        </div>
+      </button>
+
+      <ExpandablePanel open={expanded}>
+        <div className="px-4 pb-4 pt-1 border-t border-border/40">
+          {loading && (
+            <p className="text-xs text-slate-500 py-6 text-center">Loading equity curve…</p>
+          )}
+          {loadError && (
+            <p className="text-xs text-red-400 py-6 text-center">Couldn't load /farm/equity</p>
+          )}
+          {equity && (
+            <>
+              <p className="text-xs text-slate-500 uppercase tracking-wide mt-3 mb-2">Equity Curve</p>
+              <EquityCurve
+                data={equity.points.map(p => ({ ts: p.ts, equity: p.equity }))}
+                height={160}
+                positive={equity.total_pnl_usd >= 0}
+              />
+              <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border/30">
+                <div className="text-center">
+                  <p className="text-xs text-slate-500">Started</p>
+                  <p className="text-xs font-mono text-white">{fmt$(equity.total_starting)}</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-slate-500">P&L</p>
+                  <p className={`text-xs font-mono font-bold ${equity.total_pnl_usd >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {equity.total_pnl_usd >= 0 ? '+' : ''}{fmt$(equity.total_pnl_usd)}
+                  </p>
+                </div>
+                <div className="text-center">
+                  <p className="text-xs text-slate-500">Return</p>
+                  <p className={`text-xs font-mono font-bold ${equity.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {fmtPct(equity.total_return_pct, 2)}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </ExpandablePanel>
+    </div>
+  )
+}
+
+// ── Per-bot trade history + equity (lazy-loaded on expand) ───────────────────
+function BotEquitySection({ botId }: { botId: string }) {
+  const [trades, setTrades]   = useState<Trade[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr]         = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setErr(false)
+    getFarmBotTrades(botId)
+      .then(t => { if (!cancelled) setTrades(t) })
+      .catch(() => { if (!cancelled) setErr(true) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [botId])
+
+  if (loading) return <p className="text-xs text-slate-500 py-2">Loading equity history…</p>
+  if (err || !trades) return null
+  if (trades.length === 0) {
+    return (
+      <p className="text-xs text-slate-600 py-2">No closed trades yet — equity chart appears once trades close.</p>
+    )
+  }
+
+  // Build equity series from closed trades. Each trade contributes one point
+  // at its close timestamp with equity_after; prepend equity_before of the
+  // first trade as a t-0 anchor so the chart starts at the bot's starting
+  // capital instead of jumping straight to the first close.
+  const seriesPoints = trades
+    .map(t => ({
+      ts: new Date(t.timestamp).getTime() / 1000,
+      equity: t.equity_after,
+    }))
+    .filter(p => Number.isFinite(p.ts) && Number.isFinite(p.equity))
+    .sort((a, b) => a.ts - b.ts)
+
+  const firstTrade = trades.find(t => Number.isFinite(t.equity_before))
+  if (firstTrade) {
+    const firstTs = new Date(firstTrade.timestamp).getTime() / 1000
+    seriesPoints.unshift({ ts: firstTs - 1, equity: firstTrade.equity_before })
+  }
+
+  // Recent trades — last 5, newest first
+  const recent = [...trades].sort((a, b) =>
+    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  ).slice(0, 5)
+
+  const lastEquity = seriesPoints.length > 0 ? seriesPoints[seriesPoints.length - 1].equity : 0
+  const firstEquity = seriesPoints.length > 0 ? seriesPoints[0].equity : 0
+  const pnlPositive = lastEquity >= firstEquity
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Equity Curve</p>
+        <EquityCurve data={seriesPoints} height={140} positive={pnlPositive} />
+      </div>
+
+      <div>
+        <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">
+          Trade History <span className="text-slate-600 normal-case">· last 5</span>
+        </p>
+        <div className="space-y-1">
+          {recent.map((t, i) => {
+            const positive = (t.pnl_usd ?? 0) >= 0
+            const date = new Date(t.timestamp)
+            const dateStr = isNaN(date.getTime())
+              ? '—'
+              : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            return (
+              <div key={i} className="flex items-center justify-between bg-navy rounded-lg px-2.5 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs text-white font-mono truncate">
+                    {(t.option_type ?? 'OPT').toUpperCase()} @ ${(t.strike ?? 0).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {dateStr} · {t.reason ?? '—'}
+                  </p>
+                </div>
+                <span className={`text-xs font-semibold ml-2 flex-shrink-0 ${positive ? 'text-green-400' : 'text-red-400'}`}>
+                  {positive ? '+' : ''}{fmt$(t.pnl_usd ?? 0)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── Bot card ─────────────────────────────────────────────────────────────────
@@ -254,9 +528,16 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
         {bot.pid && <span>PID {bot.pid}</span>}
       </div>
 
-      {/* Expandable section */}
-      {expanded && (
+      {/* Expandable section — animated max-height + opacity */}
+      <ExpandablePanel open={expanded}>
         <div className="border-t border-border/40 px-4 py-3 space-y-1.5">
+
+          {/* ── Equity curve + recent trade history ── */}
+          {expanded && (
+            <div className="mb-3">
+              <BotEquitySection botId={bot.id} />
+            </div>
+          )}
 
           {/* ── Why not trading? (idle bots only) ── */}
           {isIdle && whyNot && !whyNot.ready && (
@@ -561,7 +842,7 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
             </div>
           )}
 
-          {/* Promote to Live — only shown when 8/8 ready; manage via Pipeline */}
+          {/* Promote to Live — only shown when 8/8 ready */}
           {r.ready && (
             <div className="mt-3 pt-2 border-t border-green-900/50 space-y-2">
               {promoteMsg && (
@@ -572,12 +853,12 @@ function BotCard({ bot, onRefresh: _onRefresh, isDragging, onExpandAttempt, onCl
                 }`}>{promoteMsg}</p>
               )}
               <p className="text-xs text-green-400 text-center font-medium">
-                ✅ Ready for live — go to Pipeline → Step 4 to promote
+                ✅ Ready for live — promote via the Trading tab
               </p>
             </div>
           )}
         </div>
-      )}
+      </ExpandablePanel>
 
     </div>
   )
@@ -1115,6 +1396,16 @@ export default function Farm({ onNavigate }: { onNavigate?: (tab: string) => voi
         )}
       </div>
 
+      {/* Farm-wide equity summary — tap to expand for AreaChart */}
+      {bots.length > 0 && (
+        <FarmSummaryCard
+          botCount={bots.length}
+          runningBots={runningBots}
+          readyBots={readyBots}
+          bots={bots}
+        />
+      )}
+
       {/* Leaderboard — directly below farm control */}
       {bots.length > 1 && <Leaderboard bots={bots} />}
 
@@ -1178,13 +1469,11 @@ export default function Farm({ onNavigate }: { onNavigate?: (tab: string) => voi
       {onNavigate && (
         <div className="mt-6 mb-2">
           <p className="text-xs text-slate-500 uppercase tracking-wider mb-2 px-1">Full Dashboard</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {[
               { tab: 'trading',     icon: '📊', label: 'Trading' },
               { tab: 'performance', icon: '📈', label: 'Performance' },
-              { tab: 'pipeline',    icon: '🗺', label: 'Pipeline' },
-              { tab: 'backtest',    icon: '🧪', label: 'Backtest' },
-              { tab: 'forecasts',   icon: '🔮', label: 'Forecasts' },
+              { tab: 'rl',          icon: '🧠', label: 'RL Training' },
               { tab: 'settings',    icon: '⚙',  label: 'Settings' },
             ].map(({ tab, icon, label }) => (
               <button

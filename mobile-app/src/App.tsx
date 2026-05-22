@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react'
 import SetupScreen from './components/SetupScreen'
 import Farm from './components/Farm'
-import Pipeline from './components/Pipeline'
 import Performance from './components/Performance'
-import Forecasts from './components/Forecasts'
 import Backtest from './components/Backtest'
 import Settings from './components/Settings'
 import TradingView from './components/TradingView'
@@ -11,15 +9,13 @@ import { hasCredentials } from './credentials'
 
 type Tab =
   | 'farm' | 'trading' | 'performance'
-  | 'pipeline' | 'backtest' | 'forecasts' | 'settings'
+  | 'rl' | 'settings'
 
 const TAB_ICONS: Record<Tab, string> = {
   farm:        '🤖',
   trading:     '📊',
   performance: '📈',
-  pipeline:    '🗺',
-  backtest:    '🧪',
-  forecasts:   '🔮',
+  rl:          '🧠',
   settings:    '⚙',
 }
 
@@ -27,17 +23,12 @@ const TAB_LABELS: Record<Tab, string> = {
   farm:        'Farm',
   trading:     'Trading',
   performance: 'Performance',
-  pipeline:    'Pipeline',
-  backtest:    'Backtest',
-  forecasts:   'Forecasts',
+  rl:          'RL Training',
   settings:    'Settings',
 }
 
-// Backtest + Forecasts close out cross-surface parity:
-// every dashboard tab now has a mobile counterpart.
 const TABS: Tab[] = [
-  'farm', 'trading', 'performance',
-  'pipeline', 'backtest', 'forecasts', 'settings',
+  'farm', 'trading', 'performance', 'rl', 'settings',
 ]
 
 export default function App() {
@@ -58,9 +49,7 @@ export default function App() {
         {activeTab === 'farm'        && <Farm onNavigate={(tab) => setActiveTab(tab as Tab)} />}
         {activeTab === 'trading'     && <TradingView />}
         {activeTab === 'performance' && <Performance />}
-        {activeTab === 'pipeline'    && <Pipeline />}
-        {activeTab === 'backtest'    && <Backtest />}
-        {activeTab === 'forecasts'   && <Forecasts />}
+        {activeTab === 'rl'          && <Backtest />}
         {activeTab === 'settings'    && <Settings />}
       </main>
 

@@ -616,6 +616,69 @@ export const stopFarm = () =>
 export const getFarmBotTrades = (botId: string) =>
   request<Trade[]>(`/farm/bot/${botId}/trades`)
 
+// ── Farm-wide equity time-series ─────────────────────────────────────────────
+// Aggregated across all bots — used by the Farm summary expandable chart.
+export interface FarmEquityPoint {
+  ts: number          // Unix seconds
+  equity: number      // USD across all bots at that moment
+}
+
+export interface FarmEquity {
+  points:           FarmEquityPoint[]
+  total_starting:   number
+  total_current:    number
+  total_pnl_usd:    number
+  total_return_pct: number
+  bot_count?:       number
+}
+
+export const getFarmEquity = () => request<FarmEquity>('/farm/equity')
+
+// ── RL Training (V1) ─────────────────────────────────────────────────────────
+// The Python training loop writes `rl_agent/training_v2.log` and checkpoint
+// .zip files under `rl_agent/checkpoints/`. Backend endpoints may not exist
+// yet — callers should treat 404s as "feature not wired up" and fall back to
+// /farm/status (the RL bot writes its progress there).
+
+export interface RLTrainingStatus {
+  running:           boolean
+  total_timesteps?:  number       // current step counter
+  target_timesteps?: number       // total goal (e.g. 2_000_000)
+  explained_variance?: number
+  mean_reward?:      number
+  fps?:              number
+  iterations?:       number
+  time_elapsed_sec?: number
+  last_checkpoint?:  string | null
+  updated_at?:       string | null
+}
+
+export interface RLCheckpoint {
+  name:        string         // e.g. "model_1500000_steps.zip"
+  size_bytes:  number
+  modified_at: string         // ISO timestamp
+  timesteps?:  number | null  // parsed from filename when possible
+  is_best?:    boolean
+  is_final?:   boolean
+}
+
+export interface RLCheckpointList {
+  checkpoints: RLCheckpoint[]
+  count:       number
+}
+
+export const getRLTrainingStatus = () =>
+  request<RLTrainingStatus>('/rl/training/status')
+
+export const getRLCheckpoints = () =>
+  request<RLCheckpointList>('/rl/checkpoints')
+
+export const retrainRL = (timesteps?: number) =>
+  request<{ ok: boolean; pid?: number; message?: string }>('/rl/retrain', {
+    method: 'POST',
+    body: JSON.stringify({ timesteps }),
+  })
+
 // ── Named config API ──────────────────────────────────────────────────────────
 
 export type ConfigSource = 'evolved' | 'manual' | 'promoted' | 'duplicated'
