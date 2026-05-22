@@ -206,6 +206,8 @@ class Position:
         dte_at_open: int,
         day_opened: int,
         iv_at_open: float,
+        n_contracts: int = 1,
+        contract_size: float = 0.1,
     ):
         self.pos_type = pos_type
         self.strike = strike
@@ -213,17 +215,21 @@ class Position:
         self.dte_at_open = dte_at_open
         self.day_opened = day_opened
         self.iv_at_open = iv_at_open
+        self.n_contracts = n_contracts
+        self.contract_size = contract_size
         self.unrealised_pnl: float = 0.0
         self.dte_remaining: int = dte_at_open
 
     def update(self, current_day: int, S: float, r: float, sigma: float) -> float:
-        """Recompute unrealised P&L and DTE. Returns current mark price."""
+        """Recompute unrealised P&L and DTE. Returns current total mark value."""
         self.dte_remaining = max(0, self.dte_at_open - (current_day - self.day_opened))
         T = self.dte_remaining / 365.0
         if self.pos_type == 1:  # put
-            mark = bs_put_price(S, self.strike, T, r, sigma)
+            unit_price = bs_put_price(S, self.strike, T, r, sigma)
         else:  # call
-            mark = bs_call_price(S, self.strike, T, r, sigma)
+            unit_price = bs_call_price(S, self.strike, T, r, sigma)
+        # Total mark value in USD (unit_price $/BTC × BTC/contract × contracts)
+        mark = unit_price * self.n_contracts * self.contract_size
         # We sold the option, so unrealised P&L = premium received - current mark
         self.unrealised_pnl = self.premium_received - mark
         return mark
@@ -235,11 +241,11 @@ class Position:
             return abs(bs_call_delta(S, self.strike, T_years, r, sigma))
 
     def intrinsic_loss(self, S: float) -> float:
-        """Intrinsic value at expiry (cost if assigned)."""
+        """Total intrinsic loss in USD at expiry (scaled by contracts × contract_size)."""
         if self.pos_type == 1:
-            return max(self.strike - S, 0.0)
+            return max(self.strike - S, 0.0) * self.n_contracts * self.contract_size
         else:
-            return max(S - self.strike, 0.0)
+            return max(S - self.strike, 0.0) * self.n_contracts * self.contract_size
 
 
 # ---------------------------------------------------------------------------
@@ -326,8 +332,10 @@ class BTCOptionsEnv(gym.Env):
         self._equity = starting_equity
         self._peak_equity = starting_equity
         self._position: Optional[Position] = None
+        self._contracts = 0          # vol-adjusted contracts for current position
         self._days_since_trade = 0
         self._realised_pnl_total = 0.0
+        self._prev_mtm_equity = starting_equity  # for step-by-step reward computation
 
     # ------------------------------------------------------------------
     # Gym interface
@@ -341,8 +349,10 @@ class BTCOptionsEnv(gym.Env):
         self._equity = self.starting_equity
         self._peak_equity = self.starting_equity
         self._position = None
+        self._contracts = 0
         self._days_since_trade = 0
         self._realised_pnl_total = 0.0
+        self._prev_mtm_equity = self.starting_equity
         return self._obs(), {}
 
     def step(self, action: int):
@@ -361,11 +371,12 @@ class BTCOptionsEnv(gym.Env):
             self._position.update(day, S, self.RISK_FREE, sigma)
             # Check expiry
             if self._position.dte_remaining <= 0:
-                loss = self._position.intrinsic_loss(S)
+                loss = self._position.intrinsic_loss(S)  # already scaled by contracts
                 realised = self._position.premium_received - loss - self.TRANSACTION_COST
                 self._equity += realised
                 self._realised_pnl_total += realised
                 self._position = None
+                self._contracts = 0
                 self._days_since_trade = 0
 
         # ------ Execute action ------
@@ -377,17 +388,20 @@ class BTCOptionsEnv(gym.Env):
                 target_delta = 0.20 if action == self.ACTION_SELL_PUT_020 else 0.25
                 T = self.OPTION_DTE / 365.0
                 K = find_put_strike_for_delta(S, target_delta, T, self.RISK_FREE, sigma)
-                premium = bs_put_price(S, K, T, self.RISK_FREE, sigma)
-                # Size: allocate up to max_equity_per_leg worth of collateral
-                collateral_per_contract = K * self.CONTRACT_SIZE
-                max_contracts = max(
-                    1,
-                    int((self._equity * self.max_equity_per_leg) / collateral_per_contract),
-                )
-                n_contracts = max_contracts
-                total_premium = premium * n_contracts * self.CONTRACT_SIZE * 100  # crude scaling
-                total_premium = min(total_premium, self._equity * 0.03)  # cap at 3% equity
-                total_premium = max(total_premium, 10.0)  # floor
+                unit_premium = bs_put_price(S, K, T, self.RISK_FREE, sigma)
+
+                # Vol-adjusted position sizing: risk 2% of equity on a 10% adverse move
+                target_risk = 0.02 * self._equity
+                cost_per_contract_10pct = max(K * self.CONTRACT_SIZE * 0.10, 1.0)
+                base_contracts = max(1, int(target_risk / cost_per_contract_10pct))
+                # IV boost: rich premium environment allows up to 1.5× sizing
+                if ivr > 0.70:
+                    base_contracts = int(base_contracts * 1.5)
+                n_contracts = min(base_contracts, 5)  # hard cap at 5 contracts
+                self._contracts = n_contracts
+
+                total_premium = unit_premium * n_contracts * self.CONTRACT_SIZE
+                total_premium = max(total_premium, 1.0)  # floor
                 cost = self.TRANSACTION_COST * n_contracts
                 self._position = Position(
                     pos_type=1,
@@ -396,19 +410,30 @@ class BTCOptionsEnv(gym.Env):
                     dte_at_open=self.OPTION_DTE,
                     day_opened=day,
                     iv_at_open=sigma,
+                    n_contracts=n_contracts,
+                    contract_size=self.CONTRACT_SIZE,
                 )
                 self._days_since_trade = 0
-                info["trade"] = f"SELL_PUT K={K:.0f} delta={target_delta}"
+                info["trade"] = f"SELL_PUT K={K:.0f} delta={target_delta} contracts={n_contracts}"
 
         elif action == self.ACTION_SELL_CALL_020:
             if self._position is None:
                 T = self.OPTION_DTE / 365.0
                 K = find_call_strike_for_delta(S, 0.20, T, self.RISK_FREE, sigma)
-                premium = bs_call_price(S, K, T, self.RISK_FREE, sigma)
-                total_premium = premium * self.CONTRACT_SIZE * 100
-                total_premium = min(total_premium, self._equity * 0.03)
-                total_premium = max(total_premium, 10.0)
-                cost = self.TRANSACTION_COST
+                unit_premium = bs_call_price(S, K, T, self.RISK_FREE, sigma)
+
+                # Vol-adjusted position sizing: risk 2% of equity on a 10% adverse move
+                target_risk = 0.02 * self._equity
+                cost_per_contract_10pct = max(K * self.CONTRACT_SIZE * 0.10, 1.0)
+                base_contracts = max(1, int(target_risk / cost_per_contract_10pct))
+                if ivr > 0.70:
+                    base_contracts = int(base_contracts * 1.5)
+                n_contracts = min(base_contracts, 5)
+                self._contracts = n_contracts
+
+                total_premium = unit_premium * n_contracts * self.CONTRACT_SIZE
+                total_premium = max(total_premium, 1.0)
+                cost = self.TRANSACTION_COST * n_contracts
                 self._position = Position(
                     pos_type=2,
                     strike=K,
@@ -416,50 +441,77 @@ class BTCOptionsEnv(gym.Env):
                     dte_at_open=self.OPTION_DTE,
                     day_opened=day,
                     iv_at_open=sigma,
+                    n_contracts=n_contracts,
+                    contract_size=self.CONTRACT_SIZE,
                 )
                 self._days_since_trade = 0
-                info["trade"] = f"SELL_CALL K={K:.0f} delta=0.20"
+                info["trade"] = f"SELL_CALL K={K:.0f} delta=0.20 contracts={n_contracts}"
 
         elif action == self.ACTION_CLOSE:
             if self._position is not None:
                 T = max(self._position.dte_remaining / 365.0, 1e-6)
                 if self._position.pos_type == 1:
-                    cost_to_close = bs_put_price(S, self._position.strike, T, self.RISK_FREE, sigma)
+                    unit_price = bs_put_price(S, self._position.strike, T, self.RISK_FREE, sigma)
                 else:
-                    cost_to_close = bs_call_price(S, self._position.strike, T, self.RISK_FREE, sigma)
+                    unit_price = bs_call_price(S, self._position.strike, T, self.RISK_FREE, sigma)
+                # Total cost to buy back: same scaling as when we sold
+                cost_to_close = unit_price * self._position.n_contracts * self.CONTRACT_SIZE
                 realised = (
                     self._position.premium_received
-                    - cost_to_close * self.CONTRACT_SIZE * 100
+                    - cost_to_close
                     - self.TRANSACTION_COST
                 )
                 self._equity += realised
                 self._realised_pnl_total += realised
                 self._position = None
+                self._contracts = 0
                 self._days_since_trade = 0
                 info["trade"] = "CLOSE"
 
-        # ------ Compute daily P&L for reward ------
-        # Mark-to-market equity
-        mtm_equity = self._equity
+        # ------ Compute capital-efficiency reward ------
+        # Current mark-to-market equity
+        curr_mtm = self._equity
         if self._position is not None:
-            mtm_equity += self._position.unrealised_pnl
+            curr_mtm += self._position.unrealised_pnl
 
-        daily_pnl_frac = (mtm_equity - self.starting_equity) / self.starting_equity
-        if mtm_equity > self._peak_equity:
-            self._peak_equity = mtm_equity
-        drawdown = (self._peak_equity - mtm_equity) / max(self._peak_equity, 1.0)
+        # Step P&L = theta decay + delta move (naturally captures both)
+        premium_earned_this_step = curr_mtm - self._prev_mtm_equity
+        self._prev_mtm_equity = curr_mtm
+
+        if curr_mtm > self._peak_equity:
+            self._peak_equity = curr_mtm
+        drawdown = (self._peak_equity - curr_mtm) / max(self._peak_equity, 1.0)
 
         no_position = self._position is None
         self._days_since_trade += 1
 
-        # Reward function
-        # Base: fractional daily P&L
-        base = daily_pnl_frac / max(self.n_days, 1)  # normalised per-step
-        # Drawdown penalty (squared beyond 5%)
-        dd_penalty = 0.001 * max(0.0, drawdown - self.MAX_DRAWDOWN_PENALTY_THRESHOLD) ** 2
-        # Idle penalty (small, encourages finding trades)
-        idle_penalty = 0.0001 if no_position else 0.0
-        reward = float(base - dd_penalty - idle_penalty)
+        # --- Capital-efficiency base reward ---
+        if self._position is not None:
+            # Margin required for current position (20% of notional)
+            capital_at_risk = max(
+                self._position.strike * self._contracts * self.CONTRACT_SIZE * 0.20,
+                1.0,
+            )
+            # Annualise: weekly-options cycle converts daily return to APY
+            annualisation_factor = 252.0 / self.OPTION_DTE  # 36 for 7-day options
+            efficiency = (premium_earned_this_step / capital_at_risk) * annualisation_factor
+            # Squash to [-1, +1] — typical good day ≈ 0.03–0.08, bad day ≈ -0.5
+            reward_base = float(np.tanh(efficiency / 5.0))
+
+            # Capital overuse penalty: discourage tying up >30% of equity as margin
+            capital_usage_frac = capital_at_risk / max(curr_mtm, 1.0)
+            capital_overuse_penalty = 0.0001 * max(0.0, capital_usage_frac - 0.30) ** 2
+        else:
+            reward_base = 0.0
+            capital_overuse_penalty = 0.0
+
+        # Drawdown penalty (reduced weight vs original — capital efficiency drives learning)
+        dd_penalty = 0.0005 * max(0.0, drawdown - self.MAX_DRAWDOWN_PENALTY_THRESHOLD) ** 2
+
+        # Idle penalty (very small — don't panic-trade to avoid idle)
+        idle_penalty = 0.00005 if no_position else 0.0
+
+        reward = float(reward_base - dd_penalty - idle_penalty - capital_overuse_penalty)
 
         # Advance day
         self._day += 1
@@ -468,10 +520,11 @@ class BTCOptionsEnv(gym.Env):
             # Final settlement
             if self._position is not None:
                 S_final = self.prices[-1]
-                loss = self._position.intrinsic_loss(S_final)
+                loss = self._position.intrinsic_loss(S_final)  # already scaled
                 realised = self._position.premium_received - loss - self.TRANSACTION_COST
                 self._equity += realised
                 self._position = None
+                self._contracts = 0
 
         info.update(
             {

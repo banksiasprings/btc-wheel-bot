@@ -1,9 +1,13 @@
+# HYPOTHESIS: Evolved champion baseline — best human-parameterised wheel bot (242% backtest
+# return, Sharpe 2.44). Kept as the primary benchmark to measure the RL agent against.
+# iv_rank_threshold=0.701 means it only sells in genuinely elevated IV regimes.
+# Serves as the "what a well-tuned human config achieves" reference point.
 _meta:
   created_at: '2026-04-25T07:07:13.953199+00:00'
   fitness: 26.073
   goal: null
   name: capital ROI V1
-  notes: "Evolved \u2014 goal: capital_roi"
+  notes: 'Evolved — goal: capital_roi. Kept as evolved-champion baseline for RL comparison.'
   sharpe: 2.44
   source: evolved
   status: paper

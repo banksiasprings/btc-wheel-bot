@@ -1,26 +1,21 @@
 _meta:
-  created_at: '2026-05-01T18:13:23.124371+00:00'
-  drawdown: 0.0
-  fitness: 0.6725
-  generations: 8
-  goal: small_bot_specialist
-  name: small_bot_specialist_20260501_1813
-  notes: '[paper-promoted 2026-05-02 from evolve auto-run]'
-  seeded_from: null
-  sharpe: -5.78
-  source: evolved
+  created_at: '2026-05-22T00:00:00+00:00'
+  fitness: null
+  goal: null
+  name: rl_agent_stress
+  notes: 'Same PPO model as rl-agent-v1 but with relaxed risk guardrails. Hypothesis:
+    tight limits in v1 may be masking model capability — or masking fragility. This
+    exposes which.'
+  source: manual
   status: paper
-  total_return: 1.43
-  version: 1
-  win_rate: 100.0
 backtest:
-  approx_otm_offset: 0.0821
+  approx_otm_offset: 0.0338
   lookback_months: 12
-  premium_fraction_of_spot: 0.0122
+  premium_fraction_of_spot: 0.0289
   results_csv: data/backtest_trades.csv
   results_image: backtest_results.png
   risk_free_rate: 0.04
-  starting_equity: 65904.3892
+  starting_equity: 100000.0
   transaction_cost: 0.5
 deribit:
   currency: BTC
@@ -35,7 +30,7 @@ execution:
   poll_interval: 60
   slippage_tolerance: 0.005
 hedge:
-  enabled: true
+  enabled: false
   rebalance_threshold: 0.05
 logging:
   level: INFO
@@ -45,24 +40,25 @@ logging:
   trade_log_csv: data/trades.csv
 overseer:
   check_interval_minutes: 60
-  drawdown_warning_threshold: 0.05
+  drawdown_warning_threshold: 0.1
   enabled: true
-  iv_spike_warning_threshold: 0.85
+  iv_spike_warning_threshold: 0.95
 risk:
   kill_switch_file: KILL_SWITCH
-  max_adverse_delta: 0.4
-  max_daily_drawdown: 0.1
-  max_loss_per_leg: 0.02
+  max_adverse_delta: 0.8
+  max_daily_drawdown: 0.2
+  max_loss_per_leg: 0.1
   roll_enabled: false
-  roll_min_dte: 3
+  roll_min_dte: 2
+rl_model_path: rl_agent/checkpoints/best_model.zip
 sizing:
-  collateral_buffer: 1.0
+  collateral_buffer: 1.5
   contract_size_btc: 0.1
   ladder_enabled: false
-  ladder_legs: 2
-  max_equity_per_leg: 0.1095
+  ladder_legs: 1
+  max_equity_per_leg: 0.15
   max_open_legs: 1
-  min_free_equity_fraction: 0.1958
+  min_free_equity_fraction: 0.1
   regime_ma_days: 50
   use_regime_filter: false
 strategy:
@@ -71,10 +67,11 @@ strategy:
   - weekly
   - monthly
   initial_cycle: put
-  iv_dynamic_delta: true
-  iv_rank_threshold: 0.5341
-  liquidity_top_n: 30
-  max_dte: 27
-  min_dte: 3
-  target_delta_max: 0.3205
-  target_delta_min: 0.1376
+  iv_dynamic_delta: false
+  iv_rank_threshold: 0.0
+  liquidity_top_n: 50
+  max_dte: 14
+  min_dte: 4
+  target_delta_max: 0.45
+  target_delta_min: 0.15
+strategy_type: rl_agent
