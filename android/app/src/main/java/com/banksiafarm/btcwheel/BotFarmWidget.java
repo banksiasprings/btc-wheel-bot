@@ -4,7 +4,7 @@ import android.app.PendingIntent;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProvider;
 import android.content.Context;
-import android.content.Intent;
+import android.content.Intent;import android.net.Uri;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.widget.RemoteViews;
@@ -112,13 +112,12 @@ public class BotFarmWidget extends AppWidgetProvider {
 
         RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget_bot_farm);
 
-        // Tap-to-refresh PendingIntent
-        Intent refreshIntent = new Intent(ctx, BotFarmWidget.class);
-        refreshIntent.setAction(ACTION_REFRESH);
-        PendingIntent pi = PendingIntent.getBroadcast(
-            ctx, 0, refreshIntent,
+        // Tap-to-open-dashboard PendingIntent
+        Intent launchIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("https://bot.banksiaspringsfarm.com"));
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        PendingIntent launchPi = PendingIntent.getActivity(ctx, 0, launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        rv.setOnClickPendingIntent(R.id.widget_root, pi);
+        rv.setOnClickPendingIntent(R.id.widget_root, launchPi);
 
         // Status dot + label
         if (offline) {

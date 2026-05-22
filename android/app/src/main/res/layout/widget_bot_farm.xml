@@ -52,8 +52,8 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- ── Divider ── -->
-    <View
+    <!-- ── Divider (View not allowed in RemoteViews on API 31+; use LinearLayout) ── -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="4dp"
@@ -155,8 +155,8 @@
 
     </LinearLayout>
 
-    <!-- ── Divider ── -->
-    <View
+    <!-- ── Divider (View not allowed in RemoteViews on API 31+; use LinearLayout) ── -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="1dp"
         android:layout_marginTop="4dp"
