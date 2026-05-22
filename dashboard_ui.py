@@ -275,6 +275,46 @@ st.markdown(f"""
     div[data-testid="stMetric"] {{ background: {C_CARD}; border-radius: 8px; padding: 10px 14px; border-top: 3px solid {C_BLUE}; }}
     .stButton button {{ border-radius: 8px; font-weight: 600; }}
     h1, h2, h3 {{ color: {C_TEXT}; }}
+
+    /* ── Mobile responsiveness ── */
+    @media (max-width: 768px) {{
+        .block-container {{ padding: 0.5rem 0.5rem !important; }}
+        .metric-value {{ font-size: 15px !important; }}
+        .metric-label {{ font-size: 10px !important; }}
+        /* Let column blocks wrap on narrow screens */
+        [data-testid="stHorizontalBlock"] > div {{ min-width: 120px; flex-shrink: 1; }}
+    }}
+
+    /* ── Hero overview card ── */
+    .overview-hero {{
+        text-align: center;
+        background: {C_CARD};
+        border-radius: 20px;
+        padding: 32px 24px;
+        margin-bottom: 24px;
+    }}
+    .hero-pnl {{
+        font-size: 52px;
+        font-weight: 900;
+        line-height: 1;
+        margin: 12px 0 8px 0;
+    }}
+    .hero-sub {{
+        font-size: 14px;
+        color: {C_MUTED};
+        margin-top: 6px;
+    }}
+
+    /* ── Trade row (plain-English history) ── */
+    .trade-row {{
+        display: flex;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid {C_GRID};
+        gap: 12px;
+    }}
+    .trade-desc {{ flex: 1; min-width: 0; color: {C_TEXT}; font-size: 13px; }}
+    .trade-pnl  {{ font-size: 15px; font-weight: 700; white-space: nowrap; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -372,22 +412,29 @@ def _dark_layout(title: str = "", height: int = 350) -> dict:
     )
 
 
-def make_equity_chart(dates, equity, start_eq: float, title="Equity Curve") -> go.Figure:
+def make_equity_chart(dates, equity, start_eq: float, title="Portfolio Value Over Time") -> go.Figure:
     eq   = np.array(equity, dtype=float)
+    pnl  = eq - start_eq
     fig  = go.Figure()
+    # Colour the fill green when above start, red when below
+    line_col = C_GREEN if (len(eq) > 0 and eq[-1] >= start_eq) else C_RED
+    fill_col = "rgba(63,185,80,0.08)" if line_col == C_GREEN else "rgba(248,81,73,0.08)"
     fig.add_trace(go.Scatter(
-        x=dates, y=eq, name="Equity",
-        line=dict(color=C_BLUE, width=2),
+        x=dates, y=eq, name="Portfolio value ($)",
+        line=dict(color=line_col, width=2),
         fill="tozeroy",
-        fillcolor=f"rgba(88,166,255,0.07)",
+        fillcolor=fill_col,
+        hovertemplate="<b>%{x}</b><br>Value: $%{y:,.2f}<extra></extra>",
     ))
     fig.add_hline(
         y=start_eq,
         line=dict(color=C_MUTED, dash="dash", width=1),
-        annotation_text=f"Start ${start_eq:,.0f}",
+        annotation_text=f"Starting capital ${start_eq:,.0f}",
         annotation_font=dict(color=C_MUTED, size=9),
     )
-    fig.update_layout(**_dark_layout(title, height=300))
+    layout = _dark_layout(title, height=300)
+    layout["yaxis"] = {**layout.get("yaxis", {}), "tickprefix": "$", "tickformat": ",.0f"}
+    fig.update_layout(**layout)
     return fig
 
 
@@ -522,6 +569,423 @@ def render_sidebar() -> None:
             f"Streamlit {st.__version__}</small>",
             unsafe_allow_html=True,
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OVERVIEW HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _plain_trade_desc(row: dict, bot_name: str = "") -> tuple[str, float]:
+    """Return (plain-English description, pnl_usd) for a closed trade row."""
+    opt_type = str(row.get("option_type", "")).lower()
+    strike   = row.get("strike")
+    pnl      = float(row.get("pnl_usd") or 0)
+    ts_raw   = str(row.get("timestamp", ""))
+    ts       = ts_raw[:10] if ts_raw else ""
+    reason   = str(row.get("reason", "")).lower()
+
+    if "put" in opt_type:
+        action = "sold a put option"
+    elif "call" in opt_type:
+        action = "sold a call option"
+    else:
+        action = "closed a position"
+
+    if "expire" in reason:
+        close_how = "expired worthless ✅"
+    elif "assign" in reason:
+        close_how = "assigned — bought BTC at strike"
+    elif "stop" in reason or "loss" in reason:
+        close_how = "stopped out early"
+    elif "roll" in reason:
+        close_how = "rolled to new expiry"
+    elif reason.strip():
+        close_how = reason.strip()
+    else:
+        close_how = "closed"
+
+    strike_str = f" at <strong style='color:#c9d1d9'>${float(strike):,.0f}</strong>" if strike else ""
+    prefix     = f"<strong>{bot_name}</strong> " if bot_name else ""
+    desc       = f"{prefix}{action}{strike_str} — {close_how} &nbsp; <span style='color:#8b949e;font-size:11px;'>{ts}</span>"
+    return desc, pnl
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 0 — OVERVIEW  (non-technical landing page)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def tab_overview() -> None:
+    """🏠 Overview — answers: Is the bot making money? How much? Is it safe?"""
+
+    ocol1, ocol2 = st.columns([1, 5])
+    with ocol1:
+        if st.button("🔄 Refresh", key="overview_refresh"):
+            st.rerun()
+    with ocol2:
+        st.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')}")
+
+    # ── Load farm data ─────────────────────────────────────────────────────────
+    farm_dir  = BOT_DIR / "farm"
+    stat_path = farm_dir / "status.json"
+    bots_meta: list[dict] = []
+    farm_ts   = ""
+    if stat_path.exists():
+        try:
+            fs        = json.loads(stat_path.read_text())
+            bots_meta = fs.get("bots", []) or []
+            farm_ts   = fs.get("updated_at", "")[:19].replace("T", " ")
+        except Exception:
+            pass
+
+    # ── Fleet aggregate numbers ────────────────────────────────────────────────
+    fleet_eq    = sum(float((b.get("metrics") or {}).get("current_equity")  or 0) for b in bots_meta)
+    fleet_start = sum(float((b.get("metrics") or {}).get("starting_equity") or 0) for b in bots_meta)
+    n_running   = sum(1 for b in bots_meta if b.get("status") == "running")
+    fleet_pnl   = fleet_eq - fleet_start
+    fleet_pct   = (fleet_pnl / fleet_start * 100.0) if fleet_start > 0 else 0.0
+    fleet_unreal = sum(
+        float((b.get("open_position") or {}).get("pnl_usd") or 0)
+        for b in bots_meta if b.get("has_open_position")
+    )
+    paused = kill_switch_active()
+
+    # ── HERO CARD ─────────────────────────────────────────────────────────────
+    pnl_col  = C_GREEN if fleet_pnl >= 0 else C_RED
+    p_sign   = "+" if fleet_pnl >= 0 else ""
+    sys_icon = "⏸" if paused else ("🟢" if n_running > 0 else "🔴")
+    sys_lbl  = (
+        "TRADING PAUSED" if paused
+        else (f"{n_running} BOT{'S' if n_running != 1 else ''} RUNNING" if n_running > 0
+              else "NO BOTS RUNNING")
+    )
+    sys_col  = C_AMBER if paused else (C_GREEN if n_running > 0 else C_RED)
+
+    unrealised_line = (
+        f' · <span style="color:{C_AMBER}">+${fleet_unreal:,.2f} unrealised</span>'
+        if abs(fleet_unreal) > 0.01 else ""
+    )
+    st.markdown(
+        f'<div style="background:{C_CARD};border:2px solid {pnl_col}33;'
+        f'border-radius:20px;padding:32px 36px;margin-bottom:24px;text-align:center;">'
+        f'<div style="color:{sys_col};font-size:12px;font-weight:700;'
+        f'letter-spacing:1px;text-transform:uppercase;margin-bottom:14px;">'
+        f'{sys_icon} {sys_lbl}</div>'
+        f'<div class="hero-pnl" style="color:{pnl_col};">{p_sign}${abs(fleet_pnl):,.2f}</div>'
+        f'<div style="font-size:20px;font-weight:600;color:{pnl_col};margin-bottom:10px;">'
+        f'{p_sign}{fleet_pct:.2f}% total return</div>'
+        f'<div class="hero-sub">'
+        f'Started with <strong style="color:{C_TEXT}">${fleet_start:,.0f}</strong> · '
+        f'Current value <strong style="color:{C_TEXT}">${fleet_eq:,.0f}</strong>'
+        f'{unrealised_line}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    if not bots_meta:
+        st.warning("No bots running. Start the farm with `python3.11 bot_farm.py` to see live data here.")
+        _render_no_farm_explainer()
+        return
+
+    # ── Bot status cards (2-up grid, mobile-friendly) ─────────────────────────
+    st.markdown("### 🤖 Bot Status")
+
+    def _bot_sort(b):
+        m = b.get("metrics") or {}
+        return (0 if b.get("status") == "running" else 1,
+                -float(m.get("total_return_pct") or 0))
+
+    sorted_bots = sorted(bots_meta, key=_bot_sort)
+    n_cols  = min(2, max(1, len(sorted_bots)))
+    bt_grid = st.columns(n_cols)
+
+    for idx, b in enumerate(sorted_bots):
+        col      = bt_grid[idx % n_cols]
+        m        = b.get("metrics") or {}
+        cs       = b.get("config_summary") or {}
+        pos      = b.get("open_position") or {}
+        status   = b.get("status", "unknown")
+        bot_name = b.get("name", b.get("id", "Bot"))
+        is_rl    = "rl" in b.get("id", "").lower()
+        cur_eq   = float(m.get("current_equity")  or 0)
+        start_eq = float(m.get("starting_equity") or cur_eq or 1)
+        roi_pct  = (cur_eq - start_eq) / start_eq * 100.0 if start_eq > 0 else 0.0
+        n_trades = int(m.get("num_trades") or 0)
+        win_rate = float(m.get("win_rate") or 0) * 100.0
+
+        if status == "running" and not b.get("paused"):
+            dot, slabel = C_GREEN, "🟢 Running"
+        elif b.get("paused"):
+            dot, slabel = C_AMBER, "⏸ Paused"
+        else:
+            dot, slabel = C_RED, "🔴 Stopped"
+
+        roi_col   = C_GREEN if roi_pct >= 0 else C_RED
+        roi_sign  = "+" if roi_pct >= 0 else ""
+        bot_type  = "🧠 RL Agent" if is_rl else "📐 Rule-based bot"
+        iv_thr    = cs.get("iv_rank_threshold")
+        strat_txt = (
+            f"Trades when market volatility ≥ {int(float(iv_thr)*100)}%"
+            if iv_thr else ""
+        )
+
+        # Open position line — plain English
+        pos_html = ""
+        if b.get("has_open_position") and pos.get("strike"):
+            p_type  = str(pos.get("type", "")).replace("short_put", "put").replace("short_call", "call")
+            p_stk   = float(pos.get("strike") or 0)
+            p_exp   = str(pos.get("expiry", ""))[:10]
+            p_dte   = pos.get("dte")
+            p_pnl   = float(pos.get("pnl_usd") or 0)
+            p_spot  = float(pos.get("current_spot") or 0)
+            p_col   = C_GREEN if p_pnl >= 0 else C_RED
+            p_word  = "earning" if p_pnl >= 0 else "currently down"
+            buf_pct = (
+                (p_spot - p_stk) / p_spot * 100.0
+                if (p_spot > 0 and "put" in p_type) else 0.0
+            )
+            buf_col = (
+                C_GREEN if buf_pct > 10
+                else (C_AMBER if buf_pct > 3 else (C_RED if buf_pct >= 0 else C_MUTED))
+            )
+            dte_str = (f"{p_dte} day{'s' if p_dte != 1 else ''} left"
+                       if p_dte is not None else (f"expires {p_exp}" if p_exp else ""))
+            pos_html = (
+                f'<div style="background:{C_BG};border-radius:8px;padding:10px 12px;margin-top:10px;">'
+                f'<div style="color:{C_MUTED};font-size:10px;text-transform:uppercase;'
+                f'letter-spacing:0.4px;">Open position</div>'
+                f'<div style="color:{C_TEXT};font-size:13px;margin-top:3px;">'
+                f'Sold {p_type} option · strike ${p_stk:,.0f}'
+                + (f' · {dte_str}' if dte_str else "")
+                + f'</div>'
+                + (
+                    f'<div style="color:{buf_col};font-size:12px;margin-top:2px;">'
+                    f'BTC is {buf_pct:.1f}% above the strike — safe buffer ✅</div>'
+                    if buf_pct > 0 else ""
+                )
+                + f'<div style="color:{p_col};font-size:13px;font-weight:600;margin-top:4px;">'
+                f'{p_word.title()} ${abs(p_pnl):,.2f} so far</div>'
+                f'</div>'
+            )
+        elif status == "running":
+            pos_html = (
+                f'<div style="color:{C_MUTED};font-size:12px;margin-top:8px;">'
+                f'Watching market · no open position</div>'
+            )
+
+        trades_line = (
+            f'{n_trades} trade{"s" if n_trades != 1 else ""} closed · {win_rate:.0f}% win rate'
+            if n_trades > 0 else "No closed trades yet"
+        )
+        inner = (
+            f'<div style="display:flex;justify-content:space-between;'
+            f'align-items:flex-start;gap:8px;">'
+            f'<div style="flex:1;min-width:0;">'
+            f'<div style="color:{C_MUTED};font-size:10px;text-transform:uppercase;'
+            f'letter-spacing:0.4px;">{bot_type}</div>'
+            f'<div style="color:{C_TEXT};font-size:16px;font-weight:700;margin:2px 0 4px 0;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{bot_name}</div>'
+            f'<div style="color:{dot};font-size:12px;font-weight:500;">{slabel}</div>'
+            f'</div>'
+            f'<div style="text-align:right;flex-shrink:0;">'
+            f'<div style="color:{roi_col};font-size:28px;font-weight:900;line-height:1;">'
+            f'{roi_sign}{roi_pct:.2f}%</div>'
+            f'<div style="color:{C_MUTED};font-size:11px;">'
+            f'on ${start_eq/1000:.0f}k starting capital</div>'
+            f'</div></div>'
+            + (f'<div style="color:{C_MUTED};font-size:11px;margin-top:6px;">{strat_txt}</div>'
+               if strat_txt else "")
+            + f'<div style="color:{C_MUTED};font-size:11px;margin-top:4px;">{trades_line}</div>'
+            + pos_html
+        )
+        with col:
+            st.markdown(card_div(inner, border_hex=dot + "55"), unsafe_allow_html=True)
+
+    st.markdown("")
+
+    # ── RL Agent V1 callout (if model exists or running in farm) ──────────────
+    rl_model = BOT_DIR / "rl_agent" / "checkpoints" / "best_model.zip"
+    rl_bot   = next((b for b in bots_meta if "rl" in b.get("id", "").lower()), None)
+
+    if rl_model.exists() or rl_bot:
+        st.divider()
+        st.markdown("### 🧠 RL Agent V1 — Machine Learning Bot")
+        rl_c1, rl_c2 = st.columns(2)
+
+        with rl_c1:
+            m_col  = C_GREEN if rl_model.exists() else C_AMBER
+            m_text = "Trained model loaded (800 000 steps)" if rl_model.exists() else "Model not found"
+            st.markdown(
+                card_div(
+                    f'<div style="color:{C_MUTED};font-size:10px;text-transform:uppercase;'
+                    f'letter-spacing:0.4px;margin-bottom:6px;">About this model</div>'
+                    f'<div style="color:{m_col};font-size:14px;font-weight:600;margin-bottom:10px;">'
+                    f'✅ {m_text}</div>'
+                    f'<div style="color:{C_TEXT};font-size:13px;line-height:1.6;">'
+                    f'Instead of fixed rules, this bot learns by trial-and-error — '
+                    f'like training a trader through 800,000 simulated sessions. '
+                    f'It decides <em>when</em> to sell, <em>what strike</em> to pick, '
+                    f'and <em>when to exit</em> — purely from experience.</div>',
+                    border_hex=m_col + "44",
+                ),
+                unsafe_allow_html=True,
+            )
+
+        with rl_c2:
+            if rl_bot:
+                rl_m     = rl_bot.get("metrics") or {}
+                rl_eq    = float(rl_m.get("current_equity")  or 0)
+                rl_strt  = float(rl_m.get("starting_equity") or rl_eq or 1)
+                rl_roi   = (rl_eq - rl_strt) / rl_strt * 100.0 if rl_strt > 0 else 0.0
+                rl_trd   = int(rl_m.get("num_trades") or 0)
+                rl_wr    = float(rl_m.get("win_rate") or 0) * 100.0
+                rl_run   = rl_bot.get("status") == "running"
+                rl_col_  = C_GREEN if rl_run else C_AMBER
+                rl_lbl   = "🟢 Live in farm" if rl_run else "⚪ Not running"
+                perf_html = (
+                    f'<div style="color:{C_GREEN if rl_roi >= 0 else C_RED};'
+                    f'font-size:28px;font-weight:900;">'
+                    f'{"+" if rl_roi >= 0 else ""}{rl_roi:.2f}%</div>'
+                    f'<div style="color:{C_MUTED};font-size:12px;margin-top:2px;">'
+                    f'{rl_trd} trades · {rl_wr:.0f}% win rate</div>'
+                    if rl_trd > 0
+                    else f'<div style="color:{C_MUTED};font-size:13px;">'
+                         f'No closed trades yet — watching market</div>'
+                )
+                inner_rl = (
+                    f'<div style="color:{C_MUTED};font-size:10px;text-transform:uppercase;'
+                    f'letter-spacing:0.4px;margin-bottom:6px;">Live performance</div>'
+                    f'<div style="color:{rl_col_};font-size:14px;font-weight:600;'
+                    f'margin-bottom:10px;">{rl_lbl}</div>'
+                    + perf_html
+                )
+            else:
+                inner_rl = (
+                    f'<div style="color:{C_MUTED};font-size:10px;text-transform:uppercase;'
+                    f'letter-spacing:0.4px;margin-bottom:6px;">Live performance</div>'
+                    f'<div style="color:{C_AMBER};font-size:14px;font-weight:600;'
+                    f'margin-bottom:10px;">⚪ Not deployed in farm yet</div>'
+                    f'<div style="color:{C_MUTED};font-size:13px;line-height:1.5;">'
+                    f'Add <code>rl-agent-v1</code> to <code>farm_config.yaml</code> to run '
+                    f'the RL agent alongside the rule-based bots.</div>'
+                )
+            st.markdown(card_div(inner_rl), unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── What's open right now (plain English) ─────────────────────────────────
+    open_bots = [b for b in bots_meta if b.get("has_open_position")]
+    if open_bots:
+        st.markdown("### 🎯 What's Active Right Now")
+        for b in open_bots:
+            pos      = b.get("open_position") or {}
+            bot_name = b.get("name", b.get("id", "Bot"))
+            p_type   = str(pos.get("type", "")).replace("short_put", "put").replace("short_call", "call")
+            p_stk    = pos.get("strike")
+            p_exp    = str(pos.get("expiry", ""))[:10]
+            p_dte    = pos.get("dte")
+            p_pnl    = float(pos.get("pnl_usd") or 0)
+            p_spot   = float(pos.get("current_spot") or 0)
+            if not p_stk:
+                continue
+            p_stk    = float(p_stk)
+            p_col    = C_GREEN if p_pnl >= 0 else C_RED
+            buf_pct  = (
+                (p_spot - p_stk) / p_spot * 100.0
+                if (p_spot > 0 and p_type == "put") else 0.0
+            )
+            buf_col  = C_GREEN if buf_pct > 10 else (C_AMBER if buf_pct > 3 else C_RED)
+            dte_str  = (
+                f"{p_dte} day{'s' if p_dte != 1 else ''} until expiry"
+                if p_dte is not None else (f"expires {p_exp}" if p_exp else "")
+            )
+            st.markdown(
+                card_div(
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'flex-wrap:wrap;gap:12px;">'
+                    f'<div style="flex:1;min-width:180px;">'
+                    f'<div style="color:{C_MUTED};font-size:11px;text-transform:uppercase;'
+                    f'letter-spacing:0.5px;margin-bottom:4px;">{bot_name}</div>'
+                    f'<div style="color:{C_TEXT};font-size:15px;font-weight:600;">'
+                    f'Sold a {p_type} option · strike ${p_stk:,.0f}</div>'
+                    + (f'<div style="color:{C_MUTED};font-size:13px;margin-top:4px;">'
+                       f'{dte_str}</div>' if dte_str else "")
+                    + (f'<div style="color:{buf_col};font-size:13px;margin-top:4px;">'
+                       f'BTC at ${p_spot:,.0f} — {buf_pct:.1f}% above strike</div>'
+                       if buf_pct > 0 else "")
+                    + f'</div>'
+                    f'<div style="text-align:right;">'
+                    f'<div style="color:{p_col};font-size:24px;font-weight:700;">'
+                    f'{"+" if p_pnl >= 0 else ""}${p_pnl:,.2f}</div>'
+                    f'<div style="color:{C_MUTED};font-size:11px;">unrealised P&L</div>'
+                    f'</div></div>'
+                ),
+                unsafe_allow_html=True,
+            )
+        st.divider()
+
+    # ── Recent completed trades (plain English) ────────────────────────────────
+    st.markdown("### 📜 Recent Completed Trades")
+    all_trades: list[dict] = []
+    import csv as _csv_ov
+    for b in bots_meta:
+        slug     = b.get("id", "")
+        bot_name = b.get("name", slug)
+        tcsv     = farm_dir / slug / "data" / "trades.csv"
+        if tcsv.exists():
+            try:
+                with open(tcsv, newline="") as _f2:
+                    for _r in _csv_ov.DictReader(_f2):
+                        _r["_bot"] = bot_name
+                        all_trades.append(_r)
+            except Exception:
+                pass
+    # fallback — single-bot trades
+    if not all_trades:
+        td = read_trades()
+        if not td.empty:
+            for _, _r in td.tail(15).iterrows():
+                all_trades.append(dict(_r) | {"_bot": "Bot"})
+
+    if all_trades:
+        all_trades.sort(key=lambda r: str(r.get("timestamp", "")), reverse=True)
+        for row in all_trades[:12]:
+            desc, pnl = _plain_trade_desc(row, row.get("_bot", "Bot"))
+            pnl_col2  = C_GREEN if pnl >= 0 else C_RED
+            pnl_word  = "Earned" if pnl >= 0 else "Lost"
+            st.markdown(
+                f'<div class="trade-row">'
+                f'<div class="trade-desc">{desc}</div>'
+                f'<div class="trade-pnl" style="color:{pnl_col2};">'
+                f'{pnl_word} ${abs(pnl):,.2f}</div></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        st.info(
+            "📭 No completed trades yet. "
+            "The bots are watching the market and will open positions when conditions are right."
+        )
+
+    if farm_ts:
+        st.caption(f"📡 Farm status last updated: {farm_ts} UTC · refreshes every 60 seconds")
+
+
+def _render_no_farm_explainer() -> None:
+    """Show a friendly explainer when no farm is running."""
+    st.markdown(
+        f'<div style="background:{C_CARD};border:1px solid {C_GRID};border-radius:12px;'
+        f'padding:24px 28px;margin-top:20px;">'
+        f'<h4 style="color:{C_BLUE};margin:0 0 12px 0;">What is this?</h4>'
+        f'<p style="color:{C_TEXT};font-size:14px;line-height:1.7;margin:0 0 10px 0;">'
+        f'This is a <strong>BTC Options Wheel Bot</strong> — it automatically sells put and call '
+        f'options on Bitcoin to earn premium income, targeting 20-50% annual returns.</p>'
+        f'<p style="color:{C_TEXT};font-size:14px;line-height:1.7;margin:0 0 10px 0;">'
+        f'The <strong>Fleet</strong> tab manages multiple bots running different strategies in '
+        f'parallel. The best-performing strategies get more capital over time.</p>'
+        f'<p style="color:{C_MUTED};font-size:13px;line-height:1.6;margin:0;">'
+        f'Run <code>python3.11 bot_farm.py</code> to start the farm, '
+        f'or use the <strong>Paper Trading</strong> tab to start a single bot.</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -718,11 +1182,12 @@ def tab_backtest() -> None:
         c1, c2, c3, c4, c5 = st.columns(5)
         ret_col  = "green" if results.total_return_pct >= 0 else "red"
         dd_col   = "red"   if results.max_drawdown_pct < -10 else "amber"
-        with c1: metric_card("Total Return",   f"{results.total_return_pct:+.1f}%",  ret_col)
-        with c2: metric_card("Ann. Return",    f"{results.annualized_return_pct:+.1f}%", ret_col)
-        with c3: metric_card("Sharpe",         f"{results.sharpe_ratio:.2f}")
-        with c4: metric_card("Max Drawdown",   f"{results.max_drawdown_pct:.1f}%",   dd_col)
-        with c5: metric_card("Win Rate",        f"{results.win_rate_pct:.0f}%",
+        with c1: metric_card("Total Return",         f"{results.total_return_pct:+.1f}%",  ret_col)
+        with c2: metric_card("Yearly Return",        f"{results.annualized_return_pct:+.1f}%", ret_col)
+        with c3: metric_card("Risk Score (Sharpe)",  f"{results.sharpe_ratio:.2f}",
+                              "green" if results.sharpe_ratio >= 1 else ("amber" if results.sharpe_ratio >= 0 else "red"))
+        with c4: metric_card("Worst Loss Period",    f"{results.max_drawdown_pct:.1f}%",   dd_col)
+        with c5: metric_card("Win Rate",             f"{results.win_rate_pct:.0f}%",
                               "green" if results.win_rate_pct >= 60 else "amber")
 
         st.markdown("")
@@ -953,18 +1418,18 @@ def tab_paper() -> None:
                     else:
                         fill_col, head_col = C_AMBER, C_AMBER
                     if iv_rank >= 0.85:
-                        cap = "Extreme volatility — bot caps to one leg."
+                        cap = "Extreme market volatility — bot limits position size."
                     elif iv_rank >= iv_thresh:
-                        cap = "Above threshold — bot will open new positions when conditions align."
+                        cap = "Volatility is high enough — bot will open new positions when all conditions align."
                     else:
-                        cap = f"Below threshold — waiting for IV to rise above {thr_pct:.0f}% before entering."
+                        cap = f"Market volatility too low to trade — waiting for it to rise above {thr_pct:.0f}% before entering."
                     st.markdown(
                         f'<div style="background:{C_CARD};border:1px solid {C_GRID};'
                         f'border-radius:12px;padding:12px 18px;margin-bottom:10px;">'
                         f'<div style="display:flex;justify-content:space-between;'
                         f'align-items:baseline;margin-bottom:6px;">'
                         f'<div><span style="color:{C_MUTED};font-size:11px;'
-                        f'text-transform:uppercase;letter-spacing:0.5px;">IV Rank</span> '
+                        f'text-transform:uppercase;letter-spacing:0.5px;">Market Volatility</span> '
                         f'<span style="color:{head_col};font-weight:700;font-size:16px;'
                         f'margin-left:8px;">{live_pct:.0f}%</span></div>'
                         f'<div style="color:{C_MUTED};font-size:11px;">'
@@ -1035,7 +1500,7 @@ def tab_paper() -> None:
                 with lc5:
                     iv_str = f"{iv_rank:.0%}" if iv_rank is not None else "—"
                     iv_col = "amber" if iv_rank is not None and iv_rank > 0.85 else ""
-                    metric_card("IV Rank", iv_str, iv_col)
+                    metric_card("Market Volatility", iv_str, iv_col)
                 with lc6:
                     metric_card("Mode", mode_str)
 
@@ -1251,11 +1716,35 @@ def tab_paper() -> None:
             st.plotly_chart(make_pnl_bar(trades_df), use_container_width=True)
 
         st.markdown("#### Recent Trades")
-        show = ["timestamp", "instrument", "option_type", "strike",
-                "pnl_usd", "equity_before", "equity_after",
-                "dte_at_close", "reason", "mode"]
-        show = [c for c in show if c in trades_df.columns]
-        st.dataframe(trades_df[show].tail(20), use_container_width=True, height=260)
+
+        # Plain-English trade descriptions
+        for _, row in trades_df.tail(15).iloc[::-1].iterrows():
+            desc, pnl = _plain_trade_desc(dict(row))
+            pnl_col2 = C_GREEN if pnl >= 0 else C_RED
+            pnl_word = "Earned" if pnl >= 0 else "Lost"
+            st.markdown(
+                f'<div class="trade-row">'
+                f'<div class="trade-desc">{desc}</div>'
+                f'<div class="trade-pnl" style="color:{pnl_col2};">'
+                f'{pnl_word} ${abs(pnl):,.2f}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+        # Expandable raw data table for power users
+        with st.expander("📋 Raw trade data", expanded=False):
+            show = ["timestamp", "instrument", "option_type", "strike",
+                    "pnl_usd", "equity_before", "equity_after",
+                    "dte_at_close", "reason", "mode"]
+            show = [c for c in show if c in trades_df.columns]
+            rename_map = {
+                "timestamp": "Date", "instrument": "Instrument",
+                "option_type": "Type", "strike": "Strike ($)",
+                "pnl_usd": "P&L ($)", "equity_before": "Equity Before ($)",
+                "equity_after": "Equity After ($)", "dte_at_close": "Days to Expiry",
+                "reason": "Closed Because", "mode": "Mode",
+            }
+            disp_df = trades_df[show].tail(20).rename(columns=rename_map)
+            st.dataframe(disp_df, use_container_width=True, height=260)
 
         ov_df = read_overseer_log()
         if not ov_df.empty:
@@ -2265,10 +2754,10 @@ def tab_fleet() -> None:
     with c1:
         metric_card("Bots Running", f"{n_running} / {len(bots_meta)}")
     with c2:
-        metric_card("Fleet Equity", f"${fleet_equity:,.0f}",
+        metric_card("Total Portfolio Value", f"${fleet_equity:,.0f}",
                     "green" if fleet_equity >= fleet_start else "red")
     with c3:
-        metric_card("Fleet ROI", f"{pnl_pct:+.2f}%",
+        metric_card("Total Return", f"{pnl_pct:+.2f}%",
                     "green" if pnl_pct >= 0 else "red")
     with c4:
         metric_card("Open Positions", f"{n_open}")
@@ -2313,20 +2802,23 @@ def tab_fleet() -> None:
     df_view["Bot"] = df_view["Bot"].apply(lambda s: s if len(s) <= 22 else s[:19] + "…")
 
     df_pretty = pd.DataFrame({
-        "Bot":      df_view["Bot"],
-        "ROI":      df_view["ROI %"].apply(lambda v: f"{v:+.2f}%"),
-        "Equity":   df_view["Equity $"].apply(lambda v: f"${v:,.0f}"),
-        "Open Pos": df_view["Open Pos"].apply(
-            lambda s: s if (s == "—" or len(s) <= 18) else s[:15] + "…"
+        "Bot":             df_view["Bot"],
+        "Return":          df_view["ROI %"].apply(lambda v: f"{v:+.2f}%"),
+        "Portfolio ($)":   df_view["Equity $"].apply(lambda v: f"${v:,.0f}"),
+        "Open Position":   df_view["Open Pos"].apply(
+            lambda s: (
+                "None" if s == "—"
+                else (s if len(s) <= 18 else s[:15] + "…")
+            )
         ),
-        "Unreal":   df_view["Unrealized $"].apply(lambda v: f"${v:+,.0f}" if v else "—"),
-        "Margin":   df_view["Margin Used $"].apply(
+        "Unrealised P&L":  df_view["Unrealized $"].apply(lambda v: f"${v:+,.0f}" if v else "—"),
+        "Money at Risk":   df_view["Margin Used $"].apply(
             lambda v: f"${v/1000:.1f}k" if v >= 10_000 else (f"${v:,.0f}" if v else "—")
         ),
-        "Util":     df_view["Util %"].apply(lambda v: f"{v:.1f}%" if v else "—"),
-        "Trades":   df_view["Trades"].astype(str),
-        "Win%":     df_view["Win %"].apply(lambda v: f"{v:.0f}%"),
-        "Status":   df_view["Why not trading"].apply(
+        "Capital Used":    df_view["Util %"].apply(lambda v: f"{v:.1f}%" if v else "—"),
+        "Trades":          df_view["Trades"].astype(str),
+        "Win Rate":        df_view["Win %"].apply(lambda v: f"{v:.0f}%"),
+        "Status":          df_view["Why not trading"].apply(
             lambda s: s if len(s) <= 32 else s[:29] + "…"
         ),
     })
@@ -3333,7 +3825,8 @@ def main() -> None:
 </script>
 """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+        "🏠 Overview",
         "📊 Backtest",
         "📈 Paper Trading",
         "🛰 Fleet",
@@ -3343,6 +3836,8 @@ def main() -> None:
         "⚙️ Config",
         "🔧 Settings",
     ])
+    with tab0:
+        tab_overview()
     with tab1:
         tab_backtest()
     with tab2:
