@@ -8,6 +8,7 @@
  */
 
 export const DEFAULT_URL = 'https://bot.banksiaspringsfarm.com'
+const HARDCODED_API_KEY = '3f985cae37cbfb18da4acb92219ba077'
 
 const COOKIE_NAME = 'wheel_api_key'
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60  // 1 year in seconds
@@ -33,19 +34,19 @@ function deleteCookie(name: string) {
 
 // ── Public API ─────────────────────────────────────────────────────────────────
 
-/** Returns the saved API key, or '' if not set. Checks localStorage then cookie. */
+/** Returns the saved API key, or the hardcoded fallback. */
 export function loadApiKey(): string {
   const fromStorage = localStorage.getItem('api_key') ?? ''
   if (fromStorage) return fromStorage
 
-  // Fallback to cookie (survives cache clears)
   const fromCookie = decodeURIComponent(readCookie(COOKIE_NAME))
   if (fromCookie) {
-    // Restore to localStorage so future reads are fast
     localStorage.setItem('api_key', fromCookie)
     localStorage.setItem('api_url', DEFAULT_URL)
+    return fromCookie
   }
-  return fromCookie
+
+  return HARDCODED_API_KEY
 }
 
 /** Save the API key to both localStorage and a long-lived cookie. */
@@ -62,7 +63,7 @@ export function clearCredentials() {
   deleteCookie(COOKIE_NAME)
 }
 
-/** True if a key is saved in any store. */
+/** Always true — credentials are hardcoded. */
 export function hasCredentials(): boolean {
-  return !!loadApiKey()
+  return true
 }

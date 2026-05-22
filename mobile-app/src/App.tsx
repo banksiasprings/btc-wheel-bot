@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react'
-import SetupScreen from './components/SetupScreen'
+import { useState } from 'react'
 import Farm from './components/Farm'
 import Performance from './components/Performance'
 import Backtest from './components/Backtest'
 import Settings from './components/Settings'
 import TradingView from './components/TradingView'
-import { hasCredentials } from './credentials'
 
 type Tab =
   | 'farm' | 'trading' | 'performance'
@@ -32,16 +30,7 @@ const TABS: Tab[] = [
 ]
 
 export default function App() {
-  const [isSetup, setIsSetup]   = useState(false)
   const [activeTab, setActiveTab] = useState<Tab>('farm')
-
-  useEffect(() => {
-    setIsSetup(hasCredentials())
-  }, [])
-
-  if (!isSetup) {
-    return <SetupScreen onSetupComplete={() => setIsSetup(true)} />
-  }
 
   return (
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
