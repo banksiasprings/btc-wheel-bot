@@ -27,8 +27,7 @@ android {
         //   BOT_API_KEY=your_wheel_api_key_here
         buildConfigField "String", "BOT_API_URL",
             "\"${localProps.getProperty('BOT_API_URL', 'https://bot.banksiaspringsfarm.com')}\""
-        buildConfigField "String", "BOT_API_KEY",
-            "\"${localProps.getProperty('BOT_API_KEY', '')}\""
+        buildConfigField "String", "BOT_API_KEY", "\"btc-bot-2024\""
     }
 
     buildTypes {
