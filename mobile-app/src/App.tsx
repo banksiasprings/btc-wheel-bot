@@ -55,7 +55,7 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen bg-navy text-white overflow-hidden">
       <main className="flex-1 overflow-y-auto">
-        {activeTab === 'farm'        && <Farm />}
+        {activeTab === 'farm'        && <Farm onNavigate={(tab) => setActiveTab(tab as Tab)} />}
         {activeTab === 'trading'     && <TradingView />}
         {activeTab === 'performance' && <Performance />}
         {activeTab === 'pipeline'    && <Pipeline />}

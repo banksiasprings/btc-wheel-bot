@@ -235,7 +235,7 @@ public class BotFarmWidget extends AppWidgetProvider {
             conn.setConnectTimeout(8_000);
             conn.setReadTimeout(8_000);
             if (API_KEY != null && !API_KEY.isEmpty()) {
-                conn.setRequestProperty("X-Api-Key", API_KEY);
+                conn.setRequestProperty("X-API-Key", API_KEY);
             }
             int code = conn.getResponseCode();
             if (code != 200) {

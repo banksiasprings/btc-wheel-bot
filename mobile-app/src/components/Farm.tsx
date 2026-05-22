@@ -650,7 +650,7 @@ function Leaderboard({ bots }: { bots: BotFarmEntry[] }) {
 
 // ── Main Farm component ───────────────────────────────────────────────────────
 
-export default function Farm() {
+export default function Farm({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   const [farmStatus, setFarmStatus] = useState<FarmStatus | null>(null)
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState('')
@@ -1171,6 +1171,32 @@ export default function Farm() {
           {bots.length > 1 && !draggingId && (
             <p className="text-xs text-slate-700 text-center">Hold a card to reorder</p>
           )}
+        </div>
+      )}
+
+      {/* ── Full Dashboard shortcut ──────────────────────────────────────────── */}
+      {onNavigate && (
+        <div className="mt-6 mb-2">
+          <p className="text-xs text-slate-500 uppercase tracking-wider mb-2 px-1">Full Dashboard</p>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { tab: 'trading',     icon: '📊', label: 'Trading' },
+              { tab: 'performance', icon: '📈', label: 'Performance' },
+              { tab: 'pipeline',    icon: '🗺', label: 'Pipeline' },
+              { tab: 'backtest',    icon: '🧪', label: 'Backtest' },
+              { tab: 'forecasts',   icon: '🔮', label: 'Forecasts' },
+              { tab: 'settings',    icon: '⚙',  label: 'Settings' },
+            ].map(({ tab, icon, label }) => (
+              <button
+                key={tab}
+                onClick={() => onNavigate(tab)}
+                className="flex flex-col items-center justify-center gap-1 py-3 rounded-xl bg-card border border-border text-slate-300 hover:text-white hover:border-slate-500 active:scale-95 transition-all"
+              >
+                <span className="text-2xl">{icon}</span>
+                <span className="text-xs font-medium">{label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>
