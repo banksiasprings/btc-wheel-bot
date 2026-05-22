@@ -1,0 +1,50 @@
+[train] Loading BTC data ...
+[train] Source: data/btc_daily.csv
+[train] Total days available: 1096 | Training on first 70%
+[train] tensorboard not installed — logging to stdout only
+Using cpu device
+[train] Starting PPO training for 2,000,000 timesteps ...
+-----------------------------
+| time/              |      |
+|    fps             | 925  |
+|    iterations      | 1    |
+|    time_elapsed    | 2    |
+|    total_timesteps | 2048 |
+-----------------------------
+-----------------------------------------
+| time/                   |             |
+|    fps                  | 750         |
+|    iterations           | 2           |
+|    time_elapsed         | 5           |
+|    total_timesteps      | 4096        |
+| train/                  |             |
+|    approx_kl            | 0.008471385 |
+|    clip_fraction        | 0.0379      |
+|    clip_range           | 0.2         |
+|    entropy_loss         | -1.6        |
+|    explained_variance   | -0.286      |
+|    learning_rate        | 0.0003      |
+|    loss                 | 0.106       |
+|    n_updates            | 10          |
+|    policy_gradient_loss | -0.00518    |
+|    value_loss           | 0.156       |
+-----------------------------------------
+-----------------------------------------
+| time/                   |             |
+|    fps                  | 682         |
+|    iterations           | 3           |
+|    time_elapsed         | 9           |
+|    total_timesteps      | 6144        |
+| train/                  |             |
+|    approx_kl            | 0.008448772 |
+|    clip_fraction        | 0.0837      |
+|    clip_range           | 0.2         |
+|    entropy_loss         | -1.59       |
+|    explained_variance   | 0.171       |
+|    learning_rate        | 0.0003      |
+|    loss                 | 0.0576      |
+|    n_updates            | 20          |
+|    policy_gradient_loss | -0.0105     |
+|    value_loss           | 0.246       |
+-----------------------------------------
+------------------------------------------
