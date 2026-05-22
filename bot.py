@@ -787,12 +787,26 @@ class WheelBot:
                         f"net delta: {net_delta:+.3f} BTC"
                     )
 
-        # ── RL strategy: inject position context + check for close request ──────
+        # ── RL strategy: inject position context + run model every tick ──────────
+        # update_position_state() feeds the model the current portfolio snapshot.
+        # When a position is already open, generate_signal() is normally skipped
+        # (bot is not flat), so the model would never see the open position and
+        # decide to close it. We call it here explicitly for that purpose;
+        # the return value is ignored — we only care about the wants_close() flag.
         if hasattr(self._strategy, "update_position_state"):
             self._strategy.update_position_state(
                 positions=self._positions,
                 equity_usd=self._equity_usd,
             )
+            if self._positions:
+                # Run model to check whether it wants to close the open position
+                self._strategy.generate_signal(
+                    iv_history=iv_history,
+                    instruments=instruments,
+                    tickers=tickers,
+                    underlying_price=underlying_price,
+                    last_cycle=None,
+                )
 
         if (
             hasattr(self._strategy, "wants_close")
