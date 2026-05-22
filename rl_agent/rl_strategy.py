@@ -333,9 +333,22 @@ class RLStrategy:
         # Build observation vector
         obs = self._build_obs(underlying_price, iv_rank, realised_vol)
 
-        # Run model
-        action_array, _ = self._model.predict(obs, deterministic=True)
-        action = int(action_array)
+        # Run model — bypass numpy bridge (torch 2.2.x + numpy 2.x incompatibility).
+        # torch.FloatTensor(list) constructs from Python scalars, not numpy arrays,
+        # so it never calls the broken torch.from_numpy() path.
+        try:
+            import torch as _th
+            _obs_tensor = _th.FloatTensor(obs.tolist()).unsqueeze(0)
+            self._model.policy.set_training_mode(False)
+            with _th.no_grad():
+                _actions, _, _ = self._model.policy.forward(
+                    _obs_tensor, deterministic=True
+                )
+            action = int(_actions.squeeze().item())
+        except Exception as _e:
+            logger.warning(f"[RLStrategy] policy.forward() failed ({_e}), fallback predict")
+            action_array, _ = self._model.predict(obs, deterministic=True)
+            action = int(action_array)
         self._last_action = action
 
         logger.info(
