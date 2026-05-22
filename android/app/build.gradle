@@ -1,0 +1,56 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Read secrets from local.properties (not committed to git)
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+android {
+    namespace 'com.banksiafarm.btcwheel'
+    compileSdk 34
+    buildToolsVersion "34.0.0"
+
+    defaultConfig {
+        applicationId "com.banksiafarm.btcwheel"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // Inject API config as BuildConfig constants
+        // Set these in android/local.properties:
+        //   BOT_API_URL=https://bot.banksiaspringsfarm.com
+        //   BOT_API_KEY=your_wheel_api_key_here
+        buildConfigField "String", "BOT_API_URL",
+            "\"${localProps.getProperty('BOT_API_URL', 'https://bot.banksiaspringsfarm.com')}\""
+        buildConfigField "String", "BOT_API_KEY",
+            "\"${localProps.getProperty('BOT_API_KEY', '')}\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            // Debug builds also read from local.properties
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    // org.json is built into Android — no extra deps needed
+}
