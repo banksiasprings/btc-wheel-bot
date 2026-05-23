@@ -65,6 +65,15 @@ STRIKE_DELTA_BUCKETS = (0.10, 0.20, 0.30, 0.40, 0.50)   # target |delta|
 DTE_BUCKETS = (7, 14, 30, 60)                            # days to expiry
 SIZE_BUCKETS = (0.05, 0.10, 0.15, 0.20)                  # fraction of equity
 
+# Curriculum action gating. Disallowed actions silently become DO_NOTHING.
+# Stage 0 also rewrites CLOSE_POSITION into "close all legs" so the agent can
+# learn the simplest possible loop: sell premium, flatten when in trouble.
+CURRICULUM_ALLOWED = {
+    0: frozenset({0, 1, 8}),                           # DO_NOTHING, SELL_PUT, CLOSE_POSITION→CLOSE_ALL
+    1: frozenset({0, 1, 2, 3, 5, 6, 8}),               # adds SELL_CALL, BUY_PUT, SPOT_BUY/SELL
+    2: frozenset(range(NUM_ACTION_TYPES)),             # full
+}
+
 OBS_DIM = 125  # padded if features < dim; clipped if more.
 
 
@@ -80,12 +89,20 @@ class EnvConfig:
     risk_free_rate: float = 0.00
     commission_rate: float = 0.0003             # 3 bps, Deribit taker
     # Reward shaping weights — tune to taste.
+    # Components are all wrapped through tanh and the final reward is clipped
+    # to [reward_clip_min, reward_clip_max] so a single blown-up episode can't
+    # dominate the rollout (see PPO smoke-test outliers, 2026-05).
     w_return: float = 1.0
     w_drawdown: float = 5.0
     w_delta_exposure: float = 0.1
     w_max_loss_breach: float = 5.0
     w_commission: float = 1.0
-    pnl_norm_scale: float = 1_000.0             # divide $ delta by this for reward
+    pnl_norm_scale: float = 5_000.0             # divide $ delta by this before tanh
+    reward_clip_min: float = -10.0
+    reward_clip_max: float = 10.0
+    # Curriculum: 0=SELL_PUT+CLOSE_ALL+DO_NOTHING, 1=+BUY_PUT/SELL_CALL/SPOT,
+    # 2=full action space. Disallowed actions silently map to DO_NOTHING.
+    curriculum_stage: int = 2
     # Episode sampling
     random_start: bool = True
     seed: Optional[int] = None
@@ -184,20 +201,21 @@ class BTCOptionsEnv(gym.Env):
         if equity_now > self._peak_equity:
             self._peak_equity = equity_now
 
-        # 4) reward
+        # 4) reward — every component is wrapped through tanh so a single
+        # outlier (e.g. a sold option exploding) can't produce a -10^8 reward
+        # that wrecks the value-function fit. The final reward is then clipped
+        # to a hard band as a safety net.
         cfg = self.config
-        ret_term = pnl_step / cfg.pnl_norm_scale
-        # Sortino-ish kick: amplify down steps.
-        if pnl_step < 0:
-            ret_term *= 1.5
+        raw_pnl_signed = pnl_step * (1.5 if pnl_step < 0 else 1.0)  # Sortino kick
+        ret_term = math.tanh(raw_pnl_signed / cfg.pnl_norm_scale)
 
         # Drawdown penalty fires once episode dd exceeds 30%.
         dd_now = (self._peak_equity - equity_now) / max(self._peak_equity, 1.0)
-        dd_pen = max(0.0, dd_now - 0.30) * cfg.w_drawdown
+        dd_pen = math.tanh(max(0.0, dd_now - 0.30) * cfg.w_drawdown)
 
         # Delta exposure penalty during high vol regimes.
         port = self._portfolio_state()
-        delta_pen = abs(port["delta_btc_equiv"]) * cfg.w_delta_exposure
+        delta_pen = math.tanh(abs(port["delta_btc_equiv"]) * cfg.w_delta_exposure)
 
         # Per-leg max-loss breach: if any open leg lost more than the cap.
         max_loss_breach = 0.0
@@ -205,13 +223,16 @@ class BTCOptionsEnv(gym.Env):
         for leg, mark in zip(self._option_legs, self._latest_leg_marks):
             if mark["unrealized_pnl"] < -cap:
                 max_loss_breach += (-mark["unrealized_pnl"] - cap) / max(cap, 1.0)
+        breach_pen = math.tanh(cfg.w_max_loss_breach * max_loss_breach)
+
+        commission_pen = math.tanh(cfg.w_commission * commission_paid / cfg.pnl_norm_scale)
 
         reward = (
             cfg.w_return * ret_term
             - dd_pen
             - delta_pen
-            - cfg.w_max_loss_breach * max_loss_breach
-            - cfg.w_commission * (commission_paid / cfg.pnl_norm_scale)
+            - breach_pen
+            - commission_pen
         )
 
         # 5) termination conditions
@@ -221,15 +242,19 @@ class BTCOptionsEnv(gym.Env):
             truncated = True
         if equity_now < cfg.starting_equity_usd * (1.0 - cfg.max_episode_drawdown):
             terminated = True
-            reward -= 10.0  # bigger one-time penalty for blowing up
+            reward -= 5.0  # blow-up penalty (will be clipped below to floor)
         # margin breach
         margin = self._estimate_total_margin()
         if margin > equity_now * 1.05:  # leeway since this is approximate
             terminated = True
-            reward -= 10.0
+            reward -= 5.0
         # ran off the end of data
         if self._cursor >= len(self.data) - 1:
             truncated = True
+
+        # Final safety clip — guarantees the policy never sees a wild reward
+        # even if every other shape goes sideways.
+        reward = float(np.clip(reward, cfg.reward_clip_min, cfg.reward_clip_max))
 
         obs = self._build_obs() if not (terminated or truncated) else self._build_obs(safe=True)
         info = self._build_info()
@@ -338,6 +363,16 @@ class BTCOptionsEnv(gym.Env):
 
     def _execute_action(self, act_type: int, strike_idx: int, dte_idx: int, size_idx: int) -> float:
         """Apply the action to the portfolio, returning USD commission paid."""
+        # Curriculum gating: stages 0/1 restrict the live action set. Anything
+        # outside the allowed set silently becomes DO_NOTHING so the policy
+        # gradient still sees the (no-op, zero-reward) feedback.
+        stage = self.config.curriculum_stage
+        allowed = CURRICULUM_ALLOWED.get(stage, CURRICULUM_ALLOWED[2])
+        if act_type not in allowed:
+            return 0.0
+        if stage == 0 and act_type == ACT_CLOSE_POSITION:
+            # In stage 0 the "close" primitive flattens every leg in one shot.
+            return self._close_all_legs()
         if act_type == ACT_DO_NOTHING:
             return 0.0
         spot = self._spot_price()
@@ -444,6 +479,19 @@ class BTCOptionsEnv(gym.Env):
             return commission
 
         return 0.0
+
+    def _close_all_legs(self) -> float:
+        """Close every open option leg at the current mark. Used by the
+        curriculum stage-0 CLOSE_ALL primitive."""
+        if not self._option_legs:
+            return 0.0
+        spot = self._spot_price()
+        iv = self._current_iv()
+        now_ts = self._now_ts()
+        total_commission = 0.0
+        while self._option_legs:
+            total_commission += self._close_leg(0, spot, now_ts, iv)
+        return total_commission
 
     def _close_leg(self, idx: int, spot: float, now_ts: float, iv: float) -> float:
         leg = self._option_legs[idx]
