@@ -45,3 +45,6 @@ best_genome.yaml
 .vscode/
 .idea/
 *.swp
+
+# Phase 3 training run artifacts (keep code + checkpoints, ignore TB logs)
+training/logs/
