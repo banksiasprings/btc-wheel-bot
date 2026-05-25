@@ -127,6 +127,111 @@ def generate_synthetic_btc_data(
     return prices.astype(np.float64)
 
 
+def generate_heston_jump_data(
+    n_days: int = 1095,
+    starting_price: float = 30_000.0,
+    # Heston parameters
+    v0: float = 0.50,           # initial variance (ann vol^2)
+    theta: float = 0.55,        # long-run variance
+    kappa: float = 3.0,         # mean-reversion speed
+    xi: float = 0.40,           # vol-of-vol
+    rho: float = -0.70,         # correlation: price-vol
+    mu: float = 0.10,           # drift
+    # Jump parameters (Merton)
+    jump_intensity: float = 0.0,  # expected jumps per year (0 = no jumps)
+    jump_mean: float = -0.05,     # mean log jump size
+    jump_vol: float = 0.10,       # jump size std dev
+    seed: int = 42,
+) -> np.ndarray:
+    """
+    Heston stochastic volatility + Merton jump-diffusion price series.
+    Returns array of shape (n_days,) with daily closing prices.
+
+    Stage 1 curriculum: call with low xi, no jumps (gentle markets).
+    Stage 2+: widen xi, add jumps, vary kappa/theta.
+    """
+    rng = np.random.default_rng(seed)
+    dt = 1.0 / 365.0
+
+    prices = np.zeros(n_days)
+    prices[0] = starting_price
+    v = v0  # current variance
+
+    for i in range(1, n_days):
+        # Correlated Brownian motions
+        z1 = rng.standard_normal()
+        z2 = rng.standard_normal()
+        w_s = z1                              # price Brownian
+        w_v = rho * z1 + math.sqrt(1.0 - rho ** 2) * z2  # vol Brownian
+
+        # Variance process (Heston) — floor at 0.01 to prevent negative vol
+        v = max(v + kappa * (theta - v) * dt + xi * math.sqrt(max(v, 0.01) * dt) * w_v, 0.01)
+
+        # Price process (GBM with stochastic vol)
+        vol = math.sqrt(v)
+        log_ret = (mu - 0.5 * v) * dt + vol * math.sqrt(dt) * w_s
+
+        # Jump component (Merton)
+        if jump_intensity > 0:
+            n_jumps = rng.poisson(jump_intensity * dt)
+            if n_jumps > 0:
+                jump = sum(rng.normal(jump_mean, jump_vol) for _ in range(n_jumps))
+                log_ret += jump
+
+        prices[i] = prices[i - 1] * math.exp(log_ret)
+
+    return prices.astype(np.float64)
+
+
+# Stage 1 curriculum parameter ranges (narrow, gentle markets)
+CURRICULUM_STAGE_1 = {
+    "v0": (0.30, 0.60),          # moderate starting vol
+    "theta": (0.35, 0.65),       # moderate long-run vol
+    "kappa": (2.0, 5.0),         # decent mean reversion
+    "xi": (0.20, 0.40),          # low vol-of-vol (gentle)
+    "rho": (-0.80, -0.50),       # typical negative correlation
+    "mu": (0.00, 0.20),          # slight upward to sideways drift
+    "jump_intensity": (0.0, 0.0),  # NO jumps in stage 1
+    "jump_mean": (0.0, 0.0),
+    "jump_vol": (0.0, 0.0),
+    "starting_price": (20_000.0, 120_000.0),
+}
+
+
+def generate_curriculum_episode(
+    stage: int = 1,
+    n_days: int = 1095,
+    seed: int = 42,
+) -> np.ndarray:
+    """
+    Generate a price series with domain-randomised Heston parameters
+    drawn from the curriculum stage's parameter ranges.
+    """
+    rng = np.random.default_rng(seed)
+    params = CURRICULUM_STAGE_1  # only stage 1 for now
+
+    def _sample(key):
+        lo, hi = params[key]
+        if lo == hi:
+            return lo
+        return rng.uniform(lo, hi)
+
+    return generate_heston_jump_data(
+        n_days=n_days,
+        starting_price=_sample("starting_price"),
+        v0=_sample("v0"),
+        theta=_sample("theta"),
+        kappa=_sample("kappa"),
+        xi=_sample("xi"),
+        rho=_sample("rho"),
+        mu=_sample("mu"),
+        jump_intensity=_sample("jump_intensity"),
+        jump_mean=_sample("jump_mean"),
+        jump_vol=_sample("jump_vol"),
+        seed=seed + 1,  # different seed for the actual generation
+    )
+
+
 def compute_iv_rank(prices: np.ndarray, window: int = 252) -> np.ndarray:
     """
     Compute a simple IV rank proxy using rolling realised vol percentile.
@@ -156,16 +261,16 @@ def compute_iv_rank(prices: np.ndarray, window: int = 252) -> np.ndarray:
     return np.clip(iv_rank, 0.0, 1.0)
 
 
-def load_or_generate_data(data_path: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
+def load_or_generate_data(data_path: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """
-    Returns (prices, iv_rank) arrays. Tries to load from CSV first,
-    falls back to synthetic GBM data.
+    Returns (prices, iv_rank, raw_iv) arrays. raw_iv is annualised IV in %
+    (e.g. 50.0 = 50% annual vol). None if not available.
     """
     if data_path is not None:
         try:
             import pandas as pd
             df = pd.read_csv(data_path, parse_dates=True)
-            # Try common column names
+            # Price column
             price_col = None
             for col in ["close", "price", "btc_price", "Close", "Price"]:
                 if col in df.columns:
@@ -175,22 +280,31 @@ def load_or_generate_data(data_path: Optional[str] = None) -> Tuple[np.ndarray, 
                 raise ValueError(f"No recognised price column in {data_path}")
             prices = df[price_col].values.astype(np.float64)
 
-            iv_col = None
+            # IV rank
+            iv_rank_col = None
             for col in ["iv_rank", "ivr", "IV_rank"]:
                 if col in df.columns:
-                    iv_col = col
+                    iv_rank_col = col
                     break
-            if iv_col is not None:
-                iv_rank = df[iv_col].values.astype(np.float64)
+            if iv_rank_col is not None:
+                iv_rank = df[iv_rank_col].values.astype(np.float64)
             else:
                 iv_rank = compute_iv_rank(prices)
-            return prices, iv_rank
+
+            # Raw IV (annualised %)
+            raw_iv = None
+            for col in ["iv", "deribit_iv", "implied_vol", "IV"]:
+                if col in df.columns:
+                    raw_iv = df[col].values.astype(np.float64)
+                    break
+
+            return prices, iv_rank, raw_iv
         except Exception as e:
             print(f"[BTCOptionsEnv] Could not load {data_path}: {e} — using synthetic data")
 
     prices = generate_synthetic_btc_data()
     iv_rank = compute_iv_rank(prices)
-    return prices, iv_rank
+    return prices, iv_rank, None
 
 
 # ---------------------------------------------------------------------------
@@ -270,12 +384,16 @@ class BTCOptionsEnv(gym.Env):
     ACTION_CLOSE = 4
 
     N_ACTIONS = 5
-    N_OBS = 12
+    N_OBS = 16
 
     RISK_FREE = 0.04
     OPTION_DTE = 7          # weekly options
     CONTRACT_SIZE = 0.1     # BTC per contract
-    TRANSACTION_COST = 0.5  # USD per contract
+    # Deribit realistic costs:
+    #   Taker fee: 0.03% of underlying notional
+    #   Bid-ask spread: ~2% of premium (conservative avg for OTM weeklies)
+    TAKER_FEE_BPS = 0.0003       # 0.03% of underlying
+    SPREAD_FRACTION = 0.02       # 2% of premium eaten by spread
     MAX_DRAWDOWN_PENALTY_THRESHOLD = 0.05
 
     def __init__(
@@ -287,6 +405,9 @@ class BTCOptionsEnv(gym.Env):
         split: str = "train",   # "train" (first 70%) or "test" (last 30%)
         max_equity_per_leg: float = 0.10,
         seed: Optional[int] = None,
+        curriculum_stage: int = 0,     # 0=use provided data, 1+=curriculum stages
+        reward_mode: str = "default",  # "default" or "sharpe"
+        action_mode: str = "discrete",  # "discrete" (PPO/DQN) or "continuous" (SAC)
     ):
         super().__init__()
 
@@ -295,13 +416,31 @@ class BTCOptionsEnv(gym.Env):
             high=np.ones(self.N_OBS, dtype=np.float32),
             dtype=np.float32,
         )
-        self.action_space = spaces.Discrete(self.N_ACTIONS)
+
+        self.action_mode = action_mode
+        if action_mode == "continuous":
+            self.action_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(1,), dtype=np.float32
+            )
+        else:
+            self.action_space = spaces.Discrete(self.N_ACTIONS)
+
+        self.curriculum_stage = curriculum_stage
+        self.reward_mode = reward_mode
 
         # Load data
-        if prices is not None and iv_rank is not None:
+        all_raw_iv = None
+        if curriculum_stage > 0:
+            # Curriculum mode: generate Heston data (re-randomised each reset)
+            self._curriculum_seed = seed if seed is not None else 42
+            all_prices = generate_curriculum_episode(
+                stage=curriculum_stage, n_days=1095, seed=self._curriculum_seed
+            )
+            all_iv = compute_iv_rank(all_prices)
+        elif prices is not None and iv_rank is not None:
             all_prices, all_iv = prices, iv_rank
         else:
-            all_prices, all_iv = load_or_generate_data(data_path)
+            all_prices, all_iv, all_raw_iv = load_or_generate_data(data_path)
 
         # Split
         n = len(all_prices)
@@ -309,20 +448,13 @@ class BTCOptionsEnv(gym.Env):
         if split == "train":
             self.prices = all_prices[:split_idx]
             self.iv_rank = all_iv[:split_idx]
+            self._raw_iv = all_raw_iv[:split_idx] if all_raw_iv is not None else None
         else:
             self.prices = all_prices[split_idx:]
             self.iv_rank = all_iv[split_idx:]
+            self._raw_iv = all_raw_iv[split_idx:] if all_raw_iv is not None else None
 
-        self.n_days = len(self.prices)
-        # Compute rolling realised vol (10-day, annualised)
-        log_rets = np.zeros(self.n_days)
-        log_rets[1:] = np.log(self.prices[1:] / self.prices[:-1])
-        self.log_rets = log_rets
-
-        self.rv10 = np.zeros(self.n_days)
-        for i in range(10, self.n_days):
-            self.rv10[i] = np.std(log_rets[i - 10 : i]) * math.sqrt(252)
-        self.rv10[:10] = self.rv10[10] if self.n_days > 10 else 0.5
+        self._recompute_derived()
 
         self.starting_equity = starting_equity
         self.max_equity_per_leg = max_equity_per_leg
@@ -337,12 +469,82 @@ class BTCOptionsEnv(gym.Env):
         self._realised_pnl_total = 0.0
         self._prev_mtm_equity = starting_equity  # for step-by-step reward computation
 
+        # Differential Sharpe ratio EMA state (Moody & Saffell)
+        self._dsr_A = 0.0   # EMA of returns
+        self._dsr_B = 0.0   # EMA of squared returns
+        self._dsr_eta = 0.002  # EMA decay rate (tuned for weekly options)
+
+    def _trade_cost(self, S: float, premium: float, n_contracts: int) -> float:
+        """
+        Realistic Deribit transaction cost.
+        Taker fee: 0.03% of underlying notional per contract.
+        Spread cost: ~2% of premium lost to bid-ask.
+        """
+        notional = S * self.CONTRACT_SIZE * n_contracts
+        fee = notional * self.TAKER_FEE_BPS
+        spread = abs(premium) * self.SPREAD_FRACTION
+        return fee + spread
+
+    def _recompute_derived(self):
+        """Recompute log returns, realised vols, and IV surface proxies."""
+        self.n_days = len(self.prices)
+        log_rets = np.zeros(self.n_days)
+        log_rets[1:] = np.log(self.prices[1:] / self.prices[:-1])
+        self.log_rets = log_rets
+
+        self.rv5 = np.zeros(self.n_days)
+        self.rv10 = np.zeros(self.n_days)
+        self.rv30 = np.zeros(self.n_days)
+        self.skew20 = np.zeros(self.n_days)
+
+        for i in range(5, self.n_days):
+            self.rv5[i] = np.std(log_rets[i - 5 : i]) * math.sqrt(252)
+        for i in range(10, self.n_days):
+            self.rv10[i] = np.std(log_rets[i - 10 : i]) * math.sqrt(252)
+        for i in range(30, self.n_days):
+            self.rv30[i] = np.std(log_rets[i - 30 : i]) * math.sqrt(252)
+            # Return skewness (20-day) — negative = crash fear = puts expensive
+            if i >= 20:
+                window = log_rets[i - 20 : i]
+                m = np.mean(window)
+                s = np.std(window)
+                if s > 1e-10:
+                    self.skew20[i] = np.mean(((window - m) / s) ** 3)
+
+        # Fill early values
+        self.rv5[:5] = self.rv5[5] if self.n_days > 5 else 0.5
+        self.rv10[:10] = self.rv10[10] if self.n_days > 10 else 0.5
+        self.rv30[:30] = self.rv30[30] if self.n_days > 30 else 0.5
+
+        # Implied vol for option pricing: use real IV if available, else RV
+        if self._raw_iv is not None and len(self._raw_iv) == self.n_days:
+            # Convert from annualised % to fraction (e.g. 50% → 0.50)
+            self.implied_vol = np.clip(self._raw_iv / 100.0, 0.10, 3.0)
+        else:
+            # Synthetic data: use RV with a premium (options trade richer than RV)
+            self.implied_vol = np.clip(self.rv10 * 1.2, 0.10, 3.0)
+
     # ------------------------------------------------------------------
     # Gym interface
     # ------------------------------------------------------------------
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
+
+        # Curriculum mode: generate fresh randomised data each episode
+        if self.curriculum_stage > 0:
+            ep_seed = int(self._rng.integers(0, 2**31))
+            all_prices = generate_curriculum_episode(
+                stage=self.curriculum_stage, n_days=1095, seed=ep_seed
+            )
+            all_iv = compute_iv_rank(all_prices)
+            n = len(all_prices)
+            split_idx = int(n * 0.70)
+            self.prices = all_prices[:split_idx]
+            self.iv_rank = all_iv[:split_idx]
+            self._raw_iv = None  # synthetic — no real IV
+            self._recompute_derived()
+
         # Start at a random point in first 80% of split data to vary episodes
         max_start = max(0, int(self.n_days * 0.80) - 60)
         self._day = int(self._rng.integers(20, max(21, max_start)))
@@ -353,13 +555,32 @@ class BTCOptionsEnv(gym.Env):
         self._days_since_trade = 0
         self._realised_pnl_total = 0.0
         self._prev_mtm_equity = self.starting_equity
+        # Reset differential Sharpe ratio state
+        self._dsr_A = 0.0
+        self._dsr_B = 0.0
         return self._obs(), {}
 
-    def step(self, action: int):
+    def step(self, action):
+        # Map continuous action to discrete if needed
+        if self.action_mode == "continuous":
+            raw = float(action[0]) if hasattr(action, '__len__') else float(action)
+            if raw < -0.6:
+                action = self.ACTION_HOLD
+            elif raw < -0.2:
+                action = self.ACTION_SELL_PUT_020
+            elif raw < 0.2:
+                action = self.ACTION_SELL_PUT_025
+            elif raw < 0.6:
+                action = self.ACTION_SELL_CALL_020
+            else:
+                action = self.ACTION_CLOSE
+        else:
+            action = int(action)
+
         day = self._day
         S = self.prices[day]
         ivr = self.iv_rank[day]
-        sigma = max(self.rv10[day], 0.10)  # floor at 10% ann vol
+        sigma = self.implied_vol[day]  # actual IV for option pricing
 
         reward = 0.0
         terminated = False
@@ -372,7 +593,8 @@ class BTCOptionsEnv(gym.Env):
             # Check expiry
             if self._position.dte_remaining <= 0:
                 loss = self._position.intrinsic_loss(S)  # already scaled by contracts
-                realised = self._position.premium_received - loss - self.TRANSACTION_COST
+                settle_cost = self._trade_cost(S, self._position.premium_received, self._position.n_contracts)
+                realised = self._position.premium_received - loss - settle_cost
                 self._equity += realised
                 self._realised_pnl_total += realised
                 self._position = None
@@ -402,7 +624,7 @@ class BTCOptionsEnv(gym.Env):
 
                 total_premium = unit_premium * n_contracts * self.CONTRACT_SIZE
                 total_premium = max(total_premium, 1.0)  # floor
-                cost = self.TRANSACTION_COST * n_contracts
+                cost = self._trade_cost(S, total_premium, n_contracts)
                 self._position = Position(
                     pos_type=1,
                     strike=K,
@@ -433,7 +655,7 @@ class BTCOptionsEnv(gym.Env):
 
                 total_premium = unit_premium * n_contracts * self.CONTRACT_SIZE
                 total_premium = max(total_premium, 1.0)
-                cost = self.TRANSACTION_COST * n_contracts
+                cost = self._trade_cost(S, total_premium, n_contracts)
                 self._position = Position(
                     pos_type=2,
                     strike=K,
@@ -456,10 +678,11 @@ class BTCOptionsEnv(gym.Env):
                     unit_price = bs_call_price(S, self._position.strike, T, self.RISK_FREE, sigma)
                 # Total cost to buy back: same scaling as when we sold
                 cost_to_close = unit_price * self._position.n_contracts * self.CONTRACT_SIZE
+                close_cost = self._trade_cost(S, cost_to_close, self._position.n_contracts)
                 realised = (
                     self._position.premium_received
                     - cost_to_close
-                    - self.TRANSACTION_COST
+                    - close_cost
                 )
                 self._equity += realised
                 self._realised_pnl_total += realised
@@ -468,7 +691,9 @@ class BTCOptionsEnv(gym.Env):
                 self._days_since_trade = 0
                 info["trade"] = "CLOSE"
 
-        # ------ Compute capital-efficiency reward ------
+        # ------ Compute reward ------
+        traded_this_step = "trade" in info
+
         # Current mark-to-market equity
         curr_mtm = self._equity
         if self._position is not None:
@@ -485,33 +710,14 @@ class BTCOptionsEnv(gym.Env):
         no_position = self._position is None
         self._days_since_trade += 1
 
-        # --- Capital-efficiency base reward ---
-        if self._position is not None:
-            # Margin required for current position (20% of notional)
-            capital_at_risk = max(
-                self._position.strike * self._contracts * self.CONTRACT_SIZE * 0.20,
-                1.0,
+        if self.reward_mode == "sharpe":
+            reward = self._differential_sharpe_reward(
+                premium_earned_this_step, curr_mtm, drawdown, traded_this_step
             )
-            # Annualise: weekly-options cycle converts daily return to APY
-            annualisation_factor = 252.0 / self.OPTION_DTE  # 36 for 7-day options
-            efficiency = (premium_earned_this_step / capital_at_risk) * annualisation_factor
-            # Squash to [-1, +1] — typical good day ≈ 0.03–0.08, bad day ≈ -0.5
-            reward_base = float(np.tanh(efficiency / 5.0))
-
-            # Capital overuse penalty: discourage tying up >30% of equity as margin
-            capital_usage_frac = capital_at_risk / max(curr_mtm, 1.0)
-            capital_overuse_penalty = 0.0001 * max(0.0, capital_usage_frac - 0.30) ** 2
         else:
-            reward_base = 0.0
-            capital_overuse_penalty = 0.0
-
-        # Drawdown penalty (reduced weight vs original — capital efficiency drives learning)
-        dd_penalty = 0.0005 * max(0.0, drawdown - self.MAX_DRAWDOWN_PENALTY_THRESHOLD) ** 2
-
-        # Idle penalty (very small — don't panic-trade to avoid idle)
-        idle_penalty = 0.00005 if no_position else 0.0
-
-        reward = float(reward_base - dd_penalty - idle_penalty - capital_overuse_penalty)
+            reward = self._default_reward(
+                premium_earned_this_step, curr_mtm, drawdown, no_position
+            )
 
         # Advance day
         self._day += 1
@@ -521,7 +727,8 @@ class BTCOptionsEnv(gym.Env):
             if self._position is not None:
                 S_final = self.prices[-1]
                 loss = self._position.intrinsic_loss(S_final)  # already scaled
-                realised = self._position.premium_received - loss - self.TRANSACTION_COST
+                settle_cost = self._trade_cost(S_final, self._position.premium_received, self._position.n_contracts)
+                realised = self._position.premium_received - loss - settle_cost
                 self._equity += realised
                 self._position = None
                 self._contracts = 0
@@ -539,6 +746,77 @@ class BTCOptionsEnv(gym.Env):
         return self._obs(), reward, terminated, truncated, info
 
     # ------------------------------------------------------------------
+    # Reward functions
+    # ------------------------------------------------------------------
+
+    def _default_reward(self, pnl_step, curr_mtm, drawdown, no_position):
+        """Original capital-efficiency reward (v1 behaviour)."""
+        if self._position is not None:
+            capital_at_risk = max(
+                self._position.strike * self._contracts * self.CONTRACT_SIZE * 0.20,
+                1.0,
+            )
+            annualisation_factor = 252.0 / self.OPTION_DTE
+            efficiency = (pnl_step / capital_at_risk) * annualisation_factor
+            reward_base = float(np.tanh(efficiency / 5.0))
+            capital_usage_frac = capital_at_risk / max(curr_mtm, 1.0)
+            capital_overuse_penalty = 0.0001 * max(0.0, capital_usage_frac - 0.30) ** 2
+        else:
+            reward_base = 0.0
+            capital_overuse_penalty = 0.0
+        dd_penalty = 0.0005 * max(0.0, drawdown - self.MAX_DRAWDOWN_PENALTY_THRESHOLD) ** 2
+        idle_penalty = 0.00005 if no_position else 0.0
+        return float(reward_base - dd_penalty - idle_penalty - capital_overuse_penalty)
+
+    def _differential_sharpe_reward(self, pnl_step, curr_mtm, drawdown, traded=False):
+        """
+        Differential Sharpe Ratio (Moody & Saffell, NeurIPS 1998).
+
+        Components:
+          1. Differential Sharpe ratio (primary driver)
+          2. Rolling drawdown penalty
+          3. Theta capture bonus when positioned (aligns with wheel edge)
+          4. Trade cost penalty (explicit signal that each trade costs money)
+        """
+        # Step return as fraction of equity
+        R = pnl_step / max(curr_mtm, 1.0)
+
+        # Update EMA state
+        eta = self._dsr_eta
+        delta_A = R - self._dsr_A
+        delta_B = R ** 2 - self._dsr_B
+        self._dsr_A += eta * delta_A
+        self._dsr_B += eta * delta_B
+
+        # Differential Sharpe ratio
+        denom = self._dsr_B - self._dsr_A ** 2
+        if denom > 1e-12:
+            dsr = (self._dsr_B * delta_A - 0.5 * self._dsr_A * delta_B) / (denom ** 1.5)
+        else:
+            dsr = delta_A  # fallback: use raw return signal early on
+
+        # Squash to prevent extreme values
+        dsr = float(np.tanh(dsr))
+
+        # Theta capture bonus: small reward for being positioned (earning theta)
+        theta_bonus = 0.0
+        if self._position is not None and pnl_step > 0:
+            capital_at_risk = max(
+                self._position.strike * self._contracts * self.CONTRACT_SIZE * 0.20,
+                1.0,
+            )
+            theta_bonus = 0.01 * float(np.tanh(pnl_step / capital_at_risk))
+
+        # Rolling drawdown penalty
+        dd_penalty = 0.5 * drawdown ** 2
+
+        # Trade cost penalty: explicit signal that trading costs real money
+        # Scaled to be meaningful relative to DSR (~0.03 penalty per trade)
+        trade_penalty = 0.03 if traded else 0.0
+
+        return float(dsr + theta_bonus - dd_penalty - trade_penalty)
+
+    # ------------------------------------------------------------------
     # Observation
     # ------------------------------------------------------------------
 
@@ -546,7 +824,8 @@ class BTCOptionsEnv(gym.Env):
         day = min(self._day, self.n_days - 1)
         S = self.prices[day]
         ivr = self.iv_rank[day]
-        sigma = max(self.rv10[day], 0.10)
+        iv = self.implied_vol[day]   # actual IV (fraction)
+        rv10 = self.rv10[day]        # realised vol (fraction)
 
         # price normalised (divide by 100k, clip)
         btc_norm = np.clip(S / 100_000.0, 0.0, 2.0)
@@ -559,7 +838,7 @@ class BTCOptionsEnv(gym.Env):
         if self._position is not None:
             pos_type = float(self._position.pos_type)  # 1 or 2
             T = max(self._position.dte_remaining / 365.0, 1e-6)
-            pos_delta = self._position.delta(S, T, self.RISK_FREE, sigma)
+            pos_delta = self._position.delta(S, T, self.RISK_FREE, iv)
             pos_dte = self._position.dte_remaining / 30.0
             pos_pnl = self._position.unrealised_pnl / max(self.starting_equity, 1.0)
 
@@ -571,18 +850,34 @@ class BTCOptionsEnv(gym.Env):
         if day >= 20:
             mom20 = np.clip(np.log(S / self.prices[day - 20]), -1.0, 1.0)
 
-        # realised vol
-        rv = np.clip(self.rv10[day] / 3.0, 0.0, 1.0)
+        # realised vol (normalised)
+        rv = np.clip(rv10 / 3.0, 0.0, 1.0)
 
         # days to next monthly expiry (approximate: ~monthly = 30 days)
         days_to_monthly = 30 - (day % 30)
         dte_monthly_norm = days_to_monthly / 30.0
 
+        # --- IV surface features ---
+        # VRP: implied vol minus realised vol (both as fractions)
+        # High = IV rich vs RV → good time to sell premium (the wheel's edge)
+        vrp = float(np.clip((iv - rv10) / 1.0, -1.0, 1.0))      # 12
+
+        # Return skewness (20-day) — negative = crash fear = puts expensive
+        skew = float(np.clip(self.skew20[day] / 3.0, -1.0, 1.0)) # 13
+
+        # Term structure proxy: 5-day RV / 30-day RV
+        # >1 = short-term stress (inverted), <1 = calm (normal contango)
+        rv30 = max(self.rv30[day], 0.01)
+        rv_ratio = float(np.clip(self.rv5[day] / rv30 - 1.0, -1.0, 1.0))  # 14
+
+        # 30-day realised vol (longer-term vol context)
+        rv30_norm = float(np.clip(self.rv30[day] / 3.0, 0.0, 1.0))  # 15
+
         obs = np.array(
             [
                 btc_norm,                                          # 0
                 float(np.clip(ivr, 0.0, 1.0)),                    # 1
-                float(np.clip(sigma / 3.0, 0.0, 1.0)),            # 2
+                float(np.clip(iv / 3.0, 0.0, 1.0)),               # 2 implied vol
                 pos_type / 2.0,                                    # 3
                 float(np.clip(pos_delta, 0.0, 1.0)),               # 4
                 float(np.clip(pos_dte, 0.0, 1.0)),                 # 5
@@ -592,6 +887,10 @@ class BTCOptionsEnv(gym.Env):
                 float(mom20),                                      # 9
                 float(rv),                                         # 10
                 float(np.clip(dte_monthly_norm, 0.0, 1.0)),       # 11
+                vrp,                                               # 12 VRP
+                skew,                                              # 13 skew
+                rv_ratio,                                          # 14 term structure
+                rv30_norm,                                         # 15 long-term vol
             ],
             dtype=np.float32,
         )

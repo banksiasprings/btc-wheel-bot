@@ -131,12 +131,57 @@ def compute_iv_rank(iv_series: np.ndarray, window: int = 252) -> np.ndarray:
     return np.clip(iv_rank, 0.0, 1.0)
 
 
+def fetch_funding_rates(days: int = 1095) -> pd.DataFrame:
+    """
+    Fetch BTC-PERPETUAL 8-hour funding rates from Deribit.
+    Aggregates to daily mean funding rate.
+    Deribit limits to ~3 months per request, so we paginate.
+    """
+    print(f"Fetching BTC-PERPETUAL funding rates ({days} days) ...")
+    end_ts = int(datetime.now(tz=timezone.utc).timestamp())
+    start_ts = end_ts - days * 86400
+
+    all_rows = []
+    cursor_ts = start_ts * 1000  # ms
+    end_ms = end_ts * 1000
+
+    while cursor_ts < end_ms:
+        chunk_end = min(cursor_ts + 90 * 86400 * 1000, end_ms)  # ~90 days
+        try:
+            result = deribit_get("get_funding_rate_history", {
+                "instrument_name": "BTC-PERPETUAL",
+                "start_timestamp": cursor_ts,
+                "end_timestamp": chunk_end,
+            })
+            for entry in result:
+                dt = datetime.fromtimestamp(entry["timestamp"] / 1000, tz=timezone.utc).date()
+                all_rows.append({"date": dt, "funding_8h": float(entry["interest_8h"])})
+        except Exception as e:
+            print(f"  Funding rate fetch error at {cursor_ts}: {e}")
+        cursor_ts = chunk_end
+        time.sleep(0.5)  # rate limit
+
+    if not all_rows:
+        print("  Warning: no funding rate data returned")
+        return pd.DataFrame(columns=["date", "funding_rate"])
+
+    df = pd.DataFrame(all_rows)
+    # Aggregate 3x daily readings to daily mean
+    daily = df.groupby("date")["funding_8h"].mean().reset_index()
+    daily.columns = ["date", "funding_rate"]
+    print(f"  Got {len(daily)} daily funding rates "
+          f"({daily['date'].iloc[0]} → {daily['date'].iloc[-1]})")
+    return daily
+
+
 def build_dataset(days: int = 1095) -> pd.DataFrame:
     price_df = fetch_btc_prices(days=days)
     iv_df    = fetch_btc_iv()
+    fund_df  = fetch_funding_rates(days=days)
 
     # Merge on date
     df = pd.merge(price_df, iv_df, on="date", how="left")
+    df = pd.merge(df, fund_df, on="date", how="left")
 
     # For days without Deribit IV (early dates or gaps), estimate from realised vol
     log_rets = np.zeros(len(df))
@@ -156,8 +201,10 @@ def build_dataset(days: int = 1095) -> pd.DataFrame:
     df["iv"] = iv_arr
     df["iv_rank"] = compute_iv_rank(iv_arr)
 
-    df = df[["date", "close", "iv", "iv_rank"]].copy()
-    df.columns = ["date", "close", "iv", "iv_rank"]
+    # Fill missing funding rates with 0
+    df["funding_rate"] = df["funding_rate"].fillna(0.0)
+
+    df = df[["date", "close", "iv", "iv_rank", "funding_rate"]].copy()
     return df
 
 
@@ -177,6 +224,7 @@ def main():
     print(f"Price range: ${df['close'].min():,.0f} – ${df['close'].max():,.0f}")
     print(f"IV range: {df['iv'].min():.1f}% – {df['iv'].max():.1f}%")
     print(f"IV rank range: {df['iv_rank'].min():.3f} – {df['iv_rank'].max():.3f}")
+    print(f"Funding rate range: {df['funding_rate'].min():.6f} – {df['funding_rate'].max():.6f}")
     print("\nFirst 5 rows:")
     print(df.head().to_string(index=False))
     print("\nLast 5 rows:")
