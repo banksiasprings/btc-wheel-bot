@@ -200,7 +200,7 @@ def _page(tab: str = "grid") -> str:
   {tab_bar}
   <div style="color:#8b95a5;font-size:13px;margin-bottom:8px">{intro}</div>
   <a href="/btc" style="text-decoration:none;color:inherit;display:block">
-    <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Your bots' accounts over time (started at ${data.get('paper_capital', 10000):,.0f}) · tap for the Bitcoin price chart ›</div>
+    <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Each line = one bot's account value ($) over time (all started at ${data.get('paper_capital', 10000):,.0f}) · tap for the Bitcoin price chart ›</div>
     {_overlay_chart(rows, data.get('paper_capital', 10000.0))}
   </a>
   <div style="margin-top:14px">{''.join(cards)}</div>
@@ -226,11 +226,7 @@ def _equity_rows(slug: str) -> list[tuple[datetime, float]]:
     return rows
 
 
-def _equity_series(slug: str) -> list[float]:
-    return [e for _, e in _equity_rows(slug)][-500:]   # cap points for a clean chart
-
-
-PALETTE = ["#22c55e", "#60a5fa", "#f59e0b", "#ef4444", "#a78bfa", "#ec4899", "#14b8a6", "#eab308"]
+PALETTE =["#22c55e", "#60a5fa", "#f59e0b", "#ef4444", "#a78bfa", "#ec4899", "#14b8a6", "#eab308"]
 
 
 def _overlay_chart(variants, start):
@@ -249,20 +245,30 @@ def _overlay_chart(variants, start):
     emin, emax = min(all_eq), max(all_eq)
     tspan = (tmax - tmin).total_seconds() or 1.0
     erng = (emax - emin) or 1.0
-    w, h, pad = 620, 200, 12
-    fx = lambda t: pad + (t - tmin).total_seconds() / tspan * (w - 2 * pad)
-    fy = lambda e: pad + (h - 2 * pad) * (1 - (e - emin) / erng)
+    w, h = 620, 216
+    padL, padR, padT, padB = 52, 12, 18, 34
+    fx = lambda t: padL + (t - tmin).total_seconds() / tspan * (w - padL - padR)
+    fy = lambda e: padT + (h - padT - padB) * (1 - (e - emin) / erng)
     polys, legend = [], []
     for name, col, rows in series:
         pts = " ".join(f"{fx(t):.1f},{fy(e):.1f}" for t, e in rows)
         polys.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2"/>')
         legend.append(f"<span style='color:{col};font-size:12px;white-space:nowrap'>● {name}</span>")
     base_y = fy(start)
+    fmt = "%d %b %H:%M" if tspan < 3 * 86400 else "%d %b %y"
+    cy = (padT + h - padB) / 2
     svg = (f'<svg viewBox="0 0 {w} {h}" width="100%" style="background:#0f141c;border-radius:10px">'
-           f'<line x1="{pad}" y1="{base_y:.1f}" x2="{w - pad}" y2="{base_y:.1f}" '
+           f'<line x1="{padL}" y1="{base_y:.1f}" x2="{w - padR}" y2="{base_y:.1f}" '
            f'stroke="#3a4253" stroke-dasharray="4 4"/>' + "".join(polys) +
-           f'<text x="{pad}" y="14" fill="#6b7280" font-size="11">${emax:,.0f}</text>'
-           f'<text x="{pad}" y="{h - 5}" fill="#6b7280" font-size="11">${emin:,.0f}</text></svg>')
+           f'<text x="13" y="{cy:.0f}" fill="#8b95a5" font-size="11" text-anchor="middle" '
+           f'transform="rotate(-90 13 {cy:.0f})">Account value ($)</text>'
+           f'<text x="{padL - 6}" y="{padT + 4}" fill="#6b7280" font-size="11" text-anchor="end">${emax:,.0f}</text>'
+           f'<text x="{padL - 6}" y="{h - padB + 3:.0f}" fill="#6b7280" font-size="11" text-anchor="end">${emin:,.0f}</text>'
+           f'<text x="{w - padR}" y="{base_y - 4:.1f}" fill="#8b95a5" font-size="10.5" text-anchor="end">start ${start:,.0f}</text>'
+           f'<text x="{padL}" y="{h - 17}" fill="#6b7280" font-size="11">{tmin.strftime(fmt)}</text>'
+           f'<text x="{w - padR}" y="{h - 17}" fill="#6b7280" font-size="11" text-anchor="end">{tmax.strftime(fmt)}</text>'
+           f'<text x="{(padL + w - padR) / 2:.0f}" y="{h - 4}" fill="#8b95a5" font-size="11" '
+           f'text-anchor="middle">Time (older → newer)</text></svg>')
     return svg + f"<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 2px'>{''.join(legend)}</div>"
 
 
@@ -307,25 +313,36 @@ def _ann_span(v) -> str:
     return f"<span style='color:{c};font-weight:600'>{v:+,.0f}%</span>"
 
 
-def _svg_chart(ys: list[float], start: float, up: bool) -> str:
-    if len(ys) < 2:
+def _svg_chart(rows: list[tuple[datetime, float]], start: float, up: bool) -> str:
+    """One bot's account value (vertical, $) over time (horizontal). rows=[(dt, equity)]."""
+    if len(rows) < 2:
         return ("<div style='color:#6b7280;padding:28px 0;text-align:center'>"
                 "Graph fills in as this bot trades (updates hourly). Check back soon.</div>")
-    w, h, pad = 620, 180, 12
+    ys = [e for _, e in rows]
+    ts = [t for t, _ in rows]
+    w, h = 620, 216
+    padL, padR, padT, padB = 52, 14, 18, 34
     lo, hi = min(min(ys), start), max(max(ys), start)
     rng = (hi - lo) or 1.0
-    n = len(ys)
-    fx = lambda i: pad + i * (w - 2 * pad) / (n - 1)
-    fy = lambda v: pad + (h - 2 * pad) * (1 - (v - lo) / rng)
-    pts = " ".join(f"{fx(i):.1f},{fy(v):.1f}" for i, v in enumerate(ys))
+    tmin, tmax = ts[0], ts[-1]
+    tspan = (tmax - tmin).total_seconds() or 1.0
+    fx = lambda t: padL + (t - tmin).total_seconds() / tspan * (w - padL - padR)
+    fy = lambda v: padT + (h - padT - padB) * (1 - (v - lo) / rng)
+    pts = " ".join(f"{fx(t):.1f},{fy(v):.1f}" for t, v in rows)
     col = "#22c55e" if up else "#ef4444"
     base_y = fy(start)
+    fmt = "%d %b %H:%M" if tspan < 3 * 86400 else "%d %b %y"
+    cy = (padT + h - padB) / 2
     return f"""<svg viewBox="0 0 {w} {h}" width="100%" style="background:#0f141c;border-radius:10px">
-      <line x1="{pad}" y1="{base_y:.1f}" x2="{w - pad}" y2="{base_y:.1f}" stroke="#3a4253" stroke-width="1" stroke-dasharray="4 4"/>
+      <line x1="{padL}" y1="{base_y:.1f}" x2="{w - padR}" y2="{base_y:.1f}" stroke="#3a4253" stroke-width="1" stroke-dasharray="4 4"/>
       <polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.5"/>
-      <text x="{pad}" y="14" fill="#6b7280" font-size="11">${hi:,.0f}</text>
-      <text x="{pad}" y="{h - 5}" fill="#6b7280" font-size="11">${lo:,.0f}</text>
-      <text x="{w - pad}" y="{base_y - 5:.1f}" fill="#6b7280" font-size="11" text-anchor="end">start ${start:,.0f}</text>
+      <text x="13" y="{cy:.0f}" fill="#8b95a5" font-size="11" text-anchor="middle" transform="rotate(-90 13 {cy:.0f})">Account value ($)</text>
+      <text x="{padL - 6}" y="{padT + 4}" fill="#6b7280" font-size="11" text-anchor="end">${hi:,.0f}</text>
+      <text x="{padL - 6}" y="{h - padB + 3:.0f}" fill="#6b7280" font-size="11" text-anchor="end">${lo:,.0f}</text>
+      <text x="{w - padR}" y="{base_y - 5:.1f}" fill="#8b95a5" font-size="11" text-anchor="end">start ${start:,.0f}</text>
+      <text x="{padL}" y="{h - 17}" fill="#6b7280" font-size="11">{tmin.strftime(fmt)}</text>
+      <text x="{w - padR}" y="{h - 17}" fill="#6b7280" font-size="11" text-anchor="end">{tmax.strftime(fmt)}</text>
+      <text x="{(padL + w - padR) / 2:.0f}" y="{h - 4}" fill="#8b95a5" font-size="11" text-anchor="middle">Time (older → newer)</text>
     </svg>"""
 
 
@@ -337,7 +354,7 @@ def _bot_page(slug: str) -> str:
                 "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
                 f"<p>Bot '{slug}' not found.</p><a href='/' style='color:#60a5fa'>← back</a></body>")
     start = data.get("paper_capital", 10_000.0)
-    ys = _equity_series(slug)
+    eq_rows = _equity_rows(slug)
     up = v["profit"] >= 0
     col = "#22c55e" if up else "#ef4444"
     sign = "+" if up else ""
@@ -451,8 +468,8 @@ def _bot_page(slug: str) -> str:
   <h2 style="margin:10px 0 2px">{v['name']}</h2>
   <div style="color:#8b95a5;font-size:14px;margin-bottom:12px">{v['style']}</div>
   {warn}
-  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value over time</div>
-  {_svg_chart(ys, start, up)}
+  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value ($) over time — the line above the dashed start line means profit</div>
+  {_svg_chart(eq_rows, start, up)}
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
   <div style="color:#9aa4b2;font-size:12.5px;margin:-2px 0 2px">Smoothness: <b>{smooth}</b>
     <span style="color:#6b7280">return per 1% dip — higher = smoother ride</span></div>
