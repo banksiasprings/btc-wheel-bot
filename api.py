@@ -19,7 +19,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -124,6 +124,7 @@ def _page() -> str:
         col = "#22c55e" if up else "#ef4444"
         sign = "+" if up else ""
         warn = " ⚠️" if v.get("leverage", 1) > 1 else ""
+        a = _annualised(v["slug"])
         cards.append(f"""
         <a href="/bot/{v['slug']}" style="text-decoration:none;color:inherit;display:block">
         <div style="background:#151a23;border-radius:14px;padding:14px 16px;margin:10px 0;border-left:4px solid {col}">
@@ -135,6 +136,9 @@ def _page() -> str:
           <div style="display:flex;justify-content:space-between;font-size:14px">
             <span style="color:{col};font-weight:600">{sign}${v['profit']:,.0f} ({sign}{v['return_pct']:.1f}%)</span>
             <span style="color:#8b95a5">worst dip −{v['max_drawdown_pct']:.1f}%</span>
+          </div>
+          <div style="font-size:12.5px;color:#9aa4b2;margin-top:7px">
+            Annualised pace · day {_ann_span(a['daily'])} · week {_ann_span(a['weekly'])} · month {_ann_span(a['monthly'])}
           </div>
           <div style="display:flex;justify-content:space-between;color:#6b7280;font-size:12px;margin-top:6px">
             <span>{v['state']} · {v.get('trades',0)} trades</span><span>see graph ›</span>
@@ -156,20 +160,65 @@ def _page() -> str:
 </body></html>"""
 
 
-def _equity_series(slug: str) -> list[float]:
-    """A variant's account-value history from grid_farm/<slug>/equity.csv."""
+def _equity_rows(slug: str) -> list[tuple[datetime, float]]:
+    """A variant's (timestamp, equity) history from grid_farm/<slug>/equity.csv."""
     path = BASE_DIR / "grid_farm" / slug / "equity.csv"
-    ys: list[float] = []
+    rows: list[tuple[datetime, float]] = []
     try:
         with open(path) as f:
-            for row in csv.DictReader(f):
+            for r in csv.DictReader(f):
                 try:
-                    ys.append(float(row["equity"]))
-                except (KeyError, ValueError):
+                    rows.append((datetime.fromisoformat(r["timestamp"]), float(r["equity"])))
+                except Exception:
                     pass
     except FileNotFoundError:
         pass
-    return ys[-500:]   # cap points for a clean chart
+    return rows
+
+
+def _equity_series(slug: str) -> list[float]:
+    return [e for _, e in _equity_rows(slug)][-500:]   # cap points for a clean chart
+
+
+def _annualised(slug: str) -> dict:
+    """Annualised run-rate ROI from the last day / week / month of equity history.
+
+    Linear projection: period_return × (365 / elapsed_days). Returns None per
+    window until there's enough history (short windows are pure noise otherwise).
+    """
+    rows = _equity_rows(slug)
+    out = {"daily": None, "weekly": None, "monthly": None}
+    if len(rows) < 2:
+        return out
+    now_t, now_e = rows[-1]
+
+    def ann(window_days: float, min_hours: float):
+        cutoff = now_t - timedelta(days=window_days)
+        base = None
+        for t, e in rows:
+            if t <= cutoff:
+                base = (t, e)
+            else:
+                break
+        if base is None:
+            base = rows[0]           # less than `window_days` of history → use earliest
+        bt, be = base
+        elapsed = (now_t - bt).total_seconds() / 86400.0
+        if be <= 0 or elapsed * 24 < min_hours:
+            return None
+        return (now_e / be - 1) * (365.0 / elapsed) * 100
+
+    out["daily"] = ann(1, 2)
+    out["weekly"] = ann(7, 12)
+    out["monthly"] = ann(30, 48)
+    return out
+
+
+def _ann_span(v) -> str:
+    if v is None:
+        return "<span style='color:#6b7280'>—</span>"
+    c = "#22c55e" if v >= 0 else "#ef4444"
+    return f"<span style='color:{c};font-weight:600'>{v:+,.0f}%</span>"
 
 
 def _svg_chart(ys: list[float], start: float, up: bool) -> str:
@@ -226,6 +275,21 @@ def _bot_page(slug: str) -> str:
         stat("Worst dip", f"−{v['max_drawdown_pct']:.1f}%"),
         stat("Trades", f"{v.get('trades', 0)}"),
     ])
+    ann = _annualised(slug)
+
+    def acell(label, val):
+        return ("<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center'>"
+                f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
+                f"<div style='font-size:16px;margin-top:2px'>{_ann_span(val)}</div></div>")
+
+    ann_block = (
+        "<div style='font-size:13px;color:#8b95a5;margin:6px 0 4px'>Annualised return — at recent pace</div>"
+        "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px'>"
+        f"{acell('Daily pace', ann['daily'])}{acell('Weekly pace', ann['weekly'])}{acell('Monthly pace', ann['monthly'])}"
+        "</div>"
+        "<div style='color:#6b7280;font-size:11.5px;margin-top:6px'>“At pace” = if the last day / "
+        "week / month repeated all year. Shorter windows swing a lot, especially early on.</div>"
+    )
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta http-equiv=refresh content=60>
@@ -238,7 +302,8 @@ def _bot_page(slug: str) -> str:
   <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value over time</div>
   {_svg_chart(ys, start, up)}
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
-  <div style="background:#151a23;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.7">
+  {ann_block}
+  <div style="background:#151a23;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.7;margin-top:14px">
     <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">HOW THIS BOT WORKS</div>
     <div>• <b>Right now:</b> {v['state']}</div>
     <div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>
