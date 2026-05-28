@@ -147,6 +147,20 @@ def _page(tab: str = "grid") -> str:
                  f"border-radius:9px;text-decoration:none;font-size:13px;font-weight:600;{st}'>{label} ({cnt})</a>")
     tab_bar = f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px'>{tabs}</div>"
     intro = next(t[2] for t in TAB_INFO if t[0] == tab)
+    # tappable Bitcoin-price banner (sparkline only if 1W data is already cached — never blocks)
+    spark = ""
+    wk = _btc_history("1W", allow_fetch=False)
+    if len(wk) >= 2:
+        spark = ("<div style='width:120px;flex:0 0 auto'>"
+                 + _btc_chart_svg(wk, "1W", wk[-1][1] >= wk[0][1], w=120, h=42, mini=True) + "</div>")
+    btc_banner = (
+        "<a href='/btc' style='display:flex;align-items:center;gap:12px;text-decoration:none;"
+        "background:#11203a;border:1px solid #1d3a66;border-radius:12px;padding:12px 14px;margin-bottom:10px'>"
+        "<div style='flex:1'>"
+        "<div style='color:#8b95a5;font-size:12px'>₿ Bitcoin price · tap for full chart</div>"
+        f"<div style='font-size:23px;font-weight:800;color:#e6e6e6'>${btc:,.0f} "
+        "<span style='font-size:13px;color:#60a5fa;font-weight:600'>1W·1M·1Y·5Y ›</span></div>"
+        f"</div>{spark}</a>")
     cards = []
     for i, v in enumerate(rows, 1):
         up = v["profit"] >= 0
@@ -180,12 +194,15 @@ def _page(tab: str = "grid") -> str:
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
   <h2 style="margin:0 0 2px">📈 BTC Bot Farm</h2>
   <div style="color:#8b95a5;font-size:14px;margin-bottom:8px">
-    Bitcoin ${btc:,.0f} · {len(allv)} bots · pretend money · updated {updated} UTC
+    {len(allv)} bots · pretend money · updated {updated} UTC
   </div>
+  {btc_banner}
   {tab_bar}
   <div style="color:#8b95a5;font-size:13px;margin-bottom:8px">{intro}</div>
-  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">All accounts over time (started at ${data.get('paper_capital', 10000):,.0f})</div>
-  {_overlay_chart(rows, data.get('paper_capital', 10000.0))}
+  <a href="/btc" style="text-decoration:none;color:inherit;display:block">
+    <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Your bots' accounts over time (started at ${data.get('paper_capital', 10000):,.0f}) · tap for the Bitcoin price chart ›</div>
+    {_overlay_chart(rows, data.get('paper_capital', 10000.0))}
+  </a>
   <div style="margin-top:14px">{''.join(cards)}</div>
   <p style="color:#6b7280;font-size:12px;margin-top:16px">
     Each bot started with $10,000 (pretend). "Worst dip" = biggest temporary drop.
@@ -452,6 +469,188 @@ def _bot_page(slug: str) -> str:
   <p style="color:#6b7280;font-size:12px;margin-top:14px">Pretend money on real Bitcoin prices.
     The dashed line is the $10,000 starting point — the line above it means profit. Refreshes every minute.</p>
 </body></html>"""
+
+
+# ── Bitcoin price chart page (/btc) — live candles from Deribit, several ranges ─
+
+# range key → (deribit resolution [valid: 1/3/5/15/30/60/120/180/360/720/1D],
+#              lookback seconds, cache TTL seconds, headline label)
+BTC_RANGES = [
+    ("1D",  "5",   1 * 86_400,        120, "Past 24 hours"),
+    ("1W",  "60",  7 * 86_400,        300, "Past week"),
+    ("1M",  "360", 30 * 86_400,       600, "Past month"),
+    ("1Y",  "1D",  366 * 86_400,     1800, "Past year"),
+    ("5Y",  "1D",  5 * 366 * 86_400, 3600, "Past 5 years"),
+    ("Max", "1D",  9 * 366 * 86_400, 3600, "Since 2019"),
+]
+_BTC_RANGE_KEYS = [r[0] for r in BTC_RANGES]
+_btc_cache: dict[str, tuple[float, list]] = {}   # range → (fetched_at, [(ts_ms, close), ...])
+
+
+def _btc_history(range_key: str, allow_fetch: bool = True) -> list[tuple[int, float]]:
+    """(timestamp_ms, close) candles for a range. In-process cached, with stale fallback.
+
+    allow_fetch=False only ever returns already-cached data (never blocks on the
+    network) — used by the main dashboard so it stays fully decoupled from Deribit.
+    """
+    spec = next((r for r in BTC_RANGES if r[0] == range_key), None)
+    if spec is None:
+        return []
+    _, res, secs, ttl, _ = spec
+    import time as _t
+    now = _t.time()
+    cached = _btc_cache.get(range_key)
+    if cached and (now - cached[0] < ttl or not allow_fetch):
+        return cached[1]
+    if not allow_fetch:
+        return cached[1] if cached else []
+    try:
+        from deribit_client import DeribitPublicREST
+        rest = DeribitPublicREST()
+        end = int(now)
+        candles = rest.get_tradingview_chart_data("BTC-PERPETUAL", res, end - secs, end)
+        pts = [(int(c["timestamp"]), float(c["close"])) for c in candles
+               if c.get("close") and c.get("timestamp")]
+        if pts:
+            _btc_cache[range_key] = (now, pts)
+            return pts
+    except Exception:
+        pass
+    return cached[1] if cached else []   # stale data beats no data
+
+
+def _btc_chart_svg(pts: list[tuple[int, float]], range_key: str, up: bool,
+                   w: float = 680.0, h: float = 260.0, mini: bool = False) -> str:
+    if len(pts) < 2:
+        return ("<div style='color:#6b7280;padding:40px 0;text-align:center'>"
+                "Couldn't load the price right now — try again in a moment.</div>")
+    closes = [c for _, c in pts]
+    hi, lo = max(closes), min(closes)
+    hi_i = max(range(len(pts)), key=lambda i: pts[i][1])
+    lo_i = min(range(len(pts)), key=lambda i: pts[i][1])
+    n = len(pts)
+    step = max(1, n // 600)                      # thin the drawn line on long ranges
+    dpts = pts[::step]
+    if dpts[-1][0] != pts[-1][0]:
+        dpts.append(pts[-1])
+    padL, padR = 6, 6
+    padT, padB = (4, 4) if mini else (14, 22)
+    tmin, tmax = pts[0][0], pts[-1][0]
+    tspan = (tmax - tmin) or 1
+    span = (hi - lo) or 1.0
+    loP, hiP = lo - span * 0.07, hi + span * 0.07
+    rng = (hiP - loP) or 1.0
+    fx = lambda t: padL + (t - tmin) / tspan * (w - padL - padR)
+    fy = lambda v: padT + (h - padT - padB) * (1 - (v - loP) / rng)
+    line = " ".join(f"{fx(t):.1f},{fy(v):.1f}" for t, v in dpts)
+    area = (f"{fx(dpts[0][0]):.1f},{h - padB:.1f} " + line +
+            f" {fx(dpts[-1][0]):.1f},{h - padB:.1f}")
+    col = "#22c55e" if up else "#ef4444"
+    fill = "rgba(34,197,94,0.15)" if up else "rgba(239,68,68,0.15)"
+    parts = [f'<svg viewBox="0 0 {w:.0f} {h:.0f}" width="100%" '
+             f'style="background:#0f141c;border-radius:12px;display:block">',
+             f'<polygon points="{area}" fill="{fill}" stroke="none"/>']
+    if not mini and len(dpts) > 20:              # dashed moving-average (trend) line
+        win = max(3, len(dpts) // 12)
+        ma = []
+        for i, (t, _v) in enumerate(dpts):
+            seg = dpts[max(0, i - win + 1):i + 1]
+            ma.append(f"{fx(t):.1f},{fy(sum(x for _, x in seg) / len(seg)):.1f}")
+        parts.append(f'<polyline points="{" ".join(ma)}" fill="none" stroke="#8b95a5" '
+                     f'stroke-width="1.3" stroke-dasharray="5 4" opacity="0.7"/>')
+    parts.append(f'<polyline points="{line}" fill="none" stroke="{col}" '
+                 f'stroke-width="{1.6 if mini else 2.2}"/>')
+    if not mini:
+        from datetime import datetime as _dt, timezone as _tz
+        def dl(ms):
+            d = _dt.fromtimestamp(ms / 1000, tz=_tz.utc)
+            return d.strftime("%H:%M %d %b") if range_key in ("1D", "1W") else d.strftime("%d %b %y")
+        # hi / lo markers
+        hx, hy = fx(pts[hi_i][0]), fy(pts[hi_i][1])
+        lx, ly = fx(pts[lo_i][0]), fy(pts[lo_i][1])
+        parts.append(f'<circle cx="{hx:.1f}" cy="{hy:.1f}" r="3" fill="#22c55e"/>'
+                     f'<text x="{hx:.1f}" y="{hy - 6:.1f}" fill="#9aa4b2" font-size="10.5" '
+                     f'text-anchor="middle">${pts[hi_i][1]:,.0f}</text>')
+        parts.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3" fill="#ef4444"/>'
+                     f'<text x="{lx:.1f}" y="{ly + 14:.1f}" fill="#9aa4b2" font-size="10.5" '
+                     f'text-anchor="middle">${pts[lo_i][1]:,.0f}</text>')
+        # last-price dot
+        ex, ey = fx(pts[-1][0]), fy(pts[-1][1])
+        parts.append(f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="3.5" fill="{col}"/>')
+        # date axis
+        parts.append(f'<text x="{padL}" y="{h - 6:.0f}" fill="#6b7280" font-size="10.5">{dl(tmin)}</text>'
+                     f'<text x="{w - padR}" y="{h - 6:.0f}" fill="#6b7280" font-size="10.5" '
+                     f'text-anchor="end">{dl(tmax)}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _btc_page(range_key: str = "1M") -> str:
+    if range_key not in _BTC_RANGE_KEYS:
+        range_key = "1M"
+    label = next(r[4] for r in BTC_RANGES if r[0] == range_key)
+    pts = _btc_history(range_key)
+    data = _load() or {}
+    cur = (pts[-1][1] if pts else 0) or data.get("btc_price", 0)
+    if pts:
+        first, last = pts[0][1], pts[-1][1]
+        chg = (last / first - 1) * 100 if first else 0.0
+        chg_usd = last - first
+        hi = max(c for _, c in pts)
+        lo = min(c for _, c in pts)
+        from_hi = (last / hi - 1) * 100 if hi else 0.0
+    else:
+        first = last = chg = chg_usd = hi = lo = from_hi = 0.0
+    up = chg >= 0
+    col = "#22c55e" if up else "#ef4444"
+    sign = "+" if up else ""
+    d1 = _btc_history("1D")
+    chg24 = (d1[-1][1] / d1[0][1] - 1) * 100 if len(d1) >= 2 else None
+
+    btns = ""
+    for k in _BTC_RANGE_KEYS:
+        on = k == range_key
+        st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
+        btns += (f"<a href='/btc?range={k}' style='flex:1;text-align:center;padding:10px 4px;"
+                 f"border-radius:9px;text-decoration:none;font-size:14px;font-weight:700;{st}'>{k}</a>")
+
+    def stat(lbl, val, c="#e6e6e6"):
+        return ("<div style='background:#151a23;border-radius:10px;padding:10px 12px'>"
+                f"<div style='color:#8b95a5;font-size:12px'>{lbl}</div>"
+                f"<div style='font-size:17px;font-weight:600;color:{c}'>{val}</div></div>")
+
+    c24 = "#22c55e" if (chg24 or 0) >= 0 else "#ef4444"
+    stats = "".join([
+        stat(f"{range_key} high", f"${hi:,.0f}"),
+        stat(f"{range_key} low", f"${lo:,.0f}"),
+        stat("24-hour change", f"{'+' if (chg24 or 0) >= 0 else ''}{chg24:.1f}%" if chg24 is not None else "—", c24),
+        stat(f"Down from {range_key} high", f"{from_hi:.1f}%" if from_hi < -0.05 else "at the high", col),
+    ])
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content="60;url=/btc?range={range_key}">
+<title>Bitcoin price — BTC Bot Farm</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
+  <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← back to bots</a>
+  <h2 style="margin:10px 0 0">₿ Bitcoin price</h2>
+  <div style="display:flex;align-items:baseline;gap:12px;margin:4px 0 2px">
+    <span style="font-size:34px;font-weight:800">${cur:,.0f}</span>
+    <span style="color:{col};font-size:17px;font-weight:700">{sign}{chg:.1f}%</span>
+  </div>
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{label} · {sign}${chg_usd:,.0f}</div>
+  <div style="display:flex;gap:6px;margin-bottom:12px">{btns}</div>
+  {_btc_chart_svg(pts, range_key, up)}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">{stats}</div>
+  <p style="color:#6b7280;font-size:12px;margin-top:16px">
+    Live Bitcoin price from Deribit. Green line = up over the period, red = down.
+    The dashed line is the trend (moving average). Dots mark the period high & low.
+    Refreshes every minute.</p>
+</body></html>"""
+
+
+@app.get("/btc", include_in_schema=False)
+def btc_chart(range: str = "1M"):
+    return HTMLResponse(_btc_page(range))
 
 
 @app.get("/", include_in_schema=False)

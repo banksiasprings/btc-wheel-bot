@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "farm-api-preview",
+      "runtimeExecutable": "python3.11",
+      "runtimeArgs": ["-m", "uvicorn", "api:app", "--host", "127.0.0.1", "--port", "8799"],
+      "port": 8799
+    }
+  ]
+}
