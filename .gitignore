@@ -53,3 +53,9 @@ training/logs/
 grid_farm/
 strategies/paper_state.json
 strategies/paper_live.log
+
+# RL training artifacts — large + regenerable, kept local (abandoned direction)
+rl_agent/checkpoints/
+rl_agent/*.log
+rl_agent/*.zip
+rl_agent/run-1-*/

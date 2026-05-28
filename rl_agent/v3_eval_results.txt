@@ -1,0 +1,37 @@
+[Thu 28 May 2026 13:31:23 AEST] V3 finished — running evaluation
+Loading model: /Users/openclaw/Documents/btc-wheel-bot/rl_agent/checkpoints/v3/v3_final.zip
+Loaded VecNormalize stats
+
+=== V3 MaskablePPO — 10 Episode Evaluation ===
+ Ep  Steps Trades  Return%       Equity   Reward
+  0    413    161    -1.42%    98,575.50    31.73
+  1    400    189    -1.09%    98,912.07    38.63
+  2    599    234   -15.26%    84,742.16    40.09
+  3    409    188     0.46%   100,462.50    23.89
+  4    660    260    -7.94%    92,058.40    44.20
+  5    602    249     2.05%   102,046.20    61.24
+  6    402    190     5.34%   105,337.44    29.63
+  7    409    182    -4.00%    95,996.92    25.27
+  8    373    177    -8.54%    91,455.44     1.19
+  9    390    168     0.35%   100,351.85    28.36
+
+Avg return: -3.01%
+Min return: -15.26%
+Max return: 5.34%
+Std return: 5.75%
+Avg trades/episode: 199.8
+Profitable episodes: 4/10
+
+Action distribution:
+  HOLD           :   2659 ( 57.1%)
+  SELL_PUT_020   :    202 (  4.3%)
+  SELL_PUT_025   :      0 (  0.0%)
+  SELL_CALL_020  :    821 ( 17.6%)
+  CLOSE          :    975 ( 20.9%)
+
+=== Comparison ===
+PPO 5M:   avg return -6.05%  | profitable 0/10  | trades/ep 350
+PPO 50M:  avg return -3.70%  | profitable 2/10  | trades/ep 352
+SAC 5M:   avg return -4.48%  | profitable 0/10  | trades/ep 438
+V3 10M:   avg return -3.01%  | profitable 4/10  | trades/ep 200
+[Thu 28 May 2026 13:31:39 AEST] Evaluation complete
