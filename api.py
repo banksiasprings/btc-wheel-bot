@@ -112,11 +112,19 @@ TAB_INFO = [
     ("grid", "Grid", "Buy-low / sell-high on Bitcoin's wiggles — no direction bet."),
     ("funding", "Funding", "Market-neutral — earns the funding fee, almost no price risk."),
     ("longvol", "Long-Vol", "Profits from BIG moves; wins when the grid struggles. Simplified model."),
+    ("premium", "Premium", "Sells volatility — earns in calm, loses in big moves (the wheel's spirit)."),
+    ("trend", "Trend", "Bets on direction — rides uptrends, dodges downtrends. The 'predict' contrast."),
+    ("stack", "Stack", "Accumulation & benchmarks — DCA, 50/50 rebalancing, plain buy & hold."),
 ]
+_TAB_KEYS = [t[0] for t in TAB_INFO]
+
+
+def _tab_of(v):
+    return v.get("tab", v.get("type", "grid"))
 
 
 def _page(tab: str = "grid") -> str:
-    if tab not in ("grid", "funding", "longvol"):
+    if tab not in _TAB_KEYS:
         tab = "grid"
     data = _load()
     if not data:
@@ -125,13 +133,13 @@ def _page(tab: str = "grid") -> str:
                 "<h2>BTC Bot Farm</h2><p>The farm isn't running yet. Start it on the Mac:</p>"
                 "<pre>caffeinate -s python3.11 grid_farm.py</pre></body>")
     allv = data.get("variants", [])
-    rows = sorted([v for v in allv if v.get("type", "grid") == tab],
+    rows = sorted([v for v in allv if _tab_of(v) == tab],
                   key=lambda v: v["equity"], reverse=True)
     btc = data.get("btc_price", 0)
     updated = data.get("updated", "")[:16].replace("T", " ")
     tabs = ""
     for key, label, _ in TAB_INFO:
-        cnt = sum(1 for v in allv if v.get("type", "grid") == key)
+        cnt = sum(1 for v in allv if _tab_of(v) == key)
         on = key == tab
         st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
         tabs += (f"<a href='/?tab={key}' style='flex:1;text-align:center;padding:9px 4px;"
@@ -336,6 +344,31 @@ def _bot_page(slug: str) -> str:
                  f"<div>• <b>Wins:</b> in sharp crashes & violent swings, when the grid bots struggle. {extra}</div>"
                  "<div>• <b>Bleeds:</b> slowly in calm, quiet markets.</div>"
                  "<div style='color:#9aa4b2;margin-top:4px'>Note: a simplified model, not a full options simulation.</div>")
+    elif t == "shortvol":
+        lv = "Leveraged (2×) — can be wiped out in a crash. " if v.get("leverage", 1) > 1 else ""
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> sells volatility (the options-wheel's spirit) — pockets premium, wants calm.</div>"
+                 "<div>• <b>Wins:</b> in quiet, range-bound markets.</div>"
+                 f"<div>• <b>Loses:</b> in big moves / crashes. {lv}</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>The exact opposite side of the Long-Vol bot (simplified model).</div>")
+    elif t == "trend":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> holds Bitcoin while price is above its moving average, sits in cash below it.</div>"
+                 "<div>• <b>Wins:</b> in strong, sustained trends — rides the ups, dodges the downs.</div>"
+                 "<div>• <b>Loses:</b> in choppy markets (whipsaws in and out, paying fees).</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>This one DOES bet on direction — the contrast to the neutral bots.</div>")
+    elif t == "rebalance":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> keeps about half in Bitcoin, half in cash; rebalances when it drifts.</div>"
+                 "<div>• <b>Effect:</b> mechanically buys low and sells high; smoother ride than holding.</div>")
+    elif t == "dca":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> buys a fixed amount of Bitcoin every day — classic dollar-cost averaging.</div>"
+                 "<div>• <b>Effect:</b> averages your entry price; steady accumulation, no timing.</div>")
+    elif t == "buyhold":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> bought Bitcoin once and holds. No trading at all.</div>"
+                 "<div>• <b>Why it's here:</b> the benchmark — every other bot is trying to beat this.</div>")
     else:
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  f"<div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>"

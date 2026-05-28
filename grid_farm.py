@@ -27,6 +27,8 @@ sys.path.insert(0, str(ROOT / "strategies"))
 
 from grid_bot import GridBot                      # noqa: E402
 from income_bots import FundingBot, LongVolBot    # noqa: E402
+from more_bots import (BuyHoldBot, DCABot, RebalanceBot,    # noqa: E402
+                       ShortVolBot, TrendBot)
 
 FARM = ROOT / "grid_farm"
 STATUS = FARM / "status.json"
@@ -68,6 +70,23 @@ VARIANTS = [
      "style": "big-moves, triple size — can be wiped out"},
     {"slug": "longvol-cheap", "name": "Long-Vol (cheap)", "type": "longvol", "leverage": 1.0,
      "dvol_max": 45.0, "style": "only buys volatility when it's cheap — less bleed"},
+    # ── Premium (short-vol): the wheel's spirit — earns in calm, loses in chaos ──
+    {"slug": "premium",    "name": "Premium Seller", "type": "shortvol", "tab": "premium", "leverage": 1.0,
+     "style": "sells volatility — earns in calm, loses in big moves"},
+    {"slug": "premium-2x", "name": "Premium Seller 2× ⚠️", "type": "shortvol", "tab": "premium", "leverage": 2.0,
+     "style": "leveraged premium selling — can blow up in a crash"},
+    # ── Trend: directional — does predicting direction beat staying neutral? ──
+    {"slug": "trend-fast", "name": "Trend (fast)", "type": "trend", "tab": "trend", "ma_hours": 168,
+     "style": "rides uptrends, sits in cash in downtrends (7-day signal)"},
+    {"slug": "trend-slow", "name": "Trend (slow)", "type": "trend", "tab": "trend", "ma_hours": 1200,
+     "style": "rides big trends only (50-day signal) — fewer flips"},
+    # ── Stack: accumulation & benchmarks ──
+    {"slug": "rebalance",  "name": "Rebalance 50/50", "type": "rebalance", "tab": "stack",
+     "style": "half BTC / half cash, rebalances on drift — buys low, sells high"},
+    {"slug": "dca",        "name": "DCA", "type": "dca", "tab": "stack",
+     "style": "buys a fixed amount of BTC daily — classic accumulation"},
+    {"slug": "buyhold",    "name": "Buy & Hold", "type": "buyhold", "tab": "stack",
+     "style": "buys once and holds — the benchmark everything must beat"},
 ]
 
 
@@ -121,8 +140,10 @@ def min_capital(v):
         return int(math.ceil(raw / 50.0) * 50)
     if t == "funding":
         return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
-    if t == "longvol":
+    if t in ("longvol", "shortvol"):
         return int(max(200, round(500 / v.get("leverage", 1.0) / 50) * 50))
+    if t in ("trend", "rebalance", "dca", "buyhold"):
+        return 50          # just needs to hold a little BTC above the exchange minimum
     return 100
 
 
@@ -134,6 +155,16 @@ def make_bot(v):
     if t == "longvol":
         return LongVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
                           dvol_max=v.get("dvol_max"))
+    if t == "shortvol":
+        return ShortVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
+    if t == "trend":
+        return TrendBot(capital=PAPER_CAPITAL, ma_hours=v.get("ma_hours", 168))
+    if t == "rebalance":
+        return RebalanceBot(capital=PAPER_CAPITAL)
+    if t == "dca":
+        return DCABot(capital=PAPER_CAPITAL)
+    if t == "buyhold":
+        return BuyHoldBot(capital=PAPER_CAPITAL)
     return GridBot(spacing=v["spacing"], max_lots=v["max_lots"], ma_hours=v["ma_hours"],
                    capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
                    borrow_rate=v.get("borrow_rate", 0.0))
@@ -193,8 +224,15 @@ def _state_label(v, bot):
         return "collecting funding (market-neutral)"
     if t == "longvol":
         return "long volatility (waiting for big moves)"
-    if bot.btc_held() > 1e-9:
-        return f"holding {bot.btc_held():.4f} BTC"
+    if t == "shortvol":
+        return "selling premium (calm = good)"
+    held = bot.btc_held() if hasattr(bot, "btc_held") else 0.0
+    if t == "trend":
+        return "long BTC (uptrend)" if held > 1e-9 else "in cash (downtrend)"
+    if t == "dca":
+        return f"stacked {held:.4f} BTC"
+    if held > 1e-9:
+        return f"holding {held:.4f} BTC"
     return "in cash (waiting)"
 
 
@@ -224,22 +262,25 @@ def step_all(state, rest):
         bot, peak, started = state[v["slug"]]
         if t == "funding":
             bot.step(funding_1h)
-        elif t == "longvol":
+        elif t in ("longvol", "shortvol"):
             bot.step(price, dvol)
-        else:
+        elif t == "grid":
             for side, p, qty in bot.on_close(price, low=low):
                 if side == "LIQUIDATED":
                     log(f"  {v['name']}: 💀 LIQUIDATED at ${p:,.0f}")
+        else:                                   # trend / rebalance / dca / buyhold
+            bot.step(price)
         eq = bot.equity(price) if t == "grid" else bot.equity_now()
         peak = max(peak, eq)
         state[v["slug"]] = (bot, peak, started)
-        btc = bot.btc_held() if t == "grid" else 0.0
-        cash = bot.cash if t == "grid" else eq
+        btc = bot.btc_held() if hasattr(bot, "btc_held") else 0.0
+        cash = bot.cash if hasattr(bot, "cash") else eq
         save_variant(v, bot, peak, started, price, eq, btc, cash)
         days = max(0.0, (datetime.now(timezone.utc)
                          - datetime.fromisoformat(started)).total_seconds() / 86400)
         rows.append({
             "slug": v["slug"], "name": v["name"], "style": v["style"], "type": t,
+            "tab": v.get("tab", t),
             "spacing_pct": v.get("spacing", 0) * 100, "max_lots": v.get("max_lots"),
             "trend_stop": v.get("ma_hours", 0) > 0, "leverage": v.get("leverage", 1.0),
             "equity": round(eq, 2), "profit": round(eq - PAPER_CAPITAL, 2),
