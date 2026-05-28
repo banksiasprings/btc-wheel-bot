@@ -22,8 +22,8 @@ STATUS = ROOT / "grid_farm" / "status.json"
 CREDS = ROOT / "data" / "notifier_config.json"
 PUBLIC_URL = "bot.banksiaspringsfarm.com"
 LABELS = {"grid": "Grid", "funding": "Funding", "longvol": "Long-Vol",
-          "premium": "Premium", "trend": "Trend", "stack": "Stack"}
-TAB_ORDER = ["grid", "funding", "longvol", "premium", "trend", "stack"]
+          "premium": "Premium", "trend": "Trend", "stack": "Stack", "convex": "Convex"}
+TAB_ORDER = ["grid", "funding", "longvol", "premium", "trend", "stack", "convex"]
 
 
 def send(text: str) -> bool:

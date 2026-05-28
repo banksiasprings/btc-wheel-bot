@@ -115,6 +115,7 @@ TAB_INFO = [
     ("premium", "Premium", "Sells volatility — earns in calm, loses in big moves (the wheel's spirit)."),
     ("trend", "Trend", "Bets on direction — rides uptrends, dodges downtrends. The 'predict' contrast."),
     ("stack", "Stack", "Accumulation & benchmarks — DCA, 50/50 rebalancing, plain buy & hold."),
+    ("convex", "Convex", "Options 'big payoff' bets — crash insurance, gamma scalping, backspreads. Pay a little, win big on a crash or huge move. Simplified models."),
 ]
 _TAB_KEYS = [t[0] for t in TAB_INFO]
 
@@ -142,9 +143,9 @@ def _page(tab: str = "grid") -> str:
         cnt = sum(1 for v in allv if _tab_of(v) == key)
         on = key == tab
         st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
-        tabs += (f"<a href='/?tab={key}' style='flex:1;text-align:center;padding:9px 4px;"
-                 f"border-radius:9px;text-decoration:none;font-size:13.5px;font-weight:600;{st}'>{label} ({cnt})</a>")
-    tab_bar = f"<div style='display:flex;gap:7px;margin:8px 0 10px'>{tabs}</div>"
+        tabs += (f"<a href='/?tab={key}' style='flex:1 1 22%;text-align:center;padding:9px 4px;"
+                 f"border-radius:9px;text-decoration:none;font-size:13px;font-weight:600;{st}'>{label} ({cnt})</a>")
+    tab_bar = f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px'>{tabs}</div>"
     intro = next(t[2] for t in TAB_INFO if t[0] == tab)
     cards = []
     for i, v in enumerate(rows, 1):
@@ -351,6 +352,27 @@ def _bot_page(slug: str) -> str:
                  "<div>• <b>Wins:</b> in quiet, range-bound markets.</div>"
                  f"<div>• <b>Loses:</b> in big moves / crashes. {lv}</div>"
                  "<div style='color:#9aa4b2;margin-top:4px'>The exact opposite side of the Long-Vol bot (simplified model).</div>")
+    elif t == "tailhedge":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> owns 'crash insurance' (far out-of-the-money put options).</div>"
+                 "<div>• <b>Wins:</b> only in a sharp CRASH — and then it pays off HUGE (very convex).</div>"
+                 "<div>• <b>Bleeds:</b> a small premium almost every day it doesn't crash — like paying an insurance bill.</div>"
+                 "<div>• <b>Ignores:</b> price going up — it only cares about big drops.</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>Expect it mostly red. The point is the one day everything else "
+                 "crashes, THIS is the bot that spikes green. Simplified model.</div>")
+    elif t == "gammascalp":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> long volatility, but it actively TRADES — every time price swings it locks in a little profit.</div>"
+                 "<div>• <b>Wins:</b> when the market is choppy / moving a lot (up OR down).</div>"
+                 "<div>• <b>Bleeds:</b> a small cost when the market sits dead still.</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>Same engine idea as Long-Vol, but it shows real trades — "
+                 "the busy, hands-on cousin. Simplified model.</div>")
+    elif t == "backspread":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> a cheap options spread — costs almost nothing to hold.</div>"
+                 "<div>• <b>Wins:</b> big on a LARGE move in either direction.</div>"
+                 "<div>• <b>Loses:</b> a small, limited amount if price drifts a moderate distance (the 'dead zone').</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>A cheaper lottery ticket than buying volatility outright. Simplified model.</div>")
     elif t == "trend":
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  "<div>• <b>How:</b> holds Bitcoin while price is above its moving average, sits in cash below it.</div>"

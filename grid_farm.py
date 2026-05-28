@@ -29,6 +29,8 @@ from grid_bot import GridBot                      # noqa: E402
 from income_bots import FundingBot, LongVolBot    # noqa: E402
 from more_bots import (BuyHoldBot, DCABot, RebalanceBot,    # noqa: E402
                        ShortVolBot, TrendBot)
+from convex_bots import (BackspreadBot, GammaScalpBot,      # noqa: E402
+                         TailHedgeBot)
 
 FARM = ROOT / "grid_farm"
 STATUS = FARM / "status.json"
@@ -87,6 +89,13 @@ VARIANTS = [
      "style": "buys a fixed amount of BTC daily — classic accumulation"},
     {"slug": "buyhold",    "name": "Buy & Hold", "type": "buyhold", "tab": "stack",
      "style": "buys once and holds — the benchmark everything must beat"},
+    # ── Convex: options "big payoff" structures — crash insurance & big-move bets ──
+    {"slug": "tail-hedge",  "name": "Tail Hedge", "type": "tailhedge", "tab": "convex", "leverage": 1.0,
+     "style": "crash insurance — bleeds a little, pays big in a crash"},
+    {"slug": "gamma-scalp", "name": "Gamma Scalp", "type": "gammascalp", "tab": "convex", "leverage": 1.0,
+     "style": "long-vol that actively trades — banks profit on every swing"},
+    {"slug": "backspread",  "name": "Backspread", "type": "backspread", "tab": "convex", "leverage": 1.0,
+     "style": "cheap big-move bet — small loss if quiet, big win on a large move"},
 ]
 
 
@@ -140,7 +149,7 @@ def min_capital(v):
         return int(math.ceil(raw / 50.0) * 50)
     if t == "funding":
         return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
-    if t in ("longvol", "shortvol"):
+    if t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
         return int(max(200, round(500 / v.get("leverage", 1.0) / 50) * 50))
     if t in ("trend", "rebalance", "dca", "buyhold"):
         return 50          # just needs to hold a little BTC above the exchange minimum
@@ -157,6 +166,12 @@ def make_bot(v):
                           dvol_max=v.get("dvol_max"))
     if t == "shortvol":
         return ShortVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
+    if t == "tailhedge":
+        return TailHedgeBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
+    if t == "gammascalp":
+        return GammaScalpBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
+    if t == "backspread":
+        return BackspreadBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
     if t == "trend":
         return TrendBot(capital=PAPER_CAPITAL, ma_hours=v.get("ma_hours", 168))
     if t == "rebalance":
@@ -226,6 +241,12 @@ def _state_label(v, bot):
         return "long volatility (waiting for big moves)"
     if t == "shortvol":
         return "selling premium (calm = good)"
+    if t == "tailhedge":
+        return "holding crash insurance (waiting for a crash)"
+    if t == "gammascalp":
+        return "long volatility — scalping each swing"
+    if t == "backspread":
+        return "big-move bet (waiting for a large move)"
     held = bot.btc_held() if hasattr(bot, "btc_held") else 0.0
     if t == "trend":
         return "long BTC (uptrend)" if held > 1e-9 else "in cash (downtrend)"
@@ -262,7 +283,7 @@ def step_all(state, rest):
         bot, peak, started = state[v["slug"]]
         if t == "funding":
             bot.step(funding_1h)
-        elif t in ("longvol", "shortvol"):
+        elif t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
             bot.step(price, dvol)
         elif t == "grid":
             for side, p, qty in bot.on_close(price, low=low):
