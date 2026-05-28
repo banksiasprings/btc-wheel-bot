@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from datetime import datetime, timezone
@@ -54,11 +55,19 @@ VARIANTS = [
      "style": "market-neutral — collects funding, no price bet", "positive_only": False},
     {"slug": "funding-smart", "name": "Funding (smart)", "type": "funding",
      "style": "market-neutral — only collects when funding pays", "positive_only": True},
+    {"slug": "funding-2x",    "name": "Funding 2×", "type": "funding", "leverage": 2.0,
+     "style": "leveraged carry — ~2× the funding income (and the bleed)"},
+    {"slug": "funding-3x",    "name": "Funding 3× ⚠️", "type": "funding", "leverage": 3.0,
+     "style": "aggressive leveraged carry — erodes fast if funding turns negative"},
     # ── Long-Vol: the grid's complement — wins on big moves / crashes ──
-    {"slug": "longvol",    "name": "Long-Vol",    "type": "longvol", "leverage": 1.0,
+    {"slug": "longvol",       "name": "Long-Vol",    "type": "longvol", "leverage": 1.0,
      "style": "big-moves bot — profits from chaos, bleeds when calm"},
-    {"slug": "longvol-2x", "name": "Long-Vol 2×", "type": "longvol", "leverage": 2.0,
+    {"slug": "longvol-2x",    "name": "Long-Vol 2×", "type": "longvol", "leverage": 2.0,
      "style": "big-moves, double size — bigger swings"},
+    {"slug": "longvol-3x",    "name": "Long-Vol 3× ⚠️", "type": "longvol", "leverage": 3.0,
+     "style": "big-moves, triple size — can be wiped out"},
+    {"slug": "longvol-cheap", "name": "Long-Vol (cheap)", "type": "longvol", "leverage": 1.0,
+     "dvol_max": 45.0, "style": "only buys volatility when it's cheap — less bleed"},
 ]
 
 
@@ -101,12 +110,30 @@ def warmup_closes(rest, hours):
         return []
 
 
+MIN_ORDER_USD = 15.0   # safe floor per order on Deribit (perp min ~$10 + buffer)
+
+
+def min_capital(v):
+    """Approx. smallest live stake that lets every order clear exchange minimums."""
+    t = v.get("type", "grid")
+    if t == "grid":
+        raw = v["max_lots"] * MIN_ORDER_USD / v.get("leverage", 1.0)
+        return int(math.ceil(raw / 50.0) * 50)
+    if t == "funding":
+        return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
+    if t == "longvol":
+        return int(max(200, round(500 / v.get("leverage", 1.0) / 50) * 50))
+    return 100
+
+
 def make_bot(v):
     t = v.get("type", "grid")
     if t == "funding":
-        return FundingBot(capital=PAPER_CAPITAL, positive_only=v.get("positive_only", False))
+        return FundingBot(capital=PAPER_CAPITAL, positive_only=v.get("positive_only", False),
+                          leverage=v.get("leverage", 1.0))
     if t == "longvol":
-        return LongVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
+        return LongVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
+                          dvol_max=v.get("dvol_max"))
     return GridBot(spacing=v["spacing"], max_lots=v["max_lots"], ma_hours=v["ma_hours"],
                    capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
                    borrow_rate=v.get("borrow_rate", 0.0))
@@ -220,6 +247,7 @@ def step_all(state, rest):
             "max_drawdown_pct": round((peak - eq) / peak * 100 if peak > 0 else 0, 2),
             "trades": getattr(bot, "trades", 0), "btc_held": round(btc, 6),
             "cash": round(cash, 2), "state": _state_label(v, bot), "days_running": round(days, 2),
+            "min_capital": min_capital(v),
         })
     STATUS.write_text(json.dumps({
         "updated": _now(), "btc_price": round(price, 2),

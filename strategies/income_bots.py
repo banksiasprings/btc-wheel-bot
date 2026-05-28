@@ -20,18 +20,26 @@ import math
 
 
 class FundingBot:
-    def __init__(self, capital: float = 10_000.0, positive_only: bool = False):
+    def __init__(self, capital: float = 10_000.0, positive_only: bool = False,
+                 leverage: float = 1.0):
         self.capital = capital
         self.equity = capital
-        self.notional = capital          # 1x, no leverage
+        self.leverage = leverage
+        self.notional = capital * leverage      # leverage amplifies the carry (and the bleed)
         self.positive_only = positive_only
         self.peak = capital
         self.steps = 0
+        self.liquidated = False
 
     def step(self, rate_1h: float):
         """rate_1h = perpetual funding rate for this hour (signed fraction)."""
+        if self.liquidated:
+            return
         r = 0.0 if (self.positive_only and rate_1h < 0) else rate_1h
         self.equity += self.notional * r
+        if self.equity <= 0:                     # leveraged carry can erode to $0 in a long negative-funding stretch
+            self.equity = 0.0
+            self.liquidated = True
         self.peak = max(self.peak, self.equity)
         self.steps += 1
 
@@ -39,22 +47,26 @@ class FundingBot:
         return self.equity
 
     def to_dict(self):
-        return {"equity": self.equity, "peak": self.peak, "steps": self.steps}
+        return {"equity": self.equity, "peak": self.peak, "steps": self.steps,
+                "liquidated": self.liquidated}
 
     def load_dict(self, d):
         self.equity = d["equity"]
         self.peak = d.get("peak", self.equity)
         self.steps = d.get("steps", 0)
+        self.liquidated = d.get("liquidated", False)
 
 
 class LongVolBot:
     K = 2.0   # scale: cumulative pnl/capital ≈ K × (realised_var − implied_var) over the period
 
-    def __init__(self, capital: float = 10_000.0, leverage: float = 1.0):
+    def __init__(self, capital: float = 10_000.0, leverage: float = 1.0,
+                 dvol_max: float | None = None):
         self.capital = capital
         self.equity = capital
         self.notional = capital
         self.leverage = leverage
+        self.dvol_max = dvol_max          # if set, only hold vol when implied vol is below this (buy it cheap)
         self.prev_price = None
         self.peak = capital
         self.steps = 0
@@ -66,6 +78,11 @@ class LongVolBot:
             return
         if self.prev_price is None or price <= 0:
             self.prev_price = price
+            return
+        if self.dvol_max is not None and implied_vol_annual > self.dvol_max:
+            self.prev_price = price       # vol too expensive → stand aside (no position, no theta, no gain)
+            self.peak = max(self.peak, self.equity)
+            self.steps += 1
             return
         r = math.log(price / self.prev_price)
         self.prev_price = price

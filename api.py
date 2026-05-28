@@ -161,7 +161,7 @@ def _page(tab: str = "grid") -> str:
             Annualised pace · day {_ann_span(a['daily'])} · week {_ann_span(a['weekly'])} · month {_ann_span(a['monthly'])}
           </div>
           <div style="display:flex;justify-content:space-between;color:#6b7280;font-size:12px;margin-top:6px">
-            <span>{v['state']} · {v.get('trades',0)} trades</span><span>see graph ›</span>
+            <span>{v['state']} · min ${v.get('min_capital', 0):,} to run</span><span>see graph ›</span>
           </div>
         </div></a>""")
     return f"""<!doctype html><html><head><meta charset=utf-8>
@@ -343,6 +343,11 @@ def _bot_page(slug: str) -> str:
   {_svg_chart(ys, start, up)}
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
   {ann_block}
+  <div style="background:#11203a;border:1px solid #1d3a66;border-radius:10px;padding:11px 14px;margin-top:14px;font-size:14px">
+    💵 <b>Minimum to run live: ~${v.get('min_capital', 0):,}</b>
+    <div style="color:#8b95a5;font-size:12px;margin-top:3px">The smallest real stake where every order
+      still clears the exchange's minimum size. Approximate — we'll confirm exact figures at go-live.</div>
+  </div>
   <div style="background:#151a23;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.7;margin-top:14px">
     <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">HOW THIS BOT WORKS</div>
     {works}
