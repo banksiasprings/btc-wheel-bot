@@ -174,8 +174,10 @@ def _page(tab: str = "grid") -> str:
     Bitcoin ${btc:,.0f} · {len(allv)} bots · pretend money · updated {updated} UTC
   </div>
   {tab_bar}
-  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{intro}</div>
-  {''.join(cards)}
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:8px">{intro}</div>
+  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">All accounts over time (started at ${data.get('paper_capital', 10000):,.0f})</div>
+  {_overlay_chart(rows, data.get('paper_capital', 10000.0))}
+  <div style="margin-top:14px">{''.join(cards)}</div>
   <p style="color:#6b7280;font-size:12px;margin-top:16px">
     Each bot started with $10,000 (pretend). "Worst dip" = biggest temporary drop.
     Tap a bot for its graph. Refreshes every minute.</p>
@@ -200,6 +202,42 @@ def _equity_rows(slug: str) -> list[tuple[datetime, float]]:
 
 def _equity_series(slug: str) -> list[float]:
     return [e for _, e in _equity_rows(slug)][-500:]   # cap points for a clean chart
+
+
+PALETTE = ["#22c55e", "#60a5fa", "#f59e0b", "#ef4444", "#a78bfa", "#ec4899", "#14b8a6", "#eab308"]
+
+
+def _overlay_chart(variants, start):
+    """All of a tab's bots' account curves on one chart (shared time + $ axes)."""
+    series = []
+    for i, v in enumerate(variants):
+        rows = _equity_rows(v["slug"])
+        if len(rows) >= 2:
+            series.append((v["name"], PALETTE[i % len(PALETTE)], rows))
+    if not series:
+        return ("<div style='color:#6b7280;padding:26px 0;text-align:center'>"
+                "Chart fills in as the bots trade (hourly) — check back in a bit.</div>")
+    all_ts = [t for _, _, rows in series for t, _ in rows]
+    all_eq = [e for _, _, rows in series for _, e in rows] + [start]
+    tmin, tmax = min(all_ts), max(all_ts)
+    emin, emax = min(all_eq), max(all_eq)
+    tspan = (tmax - tmin).total_seconds() or 1.0
+    erng = (emax - emin) or 1.0
+    w, h, pad = 620, 200, 12
+    fx = lambda t: pad + (t - tmin).total_seconds() / tspan * (w - 2 * pad)
+    fy = lambda e: pad + (h - 2 * pad) * (1 - (e - emin) / erng)
+    polys, legend = [], []
+    for name, col, rows in series:
+        pts = " ".join(f"{fx(t):.1f},{fy(e):.1f}" for t, e in rows)
+        polys.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2"/>')
+        legend.append(f"<span style='color:{col};font-size:12px;white-space:nowrap'>● {name}</span>")
+    base_y = fy(start)
+    svg = (f'<svg viewBox="0 0 {w} {h}" width="100%" style="background:#0f141c;border-radius:10px">'
+           f'<line x1="{pad}" y1="{base_y:.1f}" x2="{w - pad}" y2="{base_y:.1f}" '
+           f'stroke="#3a4253" stroke-dasharray="4 4"/>' + "".join(polys) +
+           f'<text x="{pad}" y="14" fill="#6b7280" font-size="11">${emax:,.0f}</text>'
+           f'<text x="{pad}" y="{h - 5}" fill="#6b7280" font-size="11">${emin:,.0f}</text></svg>')
+    return svg + f"<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 2px'>{''.join(legend)}</div>"
 
 
 def _annualised(slug: str) -> dict:
@@ -315,6 +353,8 @@ def _bot_page(slug: str) -> str:
         stat("Worst dip", f"−{v['max_drawdown_pct']:.1f}%"),
         stat("Trades", f"{v.get('trades', 0)}"),
     ])
+    dd = v.get("max_drawdown_pct", 0)
+    smooth = f"{v['return_pct'] / dd:.1f}×" if dd > 0.1 else "—"
     ann = _annualised(slug)
 
     def acell(label, val):
@@ -342,6 +382,8 @@ def _bot_page(slug: str) -> str:
   <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value over time</div>
   {_svg_chart(ys, start, up)}
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
+  <div style="color:#9aa4b2;font-size:12.5px;margin:-2px 0 2px">Smoothness: <b>{smooth}</b>
+    <span style="color:#6b7280">return per 1% dip — higher = smoother ride</span></div>
   {ann_block}
   <div style="background:#11203a;border:1px solid #1d3a66;border-radius:10px;padding:11px 14px;margin-top:14px;font-size:14px">
     💵 <b>Minimum to run live: ~${v.get('min_capital', 0):,}</b>

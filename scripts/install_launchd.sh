@@ -93,12 +93,40 @@ cat > "$PLIST_DIR/com.wheelbot.gridfarm.plist" <<EOF
 </plist>
 EOF
 
+# ── Daily Telegram summary (fires once a day at 8am local) ──
+cat > "$PLIST_DIR/com.wheelbot.dailysummary.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wheelbot.dailysummary</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>telegram_summary.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$REPO</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>8</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/wheelbot_dailysummary.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wheelbot_dailysummary.log</string>
+</dict>
+</plist>
+EOF
+
 # Load all agents now (don't wait for reboot)
-for svc in api tunnel gridfarm; do
+for svc in api tunnel gridfarm dailysummary; do
   launchctl unload "$PLIST_DIR/com.wheelbot.$svc.plist" 2>/dev/null || true
   launchctl load "$PLIST_DIR/com.wheelbot.$svc.plist"
 done
 
-echo "✅ Grid-farm API, tunnel, and farm installed as login services."
+echo "✅ Grid-farm API, tunnel, farm, and daily Telegram summary installed."
 echo "   They start automatically every time you log in / reboot."
-echo "   Logs: /tmp/wheelbot_api.log, /tmp/wheelbot_tunnel.log, /tmp/wheelbot_gridfarm.log"
+echo "   Logs: /tmp/wheelbot_*.log"
