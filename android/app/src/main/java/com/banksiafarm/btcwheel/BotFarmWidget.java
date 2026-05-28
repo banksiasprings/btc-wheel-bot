@@ -18,8 +18,6 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.text.SimpleDateFormat;
-import java.util.Date;
 import java.util.Locale;
 
 /**
@@ -31,11 +29,32 @@ import java.util.Locale;
  *
  * The widget refreshes every 30 minutes via the AppWidgetProvider system.
  * Tapping the widget triggers an immediate manual refresh.
+ *
+ * Freshness model (3-state) — the farm only ticks HOURLY, so a tight "is the
+ * last poll fresh?" check would read red for most of every hour. Status is
+ * instead derived from the age of the farm's last tick (the `updated` field
+ * from /farm/status), NOT from whether a single poll happened to succeed:
+ *   ✅ ONLINE  — poll succeeded AND last tick ≤ 75 min ago (within the hourly window + slack)
+ *   ⏳ STALE   — poll blipped but cached data is recent, OR last tick 75–180 min ago (a tick skipped)
+ *   🔴 OFFLINE — never fetched, OR last tick > 180 min ago (~3h: supervisor down / phone offline too long)
+ * A single transient fetch failure no longer alarms — we keep showing the last
+ * known data with "Updated Xm ago" until it genuinely goes stale.
  */
 public class BotFarmWidget extends AppWidgetProvider {
     private static final String TAG = "BotFarmWidget";
     private static final String ACTION_REFRESH = "com.banksiafarm.btcwheel.WIDGET_REFRESH";
     private static final String PREFS_NAME = "BotFarmWidgetPrefs";
+
+    // ── Freshness thresholds (minutes) — farm ticks hourly; see CONTEXT.md ──
+    /** ≤ this since the last tick = within the current hourly window (+15m slack) → ONLINE. */
+    private static final long FRESH_MAX_MIN = 75;
+    /** ≤ this = a tick or two skipped, still plausibly fine → STALE (amber). Beyond → OFFLINE (red). */
+    private static final long STALE_MAX_MIN = 180;
+
+    // Status states
+    private static final int ST_ONLINE  = 0;
+    private static final int ST_STALE   = 1;
+    private static final int ST_OFFLINE = 2;
 
     // ── API config ──────────────────────────────────────────────────────────
     private static final String BASE_URL = BuildConfig.BOT_API_URL;
@@ -49,7 +68,8 @@ public class BotFarmWidget extends AppWidgetProvider {
     private static final String KEY_TOTAL_BOTS    = "last_total_bots";
     private static final String KEY_OPEN_POS      = "last_open_positions";
     private static final String KEY_FARM_RUNNING  = "last_farm_running";
-    private static final String KEY_UPDATED_MS    = "last_updated_ms";
+    private static final String KEY_UPDATED_MS    = "last_updated_ms";   // when WE last fetched OK
+    private static final String KEY_TICK_MS       = "last_tick_ms";      // server `updated` = last farm tick
 
     // ── AppWidgetProvider callbacks ─────────────────────────────────────────
     @Override
@@ -101,7 +121,7 @@ public class BotFarmWidget extends AppWidgetProvider {
                               AppWidgetManager mgr,
                               int widgetId,
                               FetchResult data,
-                              boolean offline) {
+                              boolean fetchFailed) {
         RemoteViews rv = new RemoteViews(ctx.getPackageName(), R.layout.widget_bot_farm);
 
         // Tap-to-open-dashboard PendingIntent
@@ -112,21 +132,35 @@ public class BotFarmWidget extends AppWidgetProvider {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         rv.setOnClickPendingIntent(R.id.widget_root, launchPi);
 
-        // Status dot + label
-        if (offline) {
-            rv.setTextColor(R.id.tv_status_dot, Color.parseColor("#ef4444"));
-            rv.setTextViewText(R.id.tv_status_dot, "●");
-            rv.setTextViewText(R.id.tv_status_label, "OFFLINE");
-            rv.setTextColor(R.id.tv_status_label, Color.parseColor("#ef4444"));
-        } else if (data != null && data.farmRunning) {
-            rv.setTextColor(R.id.tv_status_dot, Color.parseColor("#22c55e"));
-            rv.setTextViewText(R.id.tv_status_dot, "●");
-            rv.setTextViewText(R.id.tv_status_label, "RUNNING");
-            rv.setTextColor(R.id.tv_status_label, Color.parseColor("#22c55e"));
+        // ── Derive 3-state freshness from the age of the last farm tick ──
+        // We trust the server `updated` time (last tick), not whether this one
+        // poll succeeded — so a transient blip won't flip the widget to red.
+        boolean haveTick = data != null && data.tickMs > 0;
+        long tickAgeMin = haveTick
+            ? (System.currentTimeMillis() - data.tickMs) / 60_000L
+            : Long.MAX_VALUE;
+
+        int state;
+        if (!haveTick || tickAgeMin > STALE_MAX_MIN) {
+            state = ST_OFFLINE;                       // never fetched, or tick > ~3h old → real outage
+        } else if (fetchFailed || tickAgeMin > FRESH_MAX_MIN) {
+            state = ST_STALE;                         // transient blip on recent data, or a tick skipped
         } else {
-            rv.setTextColor(R.id.tv_status_dot, Color.parseColor("#ef4444"));
-            rv.setTextViewText(R.id.tv_status_dot, "●");
-            rv.setTextViewText(R.id.tv_status_label, "STOPPED");
+            state = ST_ONLINE;                        // fresh poll + tick within the hourly window
+        }
+
+        // Status dot (emoji) + label, coloured to match
+        if (state == ST_ONLINE) {
+            rv.setTextViewText(R.id.tv_status_dot, "✅");
+            rv.setTextViewText(R.id.tv_status_label, "ONLINE");
+            rv.setTextColor(R.id.tv_status_label, Color.parseColor("#22c55e"));
+        } else if (state == ST_STALE) {
+            rv.setTextViewText(R.id.tv_status_dot, "⏳");
+            rv.setTextViewText(R.id.tv_status_label, "STALE");
+            rv.setTextColor(R.id.tv_status_label, Color.parseColor("#f59e0b"));
+        } else {
+            rv.setTextViewText(R.id.tv_status_dot, "🔴");
+            rv.setTextViewText(R.id.tv_status_label, "OFFLINE");
             rv.setTextColor(R.id.tv_status_label, Color.parseColor("#ef4444"));
         }
 
@@ -178,12 +212,29 @@ public class BotFarmWidget extends AppWidgetProvider {
             rv.setTextColor(R.id.tv_return, Color.parseColor("#888888"));
         }
 
-        // Footer timestamp
-        String timestamp = new SimpleDateFormat("h:mm a", Locale.US).format(new Date());
-        rv.setTextViewText(R.id.tv_updated,
-            (offline ? "⚠ Offline — last: " : "Updated ") + timestamp);
+        // Footer: data freshness, expressed as the age of the last farm tick.
+        // (Relative age, not wall-clock — Steven cares "how old is this data".)
+        String footer;
+        if (!haveTick) {
+            footer = "Waiting for first data…";
+        } else if (state == ST_OFFLINE) {
+            footer = "⚠ No update for " + formatAge(tickAgeMin);
+        } else if (fetchFailed) {
+            footer = "Updated " + formatAge(tickAgeMin) + " · reconnecting…";
+        } else {
+            footer = "Updated " + formatAge(tickAgeMin);
+        }
+        rv.setTextViewText(R.id.tv_updated, footer);
 
         mgr.updateAppWidget(widgetId, rv);
+    }
+
+    /** Human-friendly relative age, e.g. "just now", "7m ago", "1h 5m ago". */
+    private String formatAge(long ageMin) {
+        if (ageMin < 1)  return "just now";
+        if (ageMin < 60) return ageMin + "m ago";
+        long h = ageMin / 60, m = ageMin % 60;
+        return m == 0 ? h + "h ago" : h + "h " + m + "m ago";
     }
 
     // ── HTTP fetch — uses /farm/status and /farm/equity ────────────────────
@@ -195,6 +246,7 @@ public class BotFarmWidget extends AppWidgetProvider {
             if (farmStatus == null) return null;
 
             result.farmRunning = farmStatus.optBoolean("farm_running", false);
+            result.tickMs      = parseTickMs(farmStatus.optString("updated", ""));
 
             JSONArray bots = farmStatus.optJSONArray("bots");
             if (bots != null) {
@@ -222,6 +274,24 @@ public class BotFarmWidget extends AppWidgetProvider {
         } catch (Exception e) {
             Log.e(TAG, "fetchBotData failed: " + e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Parse the farm's `updated` timestamp (ISO-8601 UTC, e.g.
+     * "2026-05-29T07:00:00.123456+00:00") to epoch millis. 0 if absent/unparseable.
+     * minSdk is 26, so java.time is available.
+     */
+    private long parseTickMs(String iso) {
+        if (iso == null || iso.isEmpty()) return 0L;
+        try {
+            return java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli();
+        } catch (Exception e) {
+            try {
+                return java.time.Instant.parse(iso).toEpochMilli();   // fallback for a 'Z' suffix
+            } catch (Exception ignored) {
+                return 0L;
+            }
         }
     }
 
@@ -262,6 +332,7 @@ public class BotFarmWidget extends AppWidgetProvider {
         ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putLong(KEY_UPDATED_MS, System.currentTimeMillis())
+            .putLong(KEY_TICK_MS, r.tickMs)
             .putFloat(KEY_EQUITY, (float) r.currentEquity)
             .putFloat(KEY_START_EQUITY, (float) r.startEquity)
             .putFloat(KEY_RETURN_PCT, (float) r.returnPct)
@@ -279,6 +350,7 @@ public class BotFarmWidget extends AppWidgetProvider {
         r.startEquity    = p.getFloat(KEY_START_EQUITY, 0f);
         r.returnPct      = p.getFloat(KEY_RETURN_PCT, (float) Double.MIN_VALUE);
         r.farmRunning    = p.getBoolean(KEY_FARM_RUNNING, false);
+        r.tickMs         = p.getLong(KEY_TICK_MS, 0L);
         r.runningCount   = p.getInt(KEY_RUNNING_COUNT, 0);
         r.totalBots      = p.getInt(KEY_TOTAL_BOTS, 0);
         r.openPositions  = p.getInt(KEY_OPEN_POS, 0);
@@ -303,5 +375,6 @@ public class BotFarmWidget extends AppWidgetProvider {
         double  currentEquity = 0;
         double  startEquity   = 0;
         double  returnPct     = Double.MIN_VALUE;
+        long    tickMs        = 0L;     // epoch ms of the farm's last tick (server `updated`)
     }
 }
