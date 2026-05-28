@@ -2,6 +2,15 @@
 
 > **Maintenance contract:** Read this first in any new session — it is the canonical anchor for what this project is and how it is shaped. Update it whenever the architecture, core strategy, or operating model changes meaningfully. **This file takes priority over README.md** when they disagree; the README is user-facing setup, this is the design rationale. If you make a structural change without updating CONTEXT.md, you have created doc rot.
 
+> ## ⚠️ DIRECTION CHANGE — 2026-05-28: pivoted from options-wheel to GRID bots
+> The options wheel below is **retired** (it returned ~1-2%/yr and a 5-line baseline beat the RL agent). The project now runs a **spot grid-bot farm** that profits from Bitcoin's volatility, direction-agnostic, no leverage. Backtests: ~10-18%/yr, all-weather, low drawdown. See **`docs/strategy-plan.md`** for the full rationale + evidence.
+> - **Live system (root):** `grid_farm.py` (runs 7 paper variants on live prices), `dashboard_ui.py` (the leaderboard app), `strategies/grid_bot.py` (the engine). Run: `caffeinate -s python3.11 grid_farm.py` + `streamlit run dashboard_ui.py`.
+> - **Old options system → `legacy_options/`** (bot.py, bot_farm.py, the old 9-tab dashboard, configs/, farm/ — moved, not deleted).
+> - Shared infra kept at root: `deribit_client.py`, `config.py`, `config.yaml`.
+> - The project skill (`btc-wheel-bot`) still describes the OLD options architecture and needs updating.
+>
+> *Everything below describes the retired options system, kept for historical context.*
+
 ## What this project is
 
 A Bitcoin options **wheel-strategy** trading bot for Deribit. Sells short-dated OTM puts and calls to harvest theta and IV decay, alternating sides to stay roughly delta-neutral. The system runs a **farm of independently-configured bots** in parallel, each exploring a different parameterisation of the same core strategy. Currently in **paper-trading phase** — no real capital at risk.

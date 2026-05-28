@@ -1,6 +1,0 @@
-timestamp,instrument,option_type,strike,entry_price,exit_price,contracts,pnl_btc,pnl_usd,equity_before,equity_after,btc_price,iv_rank_at_entry,dte_at_entry,dte_at_close,slippage_btc,fill_time_sec,reason,mode
-2026-04-29T08:00:00+00:00,BTC-29APR26-76500-P,put,76500.0,0.0081,0.0,0.1,0.00081,62.4,100000.0,100062.4,77031.0,0.0212,3,0,0.0,0.0,expiry_settlement,paper
-2026-05-03T08:01:14.816364+00:00,BTC-3MAY26-76500-P,put,76500.0,0.0083,0.0,0.1,0.00083,65.05,100065.03,100130.09,78375.0,0.0338,3,0,0.0,0.0,expiry_settlement,paper
-2026-05-03T08:01:43.686124+00:00,BTC-3MAY26-76500-P,put,76500.0,0.0083,0.0,0.1,0.00083,65.05,100065.04,100130.09,78374.7,0.0338,3,0,0.0,0.0,expiry_settlement,paper
-2026-05-11T10:46:03.301996+00:00,BTC-5MAY26-77500-P,put,77500.0,0.0048,0.0,0.1,0.00048,38.92,100000.0,100038.92,81076.43,0.0018,1,0,0.0,0.0,expiry_settlement,paper
-2026-05-22T02:39:48.853804+00:00,BTC-13MAY26-80500-P,put,80500.0,0.0062,0.03782451354393213,0.1,-0.003162,-245.3,100000.0,99754.7,77566.1,0.2223,1,0,0.0,0.0,expiry_settlement,paper

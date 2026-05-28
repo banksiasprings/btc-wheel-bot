@@ -145,10 +145,10 @@ def _report_from_backtest() -> None:
 
         # Load data and create holdout env
         data_path = str(DATA_PATH) if DATA_PATH.exists() else None
-        prices, iv_rank = load_or_generate_data(data_path)
+        # load_or_generate_data returns (prices, iv_rank, raw_iv); pass data_path
+        # to the env so it also picks up real IV for option pricing.
         env = BTCOptionsEnv(
-            prices=prices,
-            iv_rank=iv_rank,
+            data_path=data_path,
             starting_equity=STARTING_EQUITY,
             split="test",
         )
