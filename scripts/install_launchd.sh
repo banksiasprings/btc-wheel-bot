@@ -66,12 +66,39 @@ cat > "$PLIST_DIR/com.wheelbot.tunnel.plist" <<EOF
 </plist>
 EOF
 
-# Load both agents now (don't wait for reboot)
-launchctl unload "$PLIST_DIR/com.wheelbot.api.plist" 2>/dev/null || true
-launchctl unload "$PLIST_DIR/com.wheelbot.tunnel.plist" 2>/dev/null || true
-launchctl load "$PLIST_DIR/com.wheelbot.api.plist"
-launchctl load "$PLIST_DIR/com.wheelbot.tunnel.plist"
+# ── Grid farm plist (runs grid_farm.py — writes grid_farm/status.json hourly) ──
+cat > "$PLIST_DIR/com.wheelbot.gridfarm.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wheelbot.gridfarm</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>grid_farm.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$REPO</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/wheelbot_gridfarm.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wheelbot_gridfarm.log</string>
+</dict>
+</plist>
+EOF
 
-echo "✅ Wheel Bot API and tunnel installed as login services."
-echo "   They will start automatically every time you log in."
-echo "   Logs: /tmp/wheelbot_api.log and /tmp/wheelbot_tunnel.log"
+# Load all agents now (don't wait for reboot)
+for svc in api tunnel gridfarm; do
+  launchctl unload "$PLIST_DIR/com.wheelbot.$svc.plist" 2>/dev/null || true
+  launchctl load "$PLIST_DIR/com.wheelbot.$svc.plist"
+done
+
+echo "✅ Grid-farm API, tunnel, and farm installed as login services."
+echo "   They start automatically every time you log in / reboot."
+echo "   Logs: /tmp/wheelbot_api.log, /tmp/wheelbot_tunnel.log, /tmp/wheelbot_gridfarm.log"

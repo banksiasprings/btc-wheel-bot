@@ -16,6 +16,7 @@ Run:  python3.11 -m uvicorn api:app --host 0.0.0.0 --port 8765
 
 from __future__ import annotations
 
+import csv
 import json
 import os
 from datetime import datetime, timezone
@@ -124,6 +125,7 @@ def _page() -> str:
         sign = "+" if up else ""
         warn = " ⚠️" if v.get("leverage", 1) > 1 else ""
         cards.append(f"""
+        <a href="/bot/{v['slug']}" style="text-decoration:none;color:inherit;display:block">
         <div style="background:#151a23;border-radius:14px;padding:14px 16px;margin:10px 0;border-left:4px solid {col}">
           <div style="display:flex;justify-content:space-between;align-items:baseline">
             <span style="font-size:17px;font-weight:600">{i}. {v['name']}{warn}</span>
@@ -134,8 +136,10 @@ def _page() -> str:
             <span style="color:{col};font-weight:600">{sign}${v['profit']:,.0f} ({sign}{v['return_pct']:.1f}%)</span>
             <span style="color:#8b95a5">worst dip −{v['max_drawdown_pct']:.1f}%</span>
           </div>
-          <div style="color:#6b7280;font-size:12px;margin-top:6px">{v['state']} · {v.get('trades',0)} trades</div>
-        </div>""")
+          <div style="display:flex;justify-content:space-between;color:#6b7280;font-size:12px;margin-top:6px">
+            <span>{v['state']} · {v.get('trades',0)} trades</span><span>see graph ›</span>
+          </div>
+        </div></a>""")
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta http-equiv=refresh content=60>
@@ -152,6 +156,100 @@ def _page() -> str:
 </body></html>"""
 
 
+def _equity_series(slug: str) -> list[float]:
+    """A variant's account-value history from grid_farm/<slug>/equity.csv."""
+    path = BASE_DIR / "grid_farm" / slug / "equity.csv"
+    ys: list[float] = []
+    try:
+        with open(path) as f:
+            for row in csv.DictReader(f):
+                try:
+                    ys.append(float(row["equity"]))
+                except (KeyError, ValueError):
+                    pass
+    except FileNotFoundError:
+        pass
+    return ys[-500:]   # cap points for a clean chart
+
+
+def _svg_chart(ys: list[float], start: float, up: bool) -> str:
+    if len(ys) < 2:
+        return ("<div style='color:#6b7280;padding:28px 0;text-align:center'>"
+                "Graph fills in as this bot trades (updates hourly). Check back soon.</div>")
+    w, h, pad = 620, 180, 12
+    lo, hi = min(min(ys), start), max(max(ys), start)
+    rng = (hi - lo) or 1.0
+    n = len(ys)
+    fx = lambda i: pad + i * (w - 2 * pad) / (n - 1)
+    fy = lambda v: pad + (h - 2 * pad) * (1 - (v - lo) / rng)
+    pts = " ".join(f"{fx(i):.1f},{fy(v):.1f}" for i, v in enumerate(ys))
+    col = "#22c55e" if up else "#ef4444"
+    base_y = fy(start)
+    return f"""<svg viewBox="0 0 {w} {h}" width="100%" style="background:#0f141c;border-radius:10px">
+      <line x1="{pad}" y1="{base_y:.1f}" x2="{w - pad}" y2="{base_y:.1f}" stroke="#3a4253" stroke-width="1" stroke-dasharray="4 4"/>
+      <polyline points="{pts}" fill="none" stroke="{col}" stroke-width="2.5"/>
+      <text x="{pad}" y="14" fill="#6b7280" font-size="11">${hi:,.0f}</text>
+      <text x="{pad}" y="{h - 5}" fill="#6b7280" font-size="11">${lo:,.0f}</text>
+      <text x="{w - pad}" y="{base_y - 5:.1f}" fill="#6b7280" font-size="11" text-anchor="end">start ${start:,.0f}</text>
+    </svg>"""
+
+
+def _bot_page(slug: str) -> str:
+    data = _load() or {}
+    v = next((x for x in data.get("variants", []) if x.get("slug") == slug), None)
+    if v is None:
+        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
+                f"<p>Bot '{slug}' not found.</p><a href='/' style='color:#60a5fa'>← back</a></body>")
+    start = data.get("paper_capital", 10_000.0)
+    ys = _equity_series(slug)
+    up = v["profit"] >= 0
+    col = "#22c55e" if up else "#ef4444"
+    sign = "+" if up else ""
+    brake = ("ON — steps aside (goes to cash) in a sustained downturn"
+             if v.get("trend_stop") else "OFF — always trading, even in a crash")
+    lev = ("none — your own money only (can't be wiped out)" if v.get("leverage", 1) == 1
+           else f"{v['leverage']:.0f}× borrowed — amplifies gains AND losses; can be wiped to $0")
+    warn = ("<div style='background:#3a1212;border:1px solid #ef4444;border-radius:10px;padding:10px 12px;"
+            "margin:10px 0;font-size:13px;color:#fca5a5'>⚠️ The 'for kicks' leveraged bot — it can "
+            "multiply gains, but a sharp crash can wipe it to $0. Not for real money.</div>"
+            if v.get("leverage", 1) > 1 else "")
+
+    def stat(label, value, c="#e6e6e6"):
+        return (f"<div style='background:#151a23;border-radius:10px;padding:10px 12px'>"
+                f"<div style='color:#8b95a5;font-size:12px'>{label}</div>"
+                f"<div style='font-size:17px;font-weight:600;color:{c}'>{value}</div></div>")
+
+    stats = "".join([
+        stat("Account now", f"${v['equity']:,.0f}"),
+        stat("Profit", f"{sign}${v['profit']:,.0f} ({sign}{v['return_pct']:.1f}%)", col),
+        stat("Worst dip", f"−{v['max_drawdown_pct']:.1f}%"),
+        stat("Trades", f"{v.get('trades', 0)}"),
+    ])
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content=60>
+<title>{v['name']} — BTC Grid Farm</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
+  <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← all bots</a>
+  <h2 style="margin:10px 0 2px">{v['name']}</h2>
+  <div style="color:#8b95a5;font-size:14px;margin-bottom:12px">{v['style']}</div>
+  {warn}
+  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value over time</div>
+  {_svg_chart(ys, start, up)}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
+  <div style="background:#151a23;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.7">
+    <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">HOW THIS BOT WORKS</div>
+    <div>• <b>Right now:</b> {v['state']}</div>
+    <div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>
+    <div>• <b>Safety brake:</b> {brake}</div>
+    <div>• <b>Borrowing:</b> {lev}</div>
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:14px">Pretend money on real Bitcoin prices.
+    The dashed line is the $10,000 starting point — the line above it means profit. Refreshes every minute.</p>
+</body></html>"""
+
+
 @app.get("/", include_in_schema=False)
 def index():
     return HTMLResponse(_page())
@@ -160,3 +258,8 @@ def index():
 @app.get("/widget", include_in_schema=False)
 def widget():
     return HTMLResponse(_page())
+
+
+@app.get("/bot/{slug}", include_in_schema=False)
+def bot_detail(slug: str):
+    return HTMLResponse(_bot_page(slug))
