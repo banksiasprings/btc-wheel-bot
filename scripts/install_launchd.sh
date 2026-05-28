@@ -121,8 +121,37 @@ cat > "$PLIST_DIR/com.wheelbot.dailysummary.plist" <<EOF
 </plist>
 EOF
 
+# ── Weekly Telegram scorecard digest (Sundays 5pm local — survival-first review) ──
+cat > "$PLIST_DIR/com.wheelbot.weeklysummary.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wheelbot.weeklysummary</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>telegram_weekly.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$REPO</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>0</integer>
+        <key>Hour</key><integer>17</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/wheelbot_weeklysummary.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/wheelbot_weeklysummary.log</string>
+</dict>
+</plist>
+EOF
+
 # Load all agents now (don't wait for reboot)
-for svc in api tunnel gridfarm dailysummary; do
+for svc in api tunnel gridfarm dailysummary weeklysummary; do
   launchctl unload "$PLIST_DIR/com.wheelbot.$svc.plist" 2>/dev/null || true
   launchctl load "$PLIST_DIR/com.wheelbot.$svc.plist"
 done
