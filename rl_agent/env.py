@@ -710,7 +710,11 @@ class BTCOptionsEnv(gym.Env):
         no_position = self._position is None
         self._days_since_trade += 1
 
-        if self.reward_mode == "sharpe":
+        if self.reward_mode == "max_roi":
+            reward = self._max_roi_reward(
+                premium_earned_this_step, curr_mtm, drawdown, traded_this_step
+            )
+        elif self.reward_mode == "sharpe":
             reward = self._differential_sharpe_reward(
                 premium_earned_this_step, curr_mtm, drawdown, traded_this_step
             )
@@ -744,6 +748,26 @@ class BTCOptionsEnv(gym.Env):
         )
 
         return self._obs(), reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    # Action masking (for MaskablePPO)
+    # ------------------------------------------------------------------
+
+    def action_masks(self) -> np.ndarray:
+        """
+        Returns boolean mask of valid actions.
+        - Can always hold
+        - Can only open (sell put/call) when no position
+        - Can only close when position exists
+        """
+        has_position = self._position is not None
+        return np.array([
+            True,               # 0: hold — always valid
+            not has_position,   # 1: sell put 0.20 — only if flat
+            not has_position,   # 2: sell put 0.25 — only if flat
+            not has_position,   # 3: sell call 0.20 — only if flat
+            has_position,       # 4: close — only if positioned
+        ], dtype=bool)
 
     # ------------------------------------------------------------------
     # Reward functions
@@ -815,6 +839,60 @@ class BTCOptionsEnv(gym.Env):
         trade_penalty = 0.03 if traded else 0.0
 
         return float(dsr + theta_bonus - dd_penalty - trade_penalty)
+
+    def _max_roi_reward(self, pnl_step, curr_mtm, drawdown, traded=False):
+        """
+        Max ROI + Survival reward — aligned with Steven's goal.
+
+        Philosophy: be as aggressive as possible, never get wiped out.
+        Kelly Criterion mentality — maximise return inside a survival envelope.
+
+        KEY DIFFERENCES from DSR:
+        - No tanh squashing: big wins get proportionally big rewards
+        - No upside volatility penalty: +8% is 8x better than +1%
+        - No Sharpe/Sortino: those dampen the aggression we want
+        - Stepped survival: gentle warning → strong pain → catastrophic
+
+        Components:
+          1. ROI signal (primary) — raw return fraction, uncapped
+          2. Theta bonus — reward for being positioned and earning decay
+          3. Trade cost — each trade costs money
+          4. Survival penalty — asymmetric, escalating, brutal near danger
+        """
+        # ── 1. ROI signal: raw return fraction, NO squashing ──
+        # More profit = more reward, linearly. This is the core driver.
+        # Scale by 10 so daily returns (~0.001) produce meaningful gradients.
+        roi_signal = 10.0 * pnl_step / max(curr_mtm, 1.0)
+
+        # ── 2. Theta bonus: reward for harvesting premium ──
+        # Only fires when positioned AND making money (theta working)
+        theta_bonus = 0.0
+        if self._position is not None and pnl_step > 0:
+            capital_at_risk = max(
+                self._position.strike * self._contracts * self.CONTRACT_SIZE * 0.20,
+                1.0,
+            )
+            # Linear, not tanh — let big theta days be big rewards
+            theta_bonus = 0.02 * pnl_step / capital_at_risk
+
+        # ── 3. Trade cost: each trade costs real money ──
+        trade_penalty = 0.03 if traded else 0.0
+
+        # ── 4. Survival penalty: stepped, asymmetric, brutal near danger ──
+        # 0-10% DD:  zero penalty — full aggression zone
+        # 10-20% DD: gentle ramp (0 → 0.1) — warning signal
+        # 20-30% DD: strong ramp (0 → 2.0) — cut risk NOW
+        # 30%+ DD:   catastrophic flat penalty — never be here
+        if drawdown > 0.30:
+            survival_penalty = 10.0
+        elif drawdown > 0.20:
+            survival_penalty = 2.0 * (drawdown - 0.20) / 0.10
+        elif drawdown > 0.10:
+            survival_penalty = 0.1 * (drawdown - 0.10) / 0.10
+        else:
+            survival_penalty = 0.0
+
+        return float(roi_signal + theta_bonus - trade_penalty - survival_penalty)
 
     # ------------------------------------------------------------------
     # Observation
