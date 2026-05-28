@@ -108,16 +108,36 @@ def farm_equity() -> dict:
 
 # ── Mobile dashboard page (server-rendered, no API key needed) ────────────────
 
-def _page() -> str:
+TAB_INFO = [
+    ("grid", "Grid", "Buy-low / sell-high on Bitcoin's wiggles — no direction bet."),
+    ("funding", "Funding", "Market-neutral — earns the funding fee, almost no price risk."),
+    ("longvol", "Long-Vol", "Profits from BIG moves; wins when the grid struggles. Simplified model."),
+]
+
+
+def _page(tab: str = "grid") -> str:
+    if tab not in ("grid", "funding", "longvol"):
+        tab = "grid"
     data = _load()
     if not data:
         return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
                 "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
-                "<h2>BTC Grid Farm</h2><p>The farm isn't running yet. Start it on the Mac:</p>"
+                "<h2>BTC Bot Farm</h2><p>The farm isn't running yet. Start it on the Mac:</p>"
                 "<pre>caffeinate -s python3.11 grid_farm.py</pre></body>")
-    rows = sorted(data.get("variants", []), key=lambda v: v["equity"], reverse=True)
+    allv = data.get("variants", [])
+    rows = sorted([v for v in allv if v.get("type", "grid") == tab],
+                  key=lambda v: v["equity"], reverse=True)
     btc = data.get("btc_price", 0)
     updated = data.get("updated", "")[:16].replace("T", " ")
+    tabs = ""
+    for key, label, _ in TAB_INFO:
+        cnt = sum(1 for v in allv if v.get("type", "grid") == key)
+        on = key == tab
+        st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
+        tabs += (f"<a href='/?tab={key}' style='flex:1;text-align:center;padding:9px 4px;"
+                 f"border-radius:9px;text-decoration:none;font-size:13.5px;font-weight:600;{st}'>{label} ({cnt})</a>")
+    tab_bar = f"<div style='display:flex;gap:7px;margin:8px 0 10px'>{tabs}</div>"
+    intro = next(t[2] for t in TAB_INFO if t[0] == tab)
     cards = []
     for i, v in enumerate(rows, 1):
         up = v["profit"] >= 0
@@ -146,17 +166,19 @@ def _page() -> str:
         </div></a>""")
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<meta http-equiv=refresh content=60>
-<title>BTC Grid Farm</title></head>
+<meta http-equiv=refresh content="60;url=/?tab={tab}">
+<title>BTC Bot Farm</title></head>
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
-  <h2 style="margin:0 0 2px">📈 BTC Grid Farm</h2>
-  <div style="color:#8b95a5;font-size:14px;margin-bottom:14px">
-    Bitcoin ${btc:,.0f} · {len(rows)} bots · pretend money · updated {updated} UTC
+  <h2 style="margin:0 0 2px">📈 BTC Bot Farm</h2>
+  <div style="color:#8b95a5;font-size:14px;margin-bottom:8px">
+    Bitcoin ${btc:,.0f} · {len(allv)} bots · pretend money · updated {updated} UTC
   </div>
+  {tab_bar}
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{intro}</div>
   {''.join(cards)}
   <p style="color:#6b7280;font-size:12px;margin-top:16px">
-    Each bot started with $10,000 (pretend). Bots make money in up <i>and</i> down markets by
-    trading Bitcoin's wiggles. "Worst dip" = biggest temporary drop. Refreshes every minute.</p>
+    Each bot started with $10,000 (pretend). "Worst dip" = biggest temporary drop.
+    Tap a bot for its graph. Refreshes every minute.</p>
 </body></html>"""
 
 
@@ -255,6 +277,7 @@ def _bot_page(slug: str) -> str:
     up = v["profit"] >= 0
     col = "#22c55e" if up else "#ef4444"
     sign = "+" if up else ""
+    t = v.get("type", "grid")
     brake = ("ON — steps aside (goes to cash) in a sustained downturn"
              if v.get("trend_stop") else "OFF — always trading, even in a crash")
     lev = ("none — your own money only (can't be wiped out)" if v.get("leverage", 1) == 1
@@ -262,7 +285,24 @@ def _bot_page(slug: str) -> str:
     warn = ("<div style='background:#3a1212;border:1px solid #ef4444;border-radius:10px;padding:10px 12px;"
             "margin:10px 0;font-size:13px;color:#fca5a5'>⚠️ The 'for kicks' leveraged bot — it can "
             "multiply gains, but a sharp crash can wipe it to $0. Not for real money.</div>"
-            if v.get("leverage", 1) > 1 else "")
+            if (t == "grid" and v.get("leverage", 1) > 1) else "")
+    if t == "funding":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> holds Bitcoin + a matching short, so price moves cancel out.</div>"
+                 "<div>• <b>Earns:</b> the funding fee traders pay each hour (positive most of the time).</div>"
+                 "<div>• <b>Risk:</b> tiny — no price bet; only dips if funding turns negative for a stretch.</div>")
+    elif t == "longvol":
+        extra = "Double-sized (2×). " if v.get("leverage", 1) > 1 else ""
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> a 'long volatility' bet — profits when Bitcoin moves MORE than priced for.</div>"
+                 f"<div>• <b>Wins:</b> in sharp crashes & violent swings, when the grid bots struggle. {extra}</div>"
+                 "<div>• <b>Bleeds:</b> slowly in calm, quiet markets.</div>"
+                 "<div style='color:#9aa4b2;margin-top:4px'>Note: a simplified model, not a full options simulation.</div>")
+    else:
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 f"<div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>"
+                 f"<div>• <b>Safety brake:</b> {brake}</div>"
+                 f"<div>• <b>Borrowing:</b> {lev}</div>")
 
     def stat(label, value, c="#e6e6e6"):
         return (f"<div style='background:#151a23;border-radius:10px;padding:10px 12px'>"
@@ -305,10 +345,7 @@ def _bot_page(slug: str) -> str:
   {ann_block}
   <div style="background:#151a23;border-radius:10px;padding:12px 14px;font-size:14px;line-height:1.7;margin-top:14px">
     <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">HOW THIS BOT WORKS</div>
-    <div>• <b>Right now:</b> {v['state']}</div>
-    <div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>
-    <div>• <b>Safety brake:</b> {brake}</div>
-    <div>• <b>Borrowing:</b> {lev}</div>
+    {works}
   </div>
   <p style="color:#6b7280;font-size:12px;margin-top:14px">Pretend money on real Bitcoin prices.
     The dashed line is the $10,000 starting point — the line above it means profit. Refreshes every minute.</p>
@@ -316,8 +353,8 @@ def _bot_page(slug: str) -> str:
 
 
 @app.get("/", include_in_schema=False)
-def index():
-    return HTMLResponse(_page())
+def index(tab: str = "grid"):
+    return HTMLResponse(_page(tab))
 
 
 @app.get("/widget", include_in_schema=False)

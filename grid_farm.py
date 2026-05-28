@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "strategies"))
 
 from grid_bot import GridBot                      # noqa: E402
+from income_bots import FundingBot, LongVolBot    # noqa: E402
 
 FARM = ROOT / "grid_farm"
 STATUS = FARM / "status.json"
@@ -48,6 +49,16 @@ VARIANTS = [
      "spacing": 0.02, "max_lots": 20,  "ma_hours": 0,   "leverage": 1.0, "borrow_rate": 0.0},
     {"slug": "degen",      "name": "Degen ⚠️", "style": "3x leverage, FOR KICKS — can blow up to $0",
      "spacing": 0.05, "max_lots": 20,  "ma_hours": 0,   "leverage": 3.0, "borrow_rate": 0.15},
+    # ── Funding: market-neutral carry (collect funding, no price risk) ──
+    {"slug": "funding",       "name": "Funding Carry", "type": "funding",
+     "style": "market-neutral — collects funding, no price bet", "positive_only": False},
+    {"slug": "funding-smart", "name": "Funding (smart)", "type": "funding",
+     "style": "market-neutral — only collects when funding pays", "positive_only": True},
+    # ── Long-Vol: the grid's complement — wins on big moves / crashes ──
+    {"slug": "longvol",    "name": "Long-Vol",    "type": "longvol", "leverage": 1.0,
+     "style": "big-moves bot — profits from chaos, bleeds when calm"},
+    {"slug": "longvol-2x", "name": "Long-Vol 2×", "type": "longvol", "leverage": 2.0,
+     "style": "big-moves, double size — bigger swings"},
 ]
 
 
@@ -91,8 +102,14 @@ def warmup_closes(rest, hours):
 
 
 def make_bot(v):
+    t = v.get("type", "grid")
+    if t == "funding":
+        return FundingBot(capital=PAPER_CAPITAL, positive_only=v.get("positive_only", False))
+    if t == "longvol":
+        return LongVolBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
     return GridBot(spacing=v["spacing"], max_lots=v["max_lots"], ma_hours=v["ma_hours"],
-                   capital=PAPER_CAPITAL, leverage=v["leverage"], borrow_rate=v["borrow_rate"])
+                   capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
+                   borrow_rate=v.get("borrow_rate", 0.0))
 
 
 def load_variant(v, rest):
@@ -104,7 +121,7 @@ def load_variant(v, rest):
         st = json.loads(sf.read_text())
         bot.load_dict(st["bot"])
         return bot, st.get("peak", PAPER_CAPITAL), st.get("started", _now())
-    if v["ma_hours"]:
+    if v.get("ma_hours"):                        # only grid variants warm up an MA
         closes = warmup_closes(rest, v["ma_hours"])
         if closes:
             bot.warmup(closes)
@@ -116,18 +133,55 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def save_variant(v, bot, peak, started, price):
+def fetch_funding_1h(rest):
+    """Perpetual funding rate for one hour (8h rate / 8)."""
+    try:
+        t = rest._get("ticker", {"instrument_name": INSTRUMENT})
+        return float(t.get("funding_8h", 0.0)) / 8.0
+    except Exception as exc:
+        log(f"funding fetch failed ({exc})")
+        return 0.0
+
+
+def fetch_dvol(rest):
+    """Current BTC implied-vol index (DVOL, %). Used by the long-vol bots."""
+    try:
+        end = int(time.time())
+        r = rest._get("get_volatility_index_data", {
+            "currency": "BTC", "resolution": "3600",
+            "start_timestamp": (end - 6 * 3600) * 1000, "end_timestamp": end * 1000})
+        data = r.get("data", [])
+        if data:
+            return float(data[-1][4])              # last candle close = current DVOL
+    except Exception as exc:
+        log(f"dvol fetch failed ({exc})")
+    return 60.0                                     # fallback implied vol
+
+
+def _state_label(v, bot):
+    t = v.get("type", "grid")
+    if getattr(bot, "liquidated", False):
+        return "💀 liquidated ($0)"
+    if t == "funding":
+        return "collecting funding (market-neutral)"
+    if t == "longvol":
+        return "long volatility (waiting for big moves)"
+    if bot.btc_held() > 1e-9:
+        return f"holding {bot.btc_held():.4f} BTC"
+    return "in cash (waiting)"
+
+
+def save_variant(v, bot, peak, started, price, eq, btc, cash):
     d = FARM / v["slug"]
     (d / "state.json").write_text(json.dumps(
         {"bot": bot.to_dict(), "peak": peak, "started": started}))
-    eq = bot.equity(price)
     ec = d / "equity.csv"
     header = not ec.exists()
     with open(ec, "a") as f:
         if header:
             f.write("timestamp,btc_price,equity,btc_held,cash,trades,liquidated\n")
-        f.write(f"{_now()},{price:.2f},{eq:.2f},{bot.btc_held():.6f},"
-                f"{bot.cash:.2f},{bot.trades},{int(bot.liquidated)}\n")
+        f.write(f"{_now()},{price:.2f},{eq:.2f},{btc:.6f},{cash:.2f},"
+                f"{getattr(bot, 'trades', 0)},{int(getattr(bot, 'liquidated', False))}\n")
 
 
 def step_all(state, rest):
@@ -135,44 +189,44 @@ def step_all(state, rest):
     if not price or price <= 0:
         log("price fetch failed — skipping this step")
         return
+    funding_1h = fetch_funding_1h(rest)
+    dvol = fetch_dvol(rest)
     rows = []
     for v in VARIANTS:
+        t = v.get("type", "grid")
         bot, peak, started = state[v["slug"]]
-        orders = bot.on_close(price, low=low)
-        eq = bot.equity(price)
+        if t == "funding":
+            bot.step(funding_1h)
+        elif t == "longvol":
+            bot.step(price, dvol)
+        else:
+            for side, p, qty in bot.on_close(price, low=low):
+                if side == "LIQUIDATED":
+                    log(f"  {v['name']}: 💀 LIQUIDATED at ${p:,.0f}")
+        eq = bot.equity(price) if t == "grid" else bot.equity_now()
         peak = max(peak, eq)
         state[v["slug"]] = (bot, peak, started)
-        save_variant(v, bot, peak, started, price)
-
-        for side, p, qty in orders:
-            if side in ("LIQUIDATED",):
-                log(f"  {v['name']}: 💀 LIQUIDATED at ${p:,.0f}")
-
-        if bot.liquidated:
-            cur = "💀 liquidated ($0)"
-        elif bot.btc_held() > 1e-9:
-            cur = f"holding {bot.btc_held():.4f} BTC"
-        else:
-            cur = "in cash (waiting)"
+        btc = bot.btc_held() if t == "grid" else 0.0
+        cash = bot.cash if t == "grid" else eq
+        save_variant(v, bot, peak, started, price, eq, btc, cash)
         days = max(0.0, (datetime.now(timezone.utc)
                          - datetime.fromisoformat(started)).total_seconds() / 86400)
         rows.append({
-            "slug": v["slug"], "name": v["name"], "style": v["style"],
-            "spacing_pct": v["spacing"] * 100, "max_lots": v["max_lots"],
-            "trend_stop": v["ma_hours"] > 0, "leverage": v["leverage"],
+            "slug": v["slug"], "name": v["name"], "style": v["style"], "type": t,
+            "spacing_pct": v.get("spacing", 0) * 100, "max_lots": v.get("max_lots"),
+            "trend_stop": v.get("ma_hours", 0) > 0, "leverage": v.get("leverage", 1.0),
             "equity": round(eq, 2), "profit": round(eq - PAPER_CAPITAL, 2),
             "return_pct": round((eq / PAPER_CAPITAL - 1) * 100, 2),
             "max_drawdown_pct": round((peak - eq) / peak * 100 if peak > 0 else 0, 2),
-            "trades": bot.trades, "btc_held": round(bot.btc_held(), 6),
-            "cash": round(bot.cash, 2), "state": cur, "days_running": round(days, 2),
+            "trades": getattr(bot, "trades", 0), "btc_held": round(btc, 6),
+            "cash": round(cash, 2), "state": _state_label(v, bot), "days_running": round(days, 2),
         })
     STATUS.write_text(json.dumps({
         "updated": _now(), "btc_price": round(price, 2),
         "paper_capital": PAPER_CAPITAL, "variants": rows,
     }, indent=2))
     leader = max(rows, key=lambda r: r["equity"])
-    log(f"BTC ${price:,.0f} | leader {leader['name']} ${leader['equity']:,.0f} "
-        f"({leader['return_pct']:+.1f}%)")
+    log(f"BTC ${price:,.0f} | {len(rows)} bots | leader {leader['name']} ${leader['equity']:,.0f}")
 
 
 def main():
