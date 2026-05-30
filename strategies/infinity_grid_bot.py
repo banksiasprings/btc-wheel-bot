@@ -1,7 +1,7 @@
 """
 infinity_grid_bot.py — open-top grid with hysteretic trend-stop and infinity tail.
 
-Subclasses GridBot. Three behavioural changes vs the parent:
+Subclasses GridBot. Four behavioural changes vs the parent:
 
   1. The buy ladder has NO upper cap — as price walks up, the grid keeps adding
      rungs and banking each step's spread. The lower bound is a hard price floor
@@ -9,16 +9,28 @@ Subclasses GridBot. Three behavioural changes vs the parent:
   2. Every sell retains `infinity_tail_pct` of the lot as long-term BTC inventory
      — the "infinity tail". This is a structural long position that walks up the
      ladder with price; fixed-range grids forfeit this entirely.
-  3. The trend-stop is hysteretic: 6 hourly bars below the 30-day MA to fire,
-     12 hourly bars above MA + 1×ATR_14d to re-arm, then a 3-day cooldown before
+  3. The slow trend-stop is hysteretic: 2 hourly bars below the 30-day MA to fire,
+     4 hourly bars above MA + 1×ATR_14d to re-arm, then a 3-day cooldown before
      trading resumes. The parent fires on a single bar — the documented whipsaw
-     source.
+     source. (v2 rework: was 6/12, shrunk to 2/4 — the 6/12 hysteresis cost
+     15-24pp of drawdown vs Balanced in Gate 3 v1; the 2/4 pair filters single-bar
+     wicks while reacting within ~2h of a confirmed MA break.)
+  4. A fast secondary trigger fires when a single hourly bar drops more than
+     3 × ATR_14d in price. This bypasses the slow hysteresis, immediately
+     liquidates the active grid lots, holds the infinity tail (Steven Q1), and
+     enters COOLDOWN with a shorter timer (1.5 days vs 3 for the slow path).
+     Defends the only failure mode v1 left fully exposed: a March-2020-style
+     flash crash where the slow MA hasn't caught up before the active grid is
+     buying into the falling knife.
 
 Steven's locked decisions on the three Gate 2 open questions:
   Q1: HOLD the infinity tail through a trend-stop COOLDOWN. Liquidate only the
-      active grid lots; carry the structural tail through.
+      active grid lots; carry the structural tail through. (Applies to BOTH the
+      slow and the fast trigger paths.)
   Q2: After COOLDOWN ends, anchor the new lower price floor at MA + 0.5×ATR.
-  Q3: `infinity_tail_pct` sweep range is {15, 30, 50, 70}% (no 0% degenerate).
+  Q3: `infinity_tail_pct` sweep range is {5, 10, 15, 20}% in v2 (was {15-70}%
+     in v1; the data said lower-tail = more survival, so the v2 sweep pushes the
+     range down rather than up).
 
 This file is FOR BACKTEST ONLY at Gate 3. It is NOT wired into grid_farm.py
 VARIANTS — that's a Gate 4 deploy decision.
@@ -42,10 +54,12 @@ class InfinityGridBot(GridBot):
     MAX_LOTS = 20
     MA_HOURS = 720                  # 30-day trend-stop
     LOWER_FLOOR_FRAC = 0.5          # buy floor = 50% of initial anchor
-    MIN_BELOW_MA_BARS = 6           # 6-bar hysteresis on stop trigger
-    MIN_ABOVE_MA_BARS = 12          # 12-bar hysteresis on re-arm
+    MIN_BELOW_MA_BARS = 2           # v2: 2-bar hysteresis on stop trigger (was 6)
+    MIN_ABOVE_MA_BARS = 4           # v2: 4-bar hysteresis on re-arm (was 12)
     REENTRY_BUFFER_ATR = 1.0        # re-arm threshold = MA + 1.0 × ATR_14d
     RESTART_COOLDOWN_DAYS = 3       # cooldown after re-arm before trading resumes
+    FAST_STOP_ATR_MULT = 3.0        # v2: fire fast trigger on a single-bar drop > 3×ATR_14d
+    FAST_STOP_COOLDOWN_DAYS = 1.5   # v2: shorter cooldown after fast trigger (half of slow)
     INFINITY_TAIL_PCT = 0.30        # fraction of each sold lot retained as tail
     ATR_PERIOD_DAYS = 14            # ATR lookback window
     MAX_DRAWDOWN_HALT_PCT = 0.25    # hard halt if equity dips this far below peak
@@ -57,6 +71,8 @@ class InfinityGridBot(GridBot):
                  min_above_ma_bars=MIN_ABOVE_MA_BARS,
                  reentry_buffer_atr=REENTRY_BUFFER_ATR,
                  restart_cooldown_days=RESTART_COOLDOWN_DAYS,
+                 fast_stop_atr_mult=FAST_STOP_ATR_MULT,
+                 fast_stop_cooldown_days=FAST_STOP_COOLDOWN_DAYS,
                  infinity_tail_pct=INFINITY_TAIL_PCT,
                  atr_period_days=ATR_PERIOD_DAYS,
                  max_drawdown_halt_pct=MAX_DRAWDOWN_HALT_PCT,
@@ -70,6 +86,8 @@ class InfinityGridBot(GridBot):
         self.min_above_ma_bars = min_above_ma_bars
         self.reentry_buffer_atr = reentry_buffer_atr
         self.restart_cooldown_hours = int(restart_cooldown_days * 24)
+        self.fast_stop_atr_mult = fast_stop_atr_mult
+        self.fast_stop_cooldown_hours = max(1, int(fast_stop_cooldown_days * 24))
         self.infinity_tail_pct = infinity_tail_pct
         self.atr_period_hours = max(1, int(atr_period_days * 24))
         self.max_drawdown_halt_pct = max_drawdown_halt_pct
@@ -131,11 +149,19 @@ class InfinityGridBot(GridBot):
     def on_close(self, price, low=None):
         """Process one new closing price. Returns a list of executed events.
 
-        Event tuples: ("BUY"/"SELL"/"SELL_STOP"/"TAIL_RETAIN"/"SELL_HALT"
-                       /"REENTRY"/"HALTED_DRAWDOWN", price_or_pct, qty_or_pct)
+        Event tuples: ("BUY"/"SELL"/"SELL_STOP"/"SELL_FAST"/"TAIL_RETAIN"
+                       /"SELL_HALT"/"REENTRY"/"HALTED_DRAWDOWN",
+                       price_or_pct, qty_or_pct)
+
+        SELL_FAST events come from the v2 fast secondary trigger: a single-bar
+        price drop > 3×ATR_14d. Bypasses the slow MA hysteresis and goes
+        RUNNING → COOLDOWN with the shorter fast_stop cooldown.
         """
-        # 0. ATR update first (uses prior close)
+        # 0. Capture the prior close BEFORE the ATR update overwrites it — the
+        #    fast trigger needs the directional drop on this bar.
+        prev_close = self.last_close
         self._update_atr(price)
+        bar_drop = (prev_close - price) if prev_close is not None else 0.0
 
         # 1. Initialize anchor + floor on the very first bar.
         if self.initial_anchor_price is None:
@@ -206,7 +232,22 @@ class InfinityGridBot(GridBot):
             # Fall through so this bar can still place a buy if a rung is crossed.
             return [("REENTRY", round(price, 2), round(self.lower_price_floor, 2))]
 
-        # RUNNING: check trend-stop with hysteresis.
+        # RUNNING: v2 fast trigger FIRST — a single-bar drop > fast_stop_atr_mult ×
+        # ATR_14d is a flash-crash signature the slow MA hysteresis can't catch.
+        # Bypass hysteresis, liquidate active grid lots, HOLD the tail per Q1,
+        # transition straight to COOLDOWN with the shorter timer.
+        if (self.atr_value is not None
+                and bar_drop > self.fast_stop_atr_mult * self.atr_value):
+            orders = self._liquidate_grid(price, "SELL_FAST")
+            orders.append(("FAST_STOP", round(price, 2), round(bar_drop, 2)))
+            self.state = "COOLDOWN"
+            self.cooldown_bars_remaining = self.fast_stop_cooldown_hours
+            self.bars_below_ma = 0
+            self.bars_above_ma = 0
+            self.r_prev = self._rung(price)
+            return orders
+
+        # RUNNING: check the slow trend-stop with hysteresis.
         if ma is not None:
             if price < ma:
                 self.bars_below_ma += 1

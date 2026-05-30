@@ -1,15 +1,146 @@
 # Gate 3 Report — Infinity Grid Bot
 
-*Phase 1, Strategy 1 of the BSF Bot R&D Program · 2026-05-30*
+*Phase 1, Strategy 1 of the BSF Bot R&D Program · v1 2026-05-30 · v2 rework 2026-05-31*
 
 > Spec at [`bsf-research-briefs/specs/01-infinity-grid-spec.md`](~/Documents/bsf-research-briefs/specs/01-infinity-grid-spec.md).
 > Implementation at `strategies/infinity_grid_bot.py`; harness at `strategies/infinity_grid_backtest.py`.
 > Raw artifacts in [`./01-infinity-grid-data/`](./01-infinity-grid-data/).
-> Topic branch: `feat/infinity-grid-gate3` (NOT merged to main; the bot is NOT added to `grid_farm.py` `VARIANTS` — that is a Gate 4 decision).
+> Topic branch: `feat/infinity-grid-gate3` (NOT merged to main; the bot is NOT added to `grid_farm.py` `VARIANTS`).
 
 ---
 
-## TL;DR — Verdict: **MIXED, leaning FAIL → recommend rework before Gate 4**
+## Rework v2 — 2026-05-31 — Verdict: **FAIL → recommend PARK**
+
+The v1 report (below from §2 onward, kept for context) concluded MIXED and proposed three reworks: shrink the slow trend-stop hysteresis from 6/12 to 2/4 bars, add a fast 3×ATR single-bar secondary trigger, and push the sweep corners outward (lower tail, wider spacing). Steven approved all three. This section records what happened.
+
+### What changed in v2
+
+1. **Slow trend-stop hysteresis: 6/12 → 2/4 bars.** Fires after 2 hourly bars below the MA (was 6); re-arms after 4 hourly bars above MA + 1×ATR (was 12). Same MA window (default 30 d), same 1×ATR re-entry buffer.
+2. **New fast secondary trigger.** A single-bar price drop greater than `3 × ATR_14d` (default; configurable as `fast_stop_atr_mult`) immediately liquidates the active grid lots, holds the infinity tail per Q1, and transitions RUNNING → COOLDOWN with a 1.5-day timer (half the slow path's 3 days). Bypasses the slow MA hysteresis entirely. Emits `SELL_FAST` + `FAST_STOP` events.
+3. **Re-sweep corners pushed outward.** `tail_pct ∈ {5, 10, 15, 20}%` (was {15-70}%; v1 data said lower-tail = more survival). `spacing ∈ {3, 5, 7}%` (was {1-3}%; v1 winning config sat at the 3% corner). `MA ∈ {20, 30, 45}d` unchanged. **4 × 3 × 3 = 36 configs × 4 regimes = 144 runs.**
+
+### v2 scorecard
+
+| Scorecard criterion | Threshold | v2 result | v1 result | Pass? |
+|---|---|---|---|---|
+| Walk-forward mean APR | ≥ 15 % | **52 %** (median 14 %) | 174 % (median 46 %) | ✅ |
+| Walk-forward mean Sharpe | ≥ 1.0 | **1.32** | 1.66 | ✅ |
+| Walk-forward worst-fold DD | < 25 % | **25.65 %** (2021-01→07) | 26.53 % | ❌ by 0.65 pp |
+| **Holdout APR** (2024-09 → 2026-05) | ≥ 15 % | **6.1 %** | 21.0 % | ❌ by 9 pp |
+| **Holdout DD** | < 25 % | **25.15 %** | 25.49 % | ❌ by 0.15 pp |
+| **Holdout Sharpe** | ≥ 1.0 | **0.39** | 0.85 | ❌ |
+| Bot self-halt fires in holdout | informational | **Yes** | Yes | ⚠️ |
+| Forced liquidations (exchange) | = 0 | 0 | 0 | ✅ |
+| Capacity ≥ $50 k | yes | identical at $10k/$50k/$250k | identical | ✅ |
+| **Per-regime survival** (no halt in any of bull/bear/crab/crash) | n/a — quality signal | **36 / 36 configs (100 %)** | 2 / 48 (4 %) | ✅ huge gain |
+| **Infinity-specific:** beat best fixed-range grid by ≥ +3 %/yr **and no worse DD** | yes | DD bigger than Balanced in every regime | DD bigger than Balanced in every regime | ❌ |
+| **Infinity-specific:** beat BuyHold (APR ≥ 0 OR DD ≤ ½ BHO's) | yes | wins in bear + crash; loses in bull + crab | wins in bear + crash; loses in bull + crab | ⚠️ MIXED (unchanged) |
+
+**v2 winner config:** `tail_pct=20 %`, `spacing=3.0 %`, `MA=30 d`. Mean APR 111.5 % across the four regime windows, worst-regime DD 19.7 %.
+
+### What the v2 reworks did and didn't do
+
+**They worked in the intended direction:**
+- **Per-regime survival went from 4 % to 100 %.** Every one of the 36 swept configs cleared all four regime windows without tripping the 25 % drawdown halt. The fragility v1 flagged is gone *at the per-regime level*.
+- **Per-regime drawdowns shrank.** Median walk-forward DD dropped from 13.9 % (v1) to 8.5 % (v2). The worst single-window drawdown in the head-to-head table dropped from 24.3 % to 19.7 % in bull, from 20.3 % to 10.6 % in bear, from 15.3 % to 7.2 % in crab.
+- **The fast trigger fires frequently and demonstrably defends.** Across the 18 walk-forward folds, the fast trigger fired an average of **28.4 times per 6-month fold** (vs the slow trigger averaging 0.7 times). In the holdout it fired **60 times in 21 months** — roughly once every 10 days. This proves the fast trigger is doing real work; it is not vestigial code.
+
+**They did not — and this is the killer — solve the underlying problem:**
+- **The holdout window is meaningfully worse than v1.** APR dropped from 21.0 % to 6.1 %, Sharpe from 0.85 to 0.39, drawdown stayed at 25 %, and the halt still fires. The bot still cannot survive 2024-09 → 2026-05 cleanly.
+- **The fast trigger over-fires in normal volatility.** 60 fast stops in the holdout is not protection — it's stop-flip-stop cycling. Each fast stop liquidates the grid, waits 1.5 days, then reanchors and starts trading again. The cumulative cost is the lost edge during 90 idle days plus the round-trip fees on every liquidate/rebuild.
+- **The bot still cannot beat `GridBot(Balanced)` on the drawdown criterion in any regime.** Balanced's drawdowns (0.2 %, 0.4 %, 0.7 %, 1.1 %) remain an order of magnitude smaller than Infinity v2's (7.2 %, 10.6 %, 0.5 %, 19.7 %), and Balanced beats Infinity on APR in 3 of 4 regimes. The Infinity-specific scorecard criterion #1 fails just as it did in v1.
+- **APR fell more than DD did.** The v2 reworks traded return for safety, but the trade was *not 1:1* — the safety gain didn't recover the lost return.
+
+### Head-to-head, v2
+
+**Annualised return by regime (chosen v2 config: tail=20 %, spacing=3 %, MA=30 d):**
+
+| Regime | Balanced | Infinity v2 | BuyHold |
+|---|---|---|---|
+| bull  |  +74.2 % | +441.7 % | +2 583.1 % |
+| bear  |  +23.2 % |    −8.4 % | −75.3 % |
+| crab  |  +23.2 % |    +5.2 % | +68.9 % |
+| crash |  +27.8 % |    +7.7 % | −83.1 % |
+
+**Max drawdown by regime:**
+
+| Regime | Balanced | Infinity v2 | BuyHold |
+|---|---|---|---|
+| bull  | 1.1 % | 19.7 % | 28.8 % |
+| bear  | 0.4 % | 10.6 % | 77.2 % |
+| crab  | 0.2 % |  7.2 % | 21.7 % |
+| crash | 0.7 % |  0.5 % | 54.9 % |
+
+**Sharpe by regime:**
+
+| Regime | Balanced | Infinity v2 | BuyHold |
+|---|---|---|---|
+| bull  | 13.22 |  3.47 |  4.30 |
+| bear  |  8.97 | −1.20 | −1.78 |
+| crab  |  9.31 |  0.67 |  1.48 |
+| crash |  7.09 |  3.76 | −0.40 |
+
+Infinity v2 beats BuyHold on APR in bear + crash (the survival-first value prop) and beats Balanced on APR in bull only. **Balanced wins 3/4 on APR and 4/4 on drawdown.** The v2 reworks did not change this picture in any regime — Balanced remains structurally hard to beat.
+
+### v2 walk-forward, all folds at the chosen config
+
+| Test window | APR % | DD % | Sharpe | Trades | Slow-stops | Fast-stops |
+|---|---|---|---|---|---|---|
+| 2020-01 → 07          |  +33.1 | 11.7 |  1.34 | 150 | 0 | 33 |
+| 2020-04 → 10          |  +51.6 | 11.8 |  1.89 | 140 | 1 | 30 |
+| 2020-07 → 2021-01     | +168.1 |  6.4 |  4.72 | 138 | 0 | 38 |
+| 2020-10 → 2021-04     | +449.8 | 19.7 |  3.45 | 254 | 1 | 49 |
+| 2021-01 → 07          |   +5.8 | **25.7** |  0.34 | 171 | 3 | 27 |
+| 2021-04 → 10          |   +7.0 | 10.8 |  0.53 | 108 | 2 | 23 |
+| 2021-07 → 2022-01     |   +8.4 | 24.3 |  0.41 | 166 | 1 | 26 |
+| 2021-10 → 2022-04     |   −3.2 | 19.6 | −0.09 | 100 | 0 | 18 |
+| 2022-01 → 07          |   −7.7 |  6.2 | −2.21 |  20 | 0 | 12 |
+| 2022-04 → 10          |   −3.2 |  5.0 | −0.57 |  48 | 2 | 15 |
+| 2022-07 → 2023-01     |   −6.1 |  7.1 | −0.79 |  56 | 2 | 22 |
+| 2022-10 → 2023-04     |  +14.0 |  2.8 |  2.73 |  41 | 0 | 30 |
+| 2023-01 → 07          |  +15.6 |  4.2 |  2.10 |  62 | 0 | 30 |
+| 2023-04 → 10          |   +1.6 |  4.2 |  0.36 |  46 | 0 | 20 |
+| 2023-07 → 2024-01     |  +24.3 |  2.7 |  3.41 |  82 | 0 | 35 |
+| 2023-10 → 2024-04     | +106.3 | 10.0 |  3.72 | 152 | 0 | 45 |
+| 2024-01 → 07          |  +18.0 |  8.4 |  1.16 | 114 | 0 | 30 |
+| **HOLDOUT 2024-09 → 2026-05** | **+6.1** | **25.2** | **0.39** | 189 | 0 | **60** |
+
+The holdout's 60 fast stops is the smoking gun. The fast trigger fires once per ~10 days on average in the held-out window. That cadence is not "flash crash protection"; it is the bot being mechanically dragged into and out of position by 2024-2025 BTC's normal hourly volatility, which produces frequent single-bar moves above 3 × ATR_14d. Each cycle pays round-trip fees and sits idle for 1.5 days. The cumulative drag is the holdout's 6 % APR — well below the 15 % bar — and the residual drawdown comes from the few legitimate flash events the bot DID need to catch.
+
+### v2 final verdict — **FAIL → PARK the strategy**
+
+Per the Gate 2 spec §7.6 fail criteria, this is a "Kill it" outcome by the letter — the strategy fails the drawdown bar (worst-fold and holdout) AND fails to beat the best fixed-range cousin on Sharpe (Infinity holdout 0.39 vs Balanced regime-mean ~9.5).
+
+By Steven's own standard ("if MIXED again, be honest about that — we don't need to keep grinding indefinitely"), the right call is to **park the strategy** and file it under "tested, didn't work, here's why."
+
+**Why it didn't work** (concise diagnosis from two rounds of empirical testing):
+1. The infinity-tail concept *works* but the accumulated tail bleeds heavily on the way down, undoing the bull-leg gains.
+2. The slow MA trend-stop *works* in slow bears but is structurally too late to catch flash events.
+3. The fast 3×ATR trigger *catches* flash events but cannot distinguish them from normal high-vol bars, so it fires constantly and bleeds the bot via stop-flip-stop cycles.
+4. There is no parameter regime in the swept space that simultaneously satisfies (drawdown < 25 %, APR ≥ 15 %, Sharpe ≥ 1.0) in the held-out 2024-09 → 2026-05 window.
+5. `GridBot(Balanced)` — 5 % spacing / 20 lots / 15-day fast MA — is a simpler, smaller-drawdown, comparable-return strategy in every regime tested. Replacing Balanced with Infinity is a net regression on the survival-first scorecard.
+
+**What we keep from this work:**
+- `InfinityGridBot` source stays on disk (under `feat/infinity-grid-gate3`, not merged) as documentation of the failed design and for future reference if someone wants to revisit the idea with a different trigger model (e.g. funding-rate-gated tail accumulation, vol-of-vol regime classifier, etc.).
+- The backtest harness `infinity_grid_backtest.py` is reusable for any Phase-1 strategy that needs multi-regime walk-forward.
+- The negative finding for `GridBot(Balanced)` is positive: the Phase-1 effort can stop trying to beat Balanced with grid variants and turn to the *other* edges in the R&D program (funding-dynamic, basis-arb, vol-of-vol, regime-router).
+
+### Open follow-ups (not blocking the PARK decision)
+
+If Steven later wants to revive the idea, here's what was *not* tried because they would require additional architecture beyond the spec:
+- **Vol-of-vol-gated fast trigger.** Only arm the fast trigger when ATR-of-ATR exceeds a threshold (i.e. when vol is *changing*, not just high). Would filter the false-positive fast stops that killed the holdout.
+- **Funding-rate gate on the infinity tail.** Set `infinity_tail_pct = 0` when 8-hour funding < −0.01 % for 24 h, per Gate 2 spec open Q #8. Couples to the funding bots.
+- **Asymmetric spacing.** Sell at +3 % rungs, buy at −1 % rungs. Wins the long-bias capture without the round-trip fee drag that kills tighter spacings. Substantively a different strategy.
+
+None of these are "small tweaks." Each is a Gate 1 → Gate 2 → Gate 3 cycle in its own right.
+
+---
+
+## v1 report (2026-05-30) — kept below for context
+
+> *The TL;DR table immediately below is the v1 verdict. The v2 section above supersedes it. Everything from "What was tested" onward is the v1 report unchanged, so the v2 analysis remains comparable point-by-point.*
+
+## TL;DR (v1) — Verdict: **MIXED, leaning FAIL → recommend rework before Gate 4**
 
 | Scorecard criterion | Threshold | Result | Pass? |
 |---|---|---|---|

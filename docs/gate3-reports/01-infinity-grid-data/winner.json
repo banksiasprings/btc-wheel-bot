@@ -1,10 +1,10 @@
 {
-  "tail_pct": 0.15,
+  "tail_pct": 0.2,
   "spacing_pct": 0.03,
-  "ma_days": 45,
-  "score": 15.24200717651076,
-  "worst_dd": 24.271080020308606,
-  "mean_apr": 373.6035076928815,
-  "mean_sharpe": 1.0330446210580542,
+  "ma_days": 30,
+  "score": 7.372714673515554,
+  "worst_dd": 19.67611165952437,
+  "mean_apr": 111.53218511913354,
+  "mean_sharpe": 1.6787557757744973,
   "halted_any": false
 }

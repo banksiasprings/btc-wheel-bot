@@ -68,15 +68,15 @@ REGIMES = [
     ("crash",      "2020-03-01",  "2020-04-15",  "Covid -50% in 2 days then v-bottom — the flash-crash failure mode"),
 ]
 
-# ── parameter sweep (Steven's Gate 3 grid) ───────────────────────────────────
+# ── parameter sweep (Gate 3 v2 — corners pushed outward per Steven 2026-05-31) ──
 
-TAIL_PCT_SWEEP    = [0.15, 0.30, 0.50, 0.70]      # Q3 locked range
-SPACING_SWEEP     = [0.010, 0.015, 0.020, 0.030]  # task brief
-MA_DAYS_SWEEP     = [20, 30, 45]                  # task brief
-# 4 × 4 × 3 = 48 configs × 4 regimes = 192 runs.
+TAIL_PCT_SWEEP    = [0.05, 0.10, 0.15, 0.20]      # v2: was {0.15-0.70}, data said lower-tail = more survival
+SPACING_SWEEP     = [0.030, 0.050, 0.070]         # v2: was {0.010-0.030}, winning v1 config sat at 0.030 (corner)
+MA_DAYS_SWEEP     = [20, 30, 45]                  # unchanged from v1
+# v2: 4 × 3 × 3 = 36 configs × 4 regimes = 144 runs (v1 was 192).
 
-QUICK_TAIL_SWEEP    = [0.15, 0.30, 0.50, 0.70]    # preserved at full res per task brief
-QUICK_SPACING_SWEEP = [0.015, 0.030]
+QUICK_TAIL_SWEEP    = [0.05, 0.10, 0.15, 0.20]
+QUICK_SPACING_SWEEP = [0.030, 0.050]
 QUICK_MA_SWEEP      = [30]
 
 
@@ -147,14 +147,15 @@ class RunResult:
     sharpe: float
     sortino: float
     trades: int
-    stop_events: int
+    stop_events: int        # slow MA-hysteresis trigger fires
+    fast_stop_events: int   # v2 single-bar > 3×ATR fast trigger fires
     halt_event: bool
     end_state: str
     tail_btc: float
     days: float
 
     @classmethod
-    def from_equity(cls, eq, capital, days, trades, stops, halted, end_state, tail):
+    def from_equity(cls, eq, capital, days, trades, stops, fast_stops, halted, end_state, tail):
         return cls(
             final_equity=float(eq[-1]),
             return_pct=float(eq[-1] / capital - 1.0) * 100.0,
@@ -164,6 +165,7 @@ class RunResult:
             sortino=sortino(eq),
             trades=int(trades),
             stop_events=int(stops),
+            fast_stop_events=int(fast_stops),
             halt_event=bool(halted),
             end_state=str(end_state),
             tail_btc=float(tail),
@@ -192,18 +194,21 @@ def run_infinity(df: pd.DataFrame, *,
 
     eq = np.empty(len(closes))
     stops = 0
+    fast_stops = 0
     halted = False
     for i, (c, lo) in enumerate(zip(closes, lows)):
         events = bot.on_close(c, low=lo)
         for tag, _, _ in events:
             if tag == "SELL_STOP":
                 stops += 1
+            elif tag == "FAST_STOP":
+                fast_stops += 1
             elif tag == "HALTED_DRAWDOWN":
                 halted = True
         eq[i] = bot.equity(c)
 
     days = len(closes) / 24.0
-    return RunResult.from_equity(eq, capital, days, bot.trades, stops,
+    return RunResult.from_equity(eq, capital, days, bot.trades, stops, fast_stops,
                                  halted, bot.state, bot.infinity_tail_qty)
 
 
@@ -227,7 +232,7 @@ def run_balanced(df: pd.DataFrame, capital: float = DEFAULT_CAPITAL,
                 stops += 1
         eq[i] = bot.equity(c)
     days = len(closes) / 24.0
-    return RunResult.from_equity(eq, capital, days, bot.trades, stops,
+    return RunResult.from_equity(eq, capital, days, bot.trades, stops, 0,
                                  False, "RUNNING", 0.0)
 
 
@@ -242,7 +247,7 @@ def run_buyhold(df: pd.DataFrame, capital: float = DEFAULT_CAPITAL,
         bot.step(c)
         eq[i] = bot.equity(c)
     days = len(closes) / 24.0
-    return RunResult.from_equity(eq, capital, days, bot.trades, 0,
+    return RunResult.from_equity(eq, capital, days, bot.trades, 0, 0,
                                  False, "HOLD", bot.btc)
 
 
@@ -284,6 +289,7 @@ def run_sweep(tail_sweep, spacing_sweep, ma_sweep, warmup_bars: int = 720):
                         "sortino": res.sortino,
                         "trades": res.trades,
                         "stop_events": res.stop_events,
+                        "fast_stop_events": res.fast_stop_events,
                         "halted": res.halt_event,
                         "end_state": res.end_state,
                         "tail_btc": res.tail_btc,
@@ -371,6 +377,7 @@ def run_walkforward(*, tail_pct, spacing, ma_days,
             "sharpe":     res.sharpe,
             "trades":     res.trades,
             "stop_events":res.stop_events,
+            "fast_stop_events": res.fast_stop_events,
             "halted":     res.halt_event,
             "end_state":  res.end_state,
         })
@@ -389,6 +396,7 @@ def run_walkforward(*, tail_pct, spacing, ma_days,
         "sharpe":     res_h.sharpe,
         "trades":     res_h.trades,
         "stop_events":res_h.stop_events,
+        "fast_stop_events": res_h.fast_stop_events,
         "halted":     res_h.halt_event,
         "end_state":  res_h.end_state,
     })
@@ -481,7 +489,7 @@ def main(quick=False):
     for _, row in wf_df.iterrows():
         print(f"     {row['fold_start']:>20s} → {row['fold_end']:<12s}  "
               f"APR={row['apr_pct']:+6.1f}%  DD={row['max_dd_pct']:5.1f}%  Sharpe={row['sharpe']:5.2f}  "
-              f"trades={int(row['trades']):4d}  stops={int(row['stop_events']):2d}")
+              f"trades={int(row['trades']):4d}  slow-stops={int(row['stop_events']):2d}  fast-stops={int(row['fast_stop_events']):2d}")
 
     print("\n[4/5] Head-to-head: Infinity vs Balanced vs BuyHold...")
     cmp_df = run_comparison(tail_pct=winner['tail_pct'],
