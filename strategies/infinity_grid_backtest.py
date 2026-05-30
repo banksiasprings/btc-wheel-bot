@@ -178,14 +178,23 @@ class RunResult:
 def run_infinity(df: pd.DataFrame, *,
                  tail_pct: float, spacing: float, ma_days: int,
                  capital: float = DEFAULT_CAPITAL,
-                 warmup_bars: int = 0) -> RunResult:
+                 warmup_bars: int = 0,
+                 max_drawdown_halt_pct: float = 0.25,
+                 fast_stop_atr_mult=None) -> RunResult:
     """One backtest run. Same fill model as grid_farm.py: hourly close-fed
-    on_close(close, low=low). FEE is intrinsic to the bot (0.0006)."""
+    on_close(close, low=low). FEE is intrinsic to the bot (0.0006).
+
+    `max_drawdown_halt_pct=1.0` effectively disables the drawdown halt at
+    leverage=1 (the bot's equity cannot drop 100% from peak without holdings
+    going to zero, which doesn't happen with unleveraged spot).
+    """
     closes = df["close"].values
     lows = df["low"].values
     bot = InfinityGridBot(
         spacing=spacing, max_lots=20, ma_hours=ma_days * 24,
         infinity_tail_pct=tail_pct, capital=capital, fee=FEE,
+        max_drawdown_halt_pct=max_drawdown_halt_pct,
+        fast_stop_atr_mult=fast_stop_atr_mult,
     )
     if warmup_bars > 0:
         bot.warmup(closes[:warmup_bars].tolist())
@@ -450,6 +459,145 @@ def run_capacity(*, tail_pct, spacing, ma_days, warmup_bars=720):
     return pd.DataFrame(rows)
 
 
+# ── halt-only sweep (v3, 2026-05-31) ─────────────────────────────────────────
+# Lock the bot's mechanism + config at v1's bull-capture winner and sweep ONLY
+# the drawdown-halt threshold. v1 winner config: tail=15%, spacing=3%, MA=45d.
+# Hysteresis 6/12 (v1), no fast trigger (v2 add was rejected). The variant is
+# being framed as a specialist bull-leg-capture bot, not a master-scorecard
+# survivor — the halt setting trades the "hard stop wipeout protection" against
+# the "stop-flip-stop bleed" the bot can't survive in v1 form.
+
+V3_TAIL_PCT  = 0.15
+V3_SPACING   = 0.030
+V3_MA_DAYS   = 45
+V3_HALT_SWEEP = [
+    ("halt-25",  0.25),
+    ("halt-35",  0.35),
+    ("halt-50",  0.50),
+    ("halt-75",  0.75),
+    ("no-halt",  1.00),   # leverage=1 + spot → equity can't drop 100% → halt never fires
+]
+
+
+def run_halt_sweep(warmup_bars: int = 720):
+    """For each halt setting, run the 4 regime windows + the full walk-forward
+    + the 2024-09 → 2026-05 holdout. Comparison vs Balanced/BuyHold is the same
+    across halt settings (computed once at the bottom)."""
+    regime_rows = []
+    wf_rows = []
+    for halt_name, halt_pct in V3_HALT_SWEEP:
+        print(f"  halt {halt_name} (max_dd_halt={halt_pct})...")
+        # per regime
+        for regime_name, start, end, _why in REGIMES:
+            warm_start = (pd.Timestamp(start) - pd.Timedelta(hours=warmup_bars)).strftime("%Y-%m-%d %H:%M:%S")
+            df = load_hourly(warm_start, end)
+            warm_used = (df["ts"] < pd.Timestamp(start)).sum()
+            res = run_infinity(df, tail_pct=V3_TAIL_PCT, spacing=V3_SPACING, ma_days=V3_MA_DAYS,
+                               warmup_bars=int(warm_used),
+                               max_drawdown_halt_pct=halt_pct)
+            regime_rows.append({
+                "halt": halt_name, "halt_pct": halt_pct,
+                "regime": regime_name,
+                "apr_pct": res.apr_pct, "return_pct": res.return_pct,
+                "max_dd_pct": res.max_dd_pct, "sharpe": res.sharpe,
+                "trades": res.trades, "stop_events": res.stop_events,
+                "halted": res.halt_event, "end_state": res.end_state,
+                "tail_btc": res.tail_btc,
+            })
+        # walk-forward folds (the run_walkforward function already plumbs through to run_infinity,
+        # but we need to thread the halt setting through — quickest is to call it inline here).
+        from pandas.tseries.offsets import DateOffset
+        folds = []
+        start_test = pd.Timestamp("2019-01-01") + pd.Timedelta(days=365)
+        holdout = pd.Timestamp("2024-09-01")
+        while start_test + pd.DateOffset(months=6) <= holdout:
+            folds.append((start_test, start_test + pd.DateOffset(months=6)))
+            start_test += pd.DateOffset(months=3)
+        for ts, te in folds:
+            warm_start = ts - pd.Timedelta(days=30)
+            df = load_hourly(warm_start.strftime("%Y-%m-%d"), te.strftime("%Y-%m-%d"))
+            warm_used = (df["ts"] < ts).sum()
+            res = run_infinity(df, tail_pct=V3_TAIL_PCT, spacing=V3_SPACING, ma_days=V3_MA_DAYS,
+                               warmup_bars=int(warm_used),
+                               max_drawdown_halt_pct=halt_pct)
+            wf_rows.append({
+                "halt": halt_name, "halt_pct": halt_pct,
+                "fold_start": ts.strftime("%Y-%m-%d"),
+                "fold_end":   te.strftime("%Y-%m-%d"),
+                "apr_pct":    res.apr_pct, "return_pct": res.return_pct,
+                "max_dd_pct": res.max_dd_pct, "sharpe": res.sharpe,
+                "trades":     res.trades, "stop_events": res.stop_events,
+                "halted":     res.halt_event, "end_state": res.end_state,
+            })
+        # holdout
+        df_h = load_hourly("2024-08-01", "2026-05-22")
+        warm_used = (df_h["ts"] < holdout).sum()
+        res_h = run_infinity(df_h, tail_pct=V3_TAIL_PCT, spacing=V3_SPACING, ma_days=V3_MA_DAYS,
+                             warmup_bars=int(warm_used),
+                             max_drawdown_halt_pct=halt_pct)
+        wf_rows.append({
+            "halt": halt_name, "halt_pct": halt_pct,
+            "fold_start": "HOLDOUT 2024-09-01",
+            "fold_end":   "2026-05-22",
+            "apr_pct":    res_h.apr_pct, "return_pct": res_h.return_pct,
+            "max_dd_pct": res_h.max_dd_pct, "sharpe": res_h.sharpe,
+            "trades":     res_h.trades, "stop_events": res_h.stop_events,
+            "halted":     res_h.halt_event, "end_state": res_h.end_state,
+        })
+    return pd.DataFrame(regime_rows), pd.DataFrame(wf_rows)
+
+
+def halt_sweep_main():
+    OUTDIR.mkdir(parents=True, exist_ok=True)
+    print("\n=== INFINITY GRID — GATE 3 v3 (DRAWDOWN-HALT SWEEP) ===")
+    print(f"Locked: tail={V3_TAIL_PCT:.0%}, spacing={V3_SPACING*100:.1f}%, MA={V3_MA_DAYS}d, "
+          f"hysteresis 6/12, no fast trigger.")
+    print(f"Sweeping max_drawdown_halt_pct ∈ {[h[1] for h in V3_HALT_SWEEP]}.\n")
+    t0 = time.time()
+    regime_df, wf_df = run_halt_sweep()
+    regime_df.to_csv(OUTDIR / "v3_halt_regime_results.csv", index=False)
+    wf_df.to_csv(OUTDIR / "v3_halt_walkforward_results.csv", index=False)
+
+    # comparison baselines — computed once at the locked config (halt doesn't affect them)
+    print("\n  Comparison: Balanced + BuyHold per regime (constant across halt settings)...")
+    cmp_df = run_comparison(tail_pct=V3_TAIL_PCT, spacing=V3_SPACING, ma_days=V3_MA_DAYS)
+    cmp_df.to_csv(OUTDIR / "v3_halt_comparison_results.csv", index=False)
+
+    # print compact summary
+    print("\n=== PER-REGIME (APR % | DD %, halt-fire count after each row) ===")
+    apr_p = regime_df.pivot(index="halt", columns="regime", values="apr_pct").reindex([h[0] for h in V3_HALT_SWEEP])
+    dd_p  = regime_df.pivot(index="halt", columns="regime", values="max_dd_pct").reindex([h[0] for h in V3_HALT_SWEEP])
+    halt_cnt = regime_df[regime_df["halted"]].groupby("halt").size().reindex([h[0] for h in V3_HALT_SWEEP]).fillna(0).astype(int)
+    print("\n-- APR % --")
+    print(apr_p.round(1).to_string())
+    print("\n-- MaxDD % --")
+    print(dd_p.round(1).to_string())
+    print("\n-- Halt fires (across 4 regimes) --")
+    print(halt_cnt.to_string())
+
+    print("\n=== WALK-FORWARD SUMMARY ===")
+    tuning = wf_df[~wf_df["fold_start"].str.contains("HOLDOUT")]
+    holdout = wf_df[wf_df["fold_start"].str.contains("HOLDOUT")]
+    summary = tuning.groupby("halt").agg(
+        wf_mean_apr=("apr_pct", "mean"),
+        wf_median_apr=("apr_pct", "median"),
+        wf_worst_dd=("max_dd_pct", "max"),
+        wf_mean_sharpe=("sharpe", "mean"),
+        wf_halts=("halted", "sum"),
+    ).reindex([h[0] for h in V3_HALT_SWEEP])
+    hold = holdout.set_index("halt")[["apr_pct", "max_dd_pct", "sharpe", "halted"]].reindex([h[0] for h in V3_HALT_SWEEP])
+    hold.columns = ["holdout_apr", "holdout_dd", "holdout_sharpe", "holdout_halted"]
+    out = pd.concat([summary, hold], axis=1)
+    print(out.round(2).to_string())
+
+    print("\n=== COMPARISON BASELINES (constant across halt settings) ===")
+    cmp_pivot = cmp_df.pivot(index="regime", columns="bot", values="apr_pct").reindex([r[0] for r in REGIMES])
+    print("APR % by bot and regime:")
+    print(cmp_pivot.to_string(float_format=lambda x: f"{x:+7.1f}"))
+
+    print(f"\nDONE in {time.time() - t0:.1f}s. Artifacts under {OUTDIR}/v3_halt_*.csv")
+
+
 # ── orchestrator ─────────────────────────────────────────────────────────────
 
 def main(quick=False):
@@ -515,5 +663,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true",
                         help="smaller sweep for iteration (skips full grid)")
+    parser.add_argument("--halt-sweep", action="store_true",
+                        help="Gate 3 v3: lock config at v1 winner, sweep ONLY max_drawdown_halt_pct")
     args = parser.parse_args()
-    main(quick=args.quick)
+    if args.halt_sweep:
+        halt_sweep_main()
+    else:
+        main(quick=args.quick)

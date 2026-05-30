@@ -1,11 +1,132 @@
 # Gate 3 Report — Infinity Grid Bot
 
-*Phase 1, Strategy 1 of the BSF Bot R&D Program · v1 2026-05-30 · v2 rework 2026-05-31*
+*Phase 1, Strategy 1 of the BSF Bot R&D Program · v1 2026-05-30 · v2 rework 2026-05-31 · v3 halt-sweep 2026-05-31*
 
 > Spec at [`bsf-research-briefs/specs/01-infinity-grid-spec.md`](~/Documents/bsf-research-briefs/specs/01-infinity-grid-spec.md).
 > Implementation at `strategies/infinity_grid_bot.py`; harness at `strategies/infinity_grid_backtest.py`.
 > Raw artifacts in [`./01-infinity-grid-data/`](./01-infinity-grid-data/).
-> Topic branch: `feat/infinity-grid-gate3` (NOT merged to main; the bot is NOT added to `grid_farm.py` `VARIANTS`).
+> Topic branch: `feat/infinity-grid-gate3` (NOT merged to main; the bot is NOT yet wired into `grid_farm.py` `VARIANTS` — v3 proposes the entry, Steven signs off).
+
+---
+
+## Rework v3 — drawdown-halt sweep — 2026-05-31 — Verdict: **SHIP as specialist, halt = 50 %**
+
+Steven picked option B after v2 came back FAIL: rather than retire the strategy, ship the v1 mechanism + config as a **specialist bull-leg-capture bot** in the paper farm, and run one more sweep over just the drawdown-halt threshold to find the right "bleed but don't wipe" setting.
+
+This is **not** "the bot passed the master scorecard." It's "the bot is a useful specialist in a portfolio of bots." The acceptance criterion changed.
+
+### What was locked vs swept
+
+Locked at the v1 winning config (the bull-capture one — NOT v2):
+- `tail_pct = 15 %`, `spacing = 3.0 %`, `MA = 45 d`
+- Slow trend-stop hysteresis **6 / 12 bars** (v1 values, not v2's 2/4)
+- **No fast 3 × ATR secondary trigger** (the v2 add over-fired in the holdout — disabled, plumbing kept in source for future research)
+- Q1 (hold tail through COOLDOWN) and Q2 (re-anchor at MA + 0.5 × ATR) unchanged
+
+Swept: `max_drawdown_halt_pct ∈ {0.25, 0.35, 0.50, 0.75, 1.0}` (1.0 = effectively no halt at leverage 1).
+
+### The headline finding
+
+**The drawdown halt makes zero difference inside any single regime window.** Bull DD 24.3 %, bear DD 20.3 %, crab DD 15.3 %, crash DD 0 % — none of the regime windows individually exceeds 25 % drawdown at the locked config, so the per-regime numbers are *identical* across all five halt settings. The halt only matters when **regimes string together** in long-horizon backtests (walk-forward + holdout), where drawdowns compound through cycle transitions.
+
+### Per-regime APR % (constant across all halt settings)
+
+| Regime | Balanced | Infinity v3 | BuyHold |
+|---|---|---|---|
+| bull  | +74.2 % | **+1 477.8 %** | +2 583.1 % |
+| bear  | +23.2 % |    −17.3 % | −75.3 % |
+| crab  | +23.2 % |    +34.0 % | +68.9 % |
+| crash | +27.8 % |     +0.0 % | −83.1 % |
+
+### Per-regime DD % (constant across all halt settings)
+
+| Regime | Balanced | Infinity v3 | BuyHold |
+|---|---|---|---|
+| bull  | 1.1 % | 24.3 % | 28.8 % |
+| bear  | 0.4 % | 20.3 % | 77.2 % |
+| crab  | 0.2 % | 15.3 % | 21.7 % |
+| crash | 0.7 % |  0.0 % | 54.9 % |
+
+### The halt-sweep result — where it matters
+
+Walk-forward (17 tuning folds at v1 winning config, 2019-2024) + the held-out 2024-09 → 2026-05 window.
+
+| Halt setting | WF mean APR | WF median APR | WF worst DD | WF mean Sharpe | WF halts | Holdout APR | Holdout DD | Holdout Sharpe | Holdout halted |
+|---|---|---|---|---|---|---|---|---|---|
+| **0.25** (current) |  174 % | 45 % | 26.5 % | 1.66 | **2 / 17** | 21.0 % | 25.5 % | 0.85 | **YES** |
+| **0.35** | 170 % | 45 % | 37.9 % | 1.63 | **1 / 17** | 11.7 % | 35.0 % | 0.53 | **YES** |
+| **0.50** | 170 % | 45 % | 45.5 % | 1.63 | **0 / 17** | **20.8 %** | 37.8 % | 0.76 | NO |
+| **0.75** | 170 % | 45 % | 45.5 % | 1.63 | **0 / 17** | 20.8 % | 37.8 % | 0.76 | NO |
+| **1.00** (no halt) | 170 % | 45 % | 45.5 % | 1.63 | **0 / 17** | 20.8 % | 37.8 % | 0.76 | NO |
+
+**Read:**
+- **halt=0.25** *fires* in 2 walk-forward folds + the holdout. Each fire is a *terminal* event — the bot stops and refuses to re-enter until manual reset. The holdout APR of 21 % is what was banked before the halt fired; the bot then sat dead in cash through the rest of the rally. **Operationally this is a paper-farm pain point — Steven would wake up to a "DEAD" bot every few months.**
+- **halt=0.35** is the worst of both worlds: it still halts (1 fold + holdout), and because the bot bled an extra 10 pp before stopping, the holdout APR drops to 11.7 % — *worse* than the tighter halt. Loose-but-still-fires is the wrong place to land.
+- **halt=0.50, 0.75, 1.00** are *identical* in our test data because the worst observed long-horizon drawdown is 45.5 %, which never trips a 50 % halt. The bot bleeds through cycle transitions, recovers in the next leg, and the holdout APR returns to 20.8 % (essentially identical to halt-25 *without* the terminal kill).
+
+### Recommendation: **`max_drawdown_halt_pct = 0.50`**
+
+The framing: this bot is **a specialist, not a survivor**. Its job is to capture bull-leg vol + long-bias drift — that's the +1 478 % APR in the 2020-10 → 2021-04 window, the +449 % in 2020-10 → 2021-04 walk-forward fold, the +339 % in 2023-10 → 2024-04. It deliberately gives back 30-45 % through cycle transitions because that is the cost of staying loaded for the next bull leg.
+
+A 25 % halt **conflicts with the specialist thesis** — it kills the bot exactly when its strategy says "hold and recover." A 50 % halt is a *true catastrophic backstop*: nothing we've seen in 7 years of BTC history (covid, FTX, LUNA, 2022 cycle low, the 2024 yen-carry wobble) hits it, but if BTC dropped 60 % in a week without recovering, it would stop the bleed. That's the right place for an emergency brake — not in the middle of normal cycle drawdowns.
+
+**halt = 0.75 or no-halt is too loose** — identical to halt-50 in our data but gives up the catastrophic backstop for free. Cheap insurance, take it.
+
+**halt = 0.35 is strictly worse than 0.25** — both still kill the bot, but the wider halt lets it bleed further first. Don't pick a value where the halt fires occasionally; pick one where it fires only in genuine wipeout scenarios.
+
+### Proposed `VARIANTS` entry (paste-ready for `grid_farm.py`)
+
+Not added yet — Steven signs off after seeing this. When approved, append the following dict to the `VARIANTS` list in `grid_farm.py:42-99` and add the two parallel branches (one in `make_bot()`, one in `step_all()`) per the Gate 2 spec §5.5:
+
+```python
+{"slug": "infinity-bull",  "name": "Infinity (bull specialist)",
+ "type": "infinity_grid", "tab": "grid",
+ "style": "open-top grid + 45d trend filter — bull-leg specialist, expects 30-45% dips",
+ "spacing": 0.030, "max_lots": 20, "ma_hours": 1080,
+ "leverage": 1.0, "borrow_rate": 0.0,
+ "infinity_tail_pct": 0.15, "reentry_buffer_atr": 1.0,
+ "restart_cooldown_days": 3, "min_below_ma_bars": 6, "min_above_ma_bars": 12,
+ "lower_price_floor_frac": 0.5, "max_drawdown_halt_pct": 0.50},
+```
+
+Required parallel changes Steven will need to apply at deploy time (none of these belong in this report's branch; they go in the same commit that adds the dict):
+
+1. `grid_farm.py` import: add `from infinity_grid_bot import InfinityGridBot` next to the existing `grid_bot` import.
+2. `make_bot()`: new branch `elif t == "infinity_grid":` constructing `InfinityGridBot(...)` from the variant kwargs.
+3. `step_all()` dispatch: new branch `elif t == "infinity_grid":` calling `for ev in bot.on_close(price, low=low): ...` (mirror the existing `t == "grid"` branch).
+4. `_state_label()`: add cases for `RUNNING / STOPPED / COOLDOWN / HALTED_DRAWDOWN` returning plain-English labels for the dashboard ("running grid (tail 0.0123 BTC)", "trend-stopped (in cash)", "cooldown — waiting for re-anchor", "HALTED — manual reset needed").
+5. `min_capital()` bucket: same value as `type="grid"` (≈$300 at defaults).
+6. `api.py` per-bot page: a `works` block in `_bot_page()` explaining the specialist framing in plain English ("This bot is built for bull legs; expect bigger dips than the other grids; the trend stop pulls it to cash on a confirmed downtrend").
+7. `telegram_weekly.py`: no label change needed if `tab: "grid"` keeps it grouped with the cousins.
+
+**Tab placement:** `tab: "grid"` — keeps the head-to-head visible against Balanced and the other six grid variants. The spec recommended a separate "infinity" tab, but the bake-off is more useful when this bot sits next to the cousins it's meant to complement (not replace).
+
+### Expected behavior in the paper farm (so Steven knows what "normal" looks like)
+
+- **In a bull leg (≥1 month of rising MA):** bot trades aggressively, accumulates the infinity tail, expected to outperform Balanced by multiples of APR.
+- **In a confirmed bear leg:** slow trend-stop fires after ~6 h below the MA, active grid liquidates to cash, infinity tail (~15 % of accumulated BTC) rides the bear down. Expect 10–20 % drawdown during the bear leg itself.
+- **Across a cycle transition:** drawdown can reach 25–45 %. **This is by design — do not panic-restart.** The bot recovers in the next leg.
+- **If drawdown hits 50 %:** the halt fires, bot liquidates everything (including tail) to cash, refuses to trade until manual reset. **This should happen approximately never** in normal markets — if it fires, something is genuinely wrong (BTC has done something it has never historically done) and a human needs to look.
+- **Cadence of trend-stop fires (slow MA):** roughly 0.5–1.0 per month based on walk-forward. Each fire is a normal operational event, not a halt.
+
+### What changed in the source
+
+Compared to v2 head-of-branch:
+- `infinity_grid_bot.py`: class defaults reverted to v1 — `MIN_BELOW_MA_BARS = 6`, `MIN_ABOVE_MA_BARS = 12`, `FAST_STOP_ATR_MULT = None` (fast trigger disabled by default; plumbing kept so the v2 prototype is recoverable as an opt-in).
+- `infinity_grid_backtest.py`: new `halt_sweep_main()` + `--halt-sweep` CLI flag. `run_infinity()` extended with `max_drawdown_halt_pct` and `fast_stop_atr_mult` kwargs. The original 144-run v2 parameter sweep code remains intact for reproducibility of the prior verdict.
+
+### Artifacts new in v3
+
+Under `docs/gate3-reports/01-infinity-grid-data/`:
+- `v3_halt_regime_results.csv` — per (halt × regime) 4 × 5 = 20 rows.
+- `v3_halt_walkforward_results.csv` — per (halt × fold) 18 × 5 = 90 rows.
+- `v3_halt_comparison_results.csv` — Balanced + BuyHold + Infinity at the locked config (same as v1's `comparison_results.csv` since the halt doesn't affect single-regime numbers).
+
+Reproduce with:
+```
+cd ~/Documents/btc-wheel-bot/strategies
+python3.11 infinity_grid_backtest.py --halt-sweep   # ~18 s
+```
 
 ---
 
