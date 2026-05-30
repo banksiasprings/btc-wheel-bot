@@ -29,6 +29,16 @@ logs/
 data/
 backtest_results.png
 
+# Exception: the raw-data schema doc is a source artifact, not a data file.
+# Re-include the root `data/raw/` path narrowly so git can descend just far
+# enough to track the README — `legacy_options/*/data/` and every other
+# nested data/ directory stays ignored.
+!/data/
+/data/*
+!/data/raw/
+/data/raw/*
+!/data/raw/README.md
+
 # Optimizer outputs
 sweep_sensitivity.png
 evolution_progress.png
