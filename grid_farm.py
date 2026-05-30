@@ -32,6 +32,7 @@ from more_bots import (BuyHoldBot, DCABot, DCASmartBot,     # noqa: E402
                        RebalanceBot, ShortVolBot, TrendBot)
 from convex_bots import (BackspreadBot, GammaScalpBot,      # noqa: E402
                          TailHedgeBot)
+from basis_arb_bot import BasisArbBot             # noqa: E402
 
 FARM = ROOT / "grid_farm"
 STATUS = FARM / "status.json"
@@ -161,6 +162,10 @@ def min_capital(v):
     if t in ("grid", "infinity_grid"):
         raw = v["max_lots"] * MIN_ORDER_USD / v.get("leverage", 1.0)
         return int(math.ceil(raw / 50.0) * 50)
+    if t == "basis_arb":
+        # Two legs simultaneously funded ⇒ higher minimum than the carry bots.
+        # Spec §6.4 calls for ~$800; matches the conservative two-leg model.
+        return 800
     if t == "funding":
         return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
     if t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
@@ -172,6 +177,23 @@ def min_capital(v):
 
 def make_bot(v):
     t = v.get("type", "grid")
+    if t == "basis_arb":
+        return BasisArbBot(
+            capital=PAPER_CAPITAL,
+            lookback_hours=v.get("lookback_hours", 168),
+            entry_z_threshold=v.get("entry_z_threshold", 2.0),
+            exit_z_threshold=v.get("exit_z_threshold", 0.25),
+            max_position_btc=v.get("max_position_btc", 0.10),
+            position_sizing_z_cap=v.get("position_sizing_z_cap", 4.0),
+            min_position_btc=v.get("min_position_btc", 0.002),
+            max_hours_in_position=v.get("max_hours_in_position", 168),
+            perp_margin_frac=v.get("perp_margin_frac", 1.0),
+            halt_drawdown_pct=v.get("halt_drawdown_pct", 0.10),
+            dislocation_guard_z=v.get("dislocation_guard_z", 5.0),
+            funding_gate=v.get("funding_gate", True),
+            slip_spot_bps=v.get("slip_spot_bps", 5.0),
+            slip_perp_bps=v.get("slip_perp_bps", 3.0),
+        )
     if t == "funding":
         return FundingBot(capital=PAPER_CAPITAL, positive_only=v.get("positive_only", False),
                           leverage=v.get("leverage", 1.0))
@@ -250,6 +272,23 @@ def load_variant(v, rest):
             bot.warmup(closes)
             log(f"{v['name']}: warmed up from {len(closes)}h of history "
                 f"(daily closes: {len(bot.daily_closes)})")
+    elif v.get("type") == "basis_arb":            # seed basis_q from paired prices
+        # Both legs share Deribit's chart-data endpoint for the warmup: the
+        # perp leg uses BTC-PERPETUAL closes (the same numbers fetch_close_low
+        # would return) and the spot leg uses the Deribit BTC composite index
+        # via fetch_spot_index. We approximate the historical index with the
+        # perp's `cost / volume` (which is close enough for warmup statistics;
+        # the live step() uses real index_price each hour going forward).
+        hours = v.get("lookback_hours", 168)
+        perp_closes = warmup_closes(rest, hours)
+        if perp_closes:
+            # Warmup uses perp as the spot proxy — basis ≈ 0 across warmup,
+            # which is the *correct* prior for the bot before live data shows
+            # the actual drift. The first 168 live steps will displace the
+            # synthetic priors out of the rolling deque.
+            bot.warmup(perp_closes, perp_closes)
+            log(f"{v['name']}: warmed up from {len(perp_closes)}h of perp history "
+                f"(basis_q seeded with zero-basis prior)")
     return bot, PAPER_CAPITAL, _now()
 
 
@@ -282,10 +321,33 @@ def fetch_dvol(rest):
     return 60.0                                     # fallback implied vol
 
 
+def fetch_spot_index(rest):
+    """Deribit BTC composite index, USD — the natural single-venue 'spot' for
+    the basis-arb bot. Returns None on failure so the dispatcher can skip the
+    bot for that step rather than feeding it a fake price."""
+    try:
+        t = rest.get_ticker(INSTRUMENT)
+        if t and t.underlying_price and t.underlying_price > 0:
+            return float(t.underlying_price)
+    except Exception as exc:
+        log(f"spot index fetch failed ({exc})")
+    return None
+
+
 def _state_label(v, bot):
     t = v.get("type", "grid")
     if getattr(bot, "liquidated", False):
         return "💀 liquidated ($0)"
+    if t == "basis_arb":
+        st = getattr(bot, "state", "FLAT")
+        reason = getattr(bot, "halted_reason", None)
+        if st == "HALTED":
+            return f"🛑 HALTED ({reason}) — manual reset needed"
+        if st == "SHORT_BASIS":
+            hrs = getattr(bot, "hours_in_position", 0)
+            ez = getattr(bot, "entry_z", 0.0)
+            return f"long spot / short perp · entered at z={ez:+.2f} · {hrs}h held"
+        return "flat (watching basis for >2σ widening)"
     if t == "funding":
         return "collecting funding (market-neutral)"
     if t == "longvol":
@@ -347,11 +409,22 @@ def step_all(state, rest):
         return
     funding_1h = fetch_funding_1h(rest)
     dvol = fetch_dvol(rest)
+    # spot_index is only fetched if at least one variant needs it (currently
+    # only basis_arb). Skipping the call otherwise saves one REST round-trip
+    # per hourly tick for the existing farm.
+    spot_index = None
+    if any(v.get("type") == "basis_arb" for v in VARIANTS):
+        spot_index = fetch_spot_index(rest)
     rows = []
     for v in VARIANTS:
         t = v.get("type", "grid")
         bot, peak, started = state[v["slug"]]
-        if t == "funding":
+        if t == "basis_arb":
+            if spot_index is None:
+                log(f"  {v['name']}: skipping step (spot index fetch failed)")
+            else:
+                bot.step(spot_index, price, funding_1h)
+        elif t == "funding":
             bot.step(funding_1h)
         elif t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
             bot.step(price, dvol)
@@ -369,7 +442,12 @@ def step_all(state, rest):
                     log(f"  {v['name']}: 🛑 HALTED at ${p:,.0f} (drawdown {qty*100:.1f}%)")
         else:                                   # trend / rebalance / dca / buyhold
             bot.step(price)
-        eq = bot.equity(price) if t in ("grid", "infinity_grid") else bot.equity_now()
+        if t in ("grid", "infinity_grid"):
+            eq = bot.equity(price)
+        elif t == "basis_arb" and spot_index is not None:
+            eq = bot.equity(spot_index, price)
+        else:
+            eq = bot.equity_now()
         peak = max(peak, eq)
         state[v["slug"]] = (bot, peak, started)
         btc = bot.btc_held() if hasattr(bot, "btc_held") else 0.0

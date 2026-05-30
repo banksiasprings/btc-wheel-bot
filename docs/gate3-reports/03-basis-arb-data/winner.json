@@ -1,0 +1,14 @@
+{
+  "lookback_days": 30,
+  "entry_z": 2.0,
+  "exit_z": 0.0,
+  "vol_spike_combined_pct": -0.033821583940207844,
+  "vol_spike_mean_vs_funding_smart_pp": -0.05328969120331206,
+  "vol_spike_mean_vs_funding_pp": 1.1891167437856898,
+  "calm_return_pct": -0.4111464852165181,
+  "calm_halts": 0,
+  "halts_outside_ftx": 0,
+  "rationale": "FALLBACK: no config met any specialist tier. Picked by composite score = vol_spike_combined \u2212 2\u00d7|calm loss|.",
+  "n_tier1_configs": 0,
+  "n_tier2_configs": 0
+}
