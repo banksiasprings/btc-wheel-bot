@@ -595,9 +595,9 @@ def _leaderboard_page() -> str:
             f"border:1px solid {tab_col}66'>{tab_lbl}</span></td>"
             f"<td class='c-state hide-mob' data-sort='{slug}'>{v.get('state', '')}</td>"
             f"<td class='c-days hide-mob' data-sort='{days}'>{days:.1f}d</td>"
-            f"<td class='c-ret' data-sort='{ret}'>{numfmt(ret, '%')}</td>"
-            f"<td class='c-ann hide-mob' data-sort='{ann if ann is not None else -1e9}'>"
-            f"{numfmt(ann, '%')}</td>"
+            f"<td class='c-ret hide-mob' data-sort='{ret}'>{numfmt(ret, '%')}</td>"
+            f"<td class='c-ann' data-sort='{ann if ann is not None else 0}' "
+            f"data-null='{1 if ann is None else 0}'>{numfmt(ann, '%')}</td>"
             f"<td class='c-dd' data-sort='{-dd}'>"
             f"<span style='color:#ef4444;font-weight:600'>−{dd:.1f}%</span></td>"
             f"<td class='c-surv' data-sort='{surv}'>{numfmt(surv, '%')}</td>"
@@ -606,23 +606,33 @@ def _leaderboard_page() -> str:
             f"</tr>"
         )
 
-    # Columns: (label, css class, default direction). data-dir is the current click direction.
+    # Columns: (label, css class, default direction, optional tooltip).
+    # `hide-mob` ⇒ column is collapsed on ≤640px until "Show all columns" toggle.
+    # Annualised is the meaningful cross-bot comparison (days_running varies wildly), so it
+    # takes Return's mobile-default slot; raw Return moves behind the toggle.
     headers = [
-        ("#", "c-rank", "asc"),
-        ("Bot", "c-name", "asc"),
-        ("State", "c-state hide-mob", "asc"),
-        ("Days", "c-days hide-mob", "desc"),
-        ("Return", "c-ret", "desc"),
-        ("Annualised", "c-ann hide-mob", "desc"),
-        ("Drawdown", "c-dd", "desc"),
-        ("Survival", "c-surv", "desc"),
-        ("Trades", "c-trades hide-mob", "desc"),
-        ("Equity", "c-eq", "desc"),
+        ("#", "c-rank", "asc", ""),
+        ("Bot", "c-name", "asc", ""),
+        ("State", "c-state hide-mob", "asc", ""),
+        ("Days", "c-days hide-mob", "desc", ""),
+        ("Return", "c-ret hide-mob", "desc", ""),
+        ("Annualised", "c-ann", "desc",
+         "Annualised return — raw return × (365/days). "
+         "Shown as '—' for bots with <1 day of data."),
+        ("Drawdown", "c-dd", "desc", ""),
+        ("Survival", "c-surv", "desc", ""),
+        ("Trades", "c-trades hide-mob", "desc", ""),
+        ("Equity", "c-eq", "desc", ""),
     ]
-    head_cells = "".join(
-        f"<th class='{cls}' data-default-dir='{d}'>{lbl}<span class='caret'></span></th>"
-        for lbl, cls, d in headers
-    )
+
+    def _th(lbl, cls, d, tip):
+        attrs = f"class='{cls}' data-default-dir='{d}'"
+        if tip:
+            safe = tip.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;")
+            attrs += f' title="{safe}" aria-label="{safe}"'
+        return f"<th {attrs}>{lbl}<span class='caret'></span></th>"
+
+    head_cells = "".join(_th(*h) for h in headers)
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -683,7 +693,7 @@ def _leaderboard_page() -> str:
   <p class=legend>
     <b>Survival score</b> = Return % − Drawdown %. The weekly digest ranks by this — a bot that earned
     +5% with a −20% dip scores worse than one that earned +3% with a −2% dip. Default sort.
-    <br><b>Annualised</b> = recent pace projected forward (Return × 365 ÷ days). Hidden until a bot has run a full day.
+    <br><b>Annualised</b> = recent pace projected forward (Return × 365 ÷ days). Shown as "—" until a bot has run a full day.
     <br>Pretend money on real Bitcoin prices. Refreshes every minute.
   </p>
 <script>
@@ -700,6 +710,12 @@ def _leaderboard_page() -> str:
     state.col = idx; state.dir = dir;
     var rows = Array.prototype.slice.call(tbody.rows);
     rows.sort(function(a, b) {{
+      // data-null='1' cells (e.g. Annualised '—' for <1 day bots) always sort last,
+      // regardless of direction — by returning unsigned cmp before the dir flip.
+      var aNull = a.cells[idx].getAttribute('data-null') === '1';
+      var bNull = b.cells[idx].getAttribute('data-null') === '1';
+      if (aNull && !bNull) return 1;
+      if (!aNull && bNull) return -1;
       var av = a.cells[idx].getAttribute('data-sort');
       var bv = b.cells[idx].getAttribute('data-sort');
       var an = parseFloat(av), bn = parseFloat(bv);
