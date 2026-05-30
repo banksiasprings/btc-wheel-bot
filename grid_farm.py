@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "strategies"))
 
 from grid_bot import GridBot                      # noqa: E402
+from infinity_grid_bot import InfinityGridBot     # noqa: E402
 from income_bots import FundingBot, LongVolBot    # noqa: E402
 from more_bots import (BuyHoldBot, DCABot, RebalanceBot,    # noqa: E402
                        ShortVolBot, TrendBot)
@@ -54,6 +55,15 @@ VARIANTS = [
      "spacing": 0.02, "max_lots": 20,  "ma_hours": 0,   "leverage": 1.0, "borrow_rate": 0.0},
     {"slug": "degen",      "name": "Degen ⚠️", "style": "3x leverage, FOR KICKS — can blow up to $0",
      "spacing": 0.05, "max_lots": 20,  "ma_hours": 0,   "leverage": 3.0, "borrow_rate": 0.15},
+    # ── Infinity (bull specialist): open-top grid + tail; rides the bull legs ──
+    {"slug": "infinity-bull",  "name": "Infinity (bull specialist)",
+     "type": "infinity_grid", "tab": "grid",
+     "style": "open-top grid + 45d trend filter — bull-leg specialist, expects 30-45% dips",
+     "spacing": 0.030, "max_lots": 20, "ma_hours": 1080,
+     "leverage": 1.0, "borrow_rate": 0.0,
+     "infinity_tail_pct": 0.15, "reentry_buffer_atr": 1.0,
+     "restart_cooldown_days": 3, "min_below_ma_bars": 6, "min_above_ma_bars": 12,
+     "lower_price_floor_frac": 0.5, "max_drawdown_halt_pct": 0.50},
     # ── Funding: market-neutral carry (collect funding, no price risk) ──
     {"slug": "funding",       "name": "Funding Carry", "type": "funding",
      "style": "market-neutral — collects funding, no price bet", "positive_only": False},
@@ -144,7 +154,7 @@ MIN_ORDER_USD = 15.0   # safe floor per order on Deribit (perp min ~$10 + buffer
 def min_capital(v):
     """Approx. smallest live stake that lets every order clear exchange minimums."""
     t = v.get("type", "grid")
-    if t == "grid":
+    if t in ("grid", "infinity_grid"):
         raw = v["max_lots"] * MIN_ORDER_USD / v.get("leverage", 1.0)
         return int(math.ceil(raw / 50.0) * 50)
     if t == "funding":
@@ -180,6 +190,20 @@ def make_bot(v):
         return DCABot(capital=PAPER_CAPITAL)
     if t == "buyhold":
         return BuyHoldBot(capital=PAPER_CAPITAL)
+    if t == "infinity_grid":
+        # Note: InfinityGridBot forces leverage=1 internally per the Gate 2 spec —
+        # the VARIANTS entry's "leverage" key is informational; it is NOT passed in.
+        return InfinityGridBot(
+            spacing=v["spacing"], max_lots=v["max_lots"], ma_hours=v["ma_hours"],
+            capital=PAPER_CAPITAL,
+            infinity_tail_pct=v.get("infinity_tail_pct", 0.15),
+            reentry_buffer_atr=v.get("reentry_buffer_atr", 1.0),
+            restart_cooldown_days=v.get("restart_cooldown_days", 3),
+            min_below_ma_bars=v.get("min_below_ma_bars", 6),
+            min_above_ma_bars=v.get("min_above_ma_bars", 12),
+            lower_price_floor_frac=v.get("lower_price_floor_frac", 0.5),
+            max_drawdown_halt_pct=v.get("max_drawdown_halt_pct", 0.50),
+        )
     return GridBot(spacing=v["spacing"], max_lots=v["max_lots"], ma_hours=v["ma_hours"],
                    capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0),
                    borrow_rate=v.get("borrow_rate", 0.0))
@@ -247,6 +271,18 @@ def _state_label(v, bot):
         return "long volatility — scalping each swing"
     if t == "backspread":
         return "big-move bet (waiting for a large move)"
+    if t == "infinity_grid":
+        st = getattr(bot, "state", "RUNNING")
+        tail = getattr(bot, "infinity_tail_qty", 0.0)
+        if st == "HALTED_DRAWDOWN":
+            return "🛑 HALTED — drawdown limit hit (manual reset needed)"
+        if st == "STOPPED":
+            return f"trend-stopped (in cash; holding {tail:.4f} BTC tail)"
+        if st == "COOLDOWN":
+            return f"cooldown — waiting for confirmed uptrend (tail {tail:.4f} BTC)"
+        # RUNNING
+        active = bot.btc_held() - tail if hasattr(bot, "btc_held") else 0.0
+        return f"running grid (active {active:.4f} BTC + tail {tail:.4f} BTC)"
     held = bot.btc_held() if hasattr(bot, "btc_held") else 0.0
     if t == "trend":
         return "long BTC (uptrend)" if held > 1e-9 else "in cash (downtrend)"
@@ -289,9 +325,17 @@ def step_all(state, rest):
             for side, p, qty in bot.on_close(price, low=low):
                 if side == "LIQUIDATED":
                     log(f"  {v['name']}: 💀 LIQUIDATED at ${p:,.0f}")
+        elif t == "infinity_grid":
+            for side, p, qty in bot.on_close(price, low=low):
+                if side == "SELL_STOP":
+                    log(f"  {v['name']}: trend-stop fired at ${p:,.0f}")
+                elif side == "REENTRY":
+                    log(f"  {v['name']}: cooldown ended, re-anchored (floor ${p:,.0f})")
+                elif side == "HALTED_DRAWDOWN":
+                    log(f"  {v['name']}: 🛑 HALTED at ${p:,.0f} (drawdown {qty*100:.1f}%)")
         else:                                   # trend / rebalance / dca / buyhold
             bot.step(price)
-        eq = bot.equity(price) if t == "grid" else bot.equity_now()
+        eq = bot.equity(price) if t in ("grid", "infinity_grid") else bot.equity_now()
         peak = max(peak, eq)
         state[v["slug"]] = (bot, peak, started)
         btc = bot.btc_held() if hasattr(bot, "btc_held") else 0.0

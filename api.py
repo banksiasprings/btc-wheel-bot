@@ -154,7 +154,7 @@ def _page(tab: str = "grid") -> str:
         f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px'>{tabs}</div>"
         "<a href='/leaderboard' style='display:block;text-align:center;padding:9px 4px;border-radius:9px;"
         "text-decoration:none;font-size:13px;font-weight:600;background:#1c2230;color:#9aa4b2;"
-        "border:1px dashed #2d3850;margin-bottom:10px'>🏆 ROI leaderboard — all 25, head-to-head ›</a>"
+        f"border:1px dashed #2d3850;margin-bottom:10px'>🏆 ROI leaderboard — all {len(allv)}, head-to-head ›</a>"
     )
     intro = next(t[2] for t in TAB_INFO if t[0] == tab)
     # tappable Bitcoin-price banner (sparkline only if 1W data is already cached — never blocks)
@@ -435,6 +435,16 @@ def _bot_page(slug: str) -> str:
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  "<div>• <b>How:</b> bought Bitcoin once and holds. No trading at all.</div>"
                  "<div>• <b>Why it's here:</b> the benchmark — every other bot is trying to beat this.</div>")
+    elif t == "infinity_grid":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 f"<div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}% (open-top — no upper cap)</div>"
+                 "<div>• <b>Keeps a slice on each sell:</b> ~15% of each lot is held as a long-term 'tail' "
+                 "that rides the bull leg up.</div>"
+                 "<div>• <b>Safety brake:</b> 45-day moving average — pulls to cash on a confirmed downtrend (slow but patient).</div>"
+                 "<div>• <b>Borrowing:</b> none — your own money only.</div>"
+                 "<div style='color:#9aa4b2;margin-top:6px'>This is the <b>bull-leg specialist</b>. It's designed to "
+                 "outperform the other grids in long uptrends and to give back 30–45% through cycle transitions. "
+                 "That's normal — do not panic-restart it on a big dip. Only the 50% emergency halt is a real wipe signal.</div>")
     else:
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  f"<div>• <b>Trades when price moves about:</b> {v.get('spacing_pct', '?')}%</div>"
