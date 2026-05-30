@@ -221,6 +221,144 @@ class BuyHoldBot(_SpotBot):
         self._bump(price)
 
 
+class DCASmartBot(DCABot):
+    """DCA + 2× size on calendar ticks where daily RSI(14) < 40.
+
+    One buy per calendar tick (inherits DCABot's `self.steps % self.interval == 0`
+    gate). The dip rule is a *size multiplier* on that one buy, never a second
+    event. Weekly cap on dip-buys defends against sustained-downtrend cash burn.
+    Optional dip-pool reservation is shipped but defaults to 0 (off) per spec §2.4.
+
+    Daily-close construction is synthetic rolling-24h, not UTC-aligned — the bot
+    is stepped hourly by the farm and accumulates 24 hourly closes into a daily
+    bucket. Good enough for RSI-as-filter purposes; cheaper than calendar logic.
+    """
+
+    HOURS_PER_WEEK = 24 * 7
+
+    def __init__(self, capital=10_000.0, interval_hours=24,
+                 rsi_period_days=14, rsi_threshold=40.0,
+                 dip_multiplier=2.0, max_dip_buys_per_week=3,
+                 dip_pool_pct=0.0, min_order_usd=15.0, fee=FEE):
+        super().__init__(capital=capital, interval_hours=interval_hours, fee=fee)
+        self.rsi_period = int(rsi_period_days)
+        self.rsi_threshold = float(rsi_threshold)
+        self.dip_mult = float(dip_multiplier)
+        self.max_dip_buys_per_week = int(max_dip_buys_per_week)
+        self.dip_pool_pct = float(dip_pool_pct)
+        self.min_order_usd = float(min_order_usd)
+        # Daily-close ring buffer: need period+1 closes to compute period gains/losses
+        self.daily_closes = deque(maxlen=self.rsi_period + 1)
+        self.hours_since_last_close = 0
+        self.dip_buys_this_week = 0
+        self.hours_since_week_reset = 0
+        # Dip-pool reservation (off by default). Drawn down only when triggered;
+        # falls back to 1× if the pool runs dry.
+        self.dip_pool_remaining = float(capital) * self.dip_pool_pct
+
+    def warmup(self, prices):
+        """Seed the daily-close deque from an hourly warm-up array.
+        Takes every 24th close so we don't wait 15 real days for RSI to become
+        valid. Mirrors `TrendBot.warmup()` shape."""
+        for i, p in enumerate(prices):
+            if i % 24 == 23:
+                self.daily_closes.append(float(p))
+        if prices:
+            self.last_price = prices[-1]
+
+    def _compute_rsi(self):
+        """Wilder RSI(period) over the deque. Returns None until the deque holds
+        period+1 closes."""
+        if len(self.daily_closes) < self.rsi_period + 1:
+            return None
+        closes = list(self.daily_closes)
+        gains = 0.0
+        losses = 0.0
+        for a, b in zip(closes, closes[1:]):
+            d = b - a
+            if d > 0:
+                gains += d
+            else:
+                losses += -d
+        avg_gain = gains / self.rsi_period
+        avg_loss = losses / self.rsi_period
+        if avg_loss == 0:
+            return 100.0
+        rs = avg_gain / avg_loss
+        return 100.0 - (100.0 / (1.0 + rs))
+
+    def step(self, price):
+        # Roll the synthetic daily-close bucket: every 24h append latest close.
+        self.hours_since_last_close += 1
+        if self.hours_since_last_close >= 24:
+            self.daily_closes.append(float(price))
+            self.hours_since_last_close = 0
+
+        # Roll the weekly dip-cap counter.
+        self.hours_since_week_reset += 1
+        if self.hours_since_week_reset >= self.HOURS_PER_WEEK:
+            self.dip_buys_this_week = 0
+            self.hours_since_week_reset = 0
+
+        # Calendar tick → at most one buy this step.
+        if self.steps % self.interval == 0:
+            rsi = self._compute_rsi()
+            # Determine if dip-rule should fire on THIS calendar tick.
+            dip_trigger = (
+                rsi is not None
+                and rsi < self.rsi_threshold
+                and self.dip_buys_this_week < self.max_dip_buys_per_week
+            )
+            buy_amt = self.buy_usd
+            used_dip_pool = False
+            if dip_trigger:
+                # If dip-pool is active (dip_pool_pct > 0), only fire 2× while
+                # the pool has cash; fall back to 1× when empty (spec §2.4).
+                extra = self.buy_usd * (self.dip_mult - 1.0)
+                if self.dip_pool_pct > 0.0:
+                    if self.dip_pool_remaining >= extra:
+                        buy_amt = self.buy_usd * self.dip_mult
+                        used_dip_pool = True
+                    # else: pool dry → 1× buy, no dip count increment
+                else:
+                    buy_amt = self.buy_usd * self.dip_mult
+            # Cash-floor + order-floor guards. On the last residual, clip to cash.
+            if buy_amt > self.cash:
+                buy_amt = self.cash
+            if buy_amt >= self.min_order_usd and self.cash >= buy_amt:
+                self.btc += buy_amt / price * (1 - self.fee)
+                self.cash -= buy_amt
+                self.trades += 1
+                # Only count the dip if we actually placed a 2× buy.
+                if dip_trigger and buy_amt > self.buy_usd + 1e-9:
+                    self.dip_buys_this_week += 1
+                    if used_dip_pool:
+                        self.dip_pool_remaining -= self.buy_usd * (self.dip_mult - 1.0)
+        self._bump(price)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update({
+            "daily_closes": list(self.daily_closes),
+            "hours_since_last_close": self.hours_since_last_close,
+            "dip_buys_this_week": self.dip_buys_this_week,
+            "hours_since_week_reset": self.hours_since_week_reset,
+            "dip_pool_remaining": self.dip_pool_remaining,
+        })
+        return d
+
+    def load_dict(self, d):
+        super().load_dict(d)
+        self.daily_closes.clear()
+        for c in d.get("daily_closes", []):
+            self.daily_closes.append(float(c))
+        self.hours_since_last_close = int(d.get("hours_since_last_close", 0))
+        self.dip_buys_this_week = int(d.get("dip_buys_this_week", 0))
+        self.hours_since_week_reset = int(d.get("hours_since_week_reset", 0))
+        self.dip_pool_remaining = float(d.get("dip_pool_remaining",
+                                              self.capital * self.dip_pool_pct))
+
+
 # ── sanity test on daily data ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
