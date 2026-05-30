@@ -1,0 +1,10 @@
+{
+  "tail_pct": 0.15,
+  "spacing_pct": 0.03,
+  "ma_days": 45,
+  "score": 15.24200717651076,
+  "worst_dd": 24.271080020308606,
+  "mean_apr": 373.6035076928815,
+  "mean_sharpe": 1.0330446210580542,
+  "halted_any": false
+}
