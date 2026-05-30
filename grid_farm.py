@@ -28,8 +28,8 @@ sys.path.insert(0, str(ROOT / "strategies"))
 from grid_bot import GridBot                      # noqa: E402
 from infinity_grid_bot import InfinityGridBot     # noqa: E402
 from income_bots import FundingBot, LongVolBot    # noqa: E402
-from more_bots import (BuyHoldBot, DCABot, RebalanceBot,    # noqa: E402
-                       ShortVolBot, TrendBot)
+from more_bots import (BuyHoldBot, DCABot, DCASmartBot,     # noqa: E402
+                       RebalanceBot, ShortVolBot, TrendBot)
 from convex_bots import (BackspreadBot, GammaScalpBot,      # noqa: E402
                          TailHedgeBot)
 
@@ -97,6 +97,10 @@ VARIANTS = [
      "style": "half BTC / half cash, rebalances on drift — buys low, sells high"},
     {"slug": "dca",        "name": "DCA", "type": "dca", "tab": "stack",
      "style": "buys a fixed amount of BTC daily — classic accumulation"},
+    {"slug": "dca-smart", "name": "DCA-Smart", "type": "dca_smart", "tab": "stack",
+     "style": "daily DCA + 1.5× on RSI(14)<35 days — bear/crash specialist with bounded bull bleed",
+     "rsi_period_days": 14, "rsi_threshold": 35, "dip_multiplier": 1.5,
+     "max_dip_buys_per_week": 2, "dip_pool_pct": 0.0, "base_size_pct": 0.025},
     {"slug": "buyhold",    "name": "Buy & Hold", "type": "buyhold", "tab": "stack",
      "style": "buys once and holds — the benchmark everything must beat"},
     # ── Convex: options "big payoff" structures — crash insurance & big-move bets ──
@@ -161,7 +165,7 @@ def min_capital(v):
         return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
     if t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
         return int(max(200, round(500 / v.get("leverage", 1.0) / 50) * 50))
-    if t in ("trend", "rebalance", "dca", "buyhold"):
+    if t in ("trend", "rebalance", "dca", "dca_smart", "buyhold"):
         return 50          # just needs to hold a little BTC above the exchange minimum
     return 100
 
@@ -188,6 +192,22 @@ def make_bot(v):
         return RebalanceBot(capital=PAPER_CAPITAL)
     if t == "dca":
         return DCABot(capital=PAPER_CAPITAL)
+    if t == "dca_smart":
+        bot = DCASmartBot(
+            capital=PAPER_CAPITAL,
+            interval_hours=v.get("interval_hours", 24),
+            rsi_period_days=v.get("rsi_period_days", 14),
+            rsi_threshold=v.get("rsi_threshold", 40),
+            dip_multiplier=v.get("dip_multiplier", 2.0),
+            max_dip_buys_per_week=v.get("max_dip_buys_per_week", 3),
+            dip_pool_pct=v.get("dip_pool_pct", 0.0),
+            min_order_usd=MIN_ORDER_USD,
+        )
+        # Override default $333/day to the variant's smaller, slower deployment.
+        bot.buy_usd = PAPER_CAPITAL * v.get("base_size_pct", 1.0 / 30.0)
+        if bot.dip_pool_pct > 0.0:
+            bot.dip_pool_remaining = PAPER_CAPITAL * bot.dip_pool_pct
+        return bot
     if t == "buyhold":
         return BuyHoldBot(capital=PAPER_CAPITAL)
     if t == "infinity_grid":
@@ -218,11 +238,18 @@ def load_variant(v, rest):
         st = json.loads(sf.read_text())
         bot.load_dict(st["bot"])
         return bot, st.get("peak", PAPER_CAPITAL), st.get("started", _now())
-    if v.get("ma_hours"):                        # only grid variants warm up an MA
+    if v.get("ma_hours"):                        # grid variants warm up an MA
         closes = warmup_closes(rest, v["ma_hours"])
         if closes:
             bot.warmup(closes)
             log(f"{v['name']}: warmed up from {len(closes)}h of history")
+    elif v.get("type") == "dca_smart":            # seed daily-close deque for RSI
+        hours = v.get("rsi_period_days", 14) * 24 + 24
+        closes = warmup_closes(rest, hours)
+        if closes:
+            bot.warmup(closes)
+            log(f"{v['name']}: warmed up from {len(closes)}h of history "
+                f"(daily closes: {len(bot.daily_closes)})")
     return bot, PAPER_CAPITAL, _now()
 
 
@@ -288,6 +315,13 @@ def _state_label(v, bot):
         return "long BTC (uptrend)" if held > 1e-9 else "in cash (downtrend)"
     if t == "dca":
         return f"stacked {held:.4f} BTC"
+    if t == "dca_smart":
+        dips = getattr(bot, "dip_buys_this_week", 0)
+        cap = getattr(bot, "max_dip_buys_per_week", 0)
+        cash = getattr(bot, "cash", 0.0)
+        if cash < MIN_ORDER_USD:
+            return f"stacked {held:.4f} BTC — budget spent, holding"
+        return f"accumulating {held:.4f} BTC · {dips}/{cap} dip buys this week"
     if held > 1e-9:
         return f"holding {held:.4f} BTC"
     return "in cash (waiting)"

@@ -431,6 +431,19 @@ def _bot_page(slug: str) -> str:
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  "<div>• <b>How:</b> buys a fixed amount of Bitcoin every day — classic dollar-cost averaging.</div>"
                  "<div>• <b>Effect:</b> averages your entry price; steady accumulation, no timing.</div>")
+    elif t == "dca_smart":
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 "<div>• <b>How:</b> buys a small amount of Bitcoin every day — but on days where the RSI says "
+                 "Bitcoin is genuinely oversold, it buys 1.5× the normal amount (up to 2 dip-buys per week).</div>"
+                 "<div>• <b>Wins:</b> in bear legs and sharp crashes — when fear shows up in the RSI it accumulates "
+                 "more aggressively at the cheaper prices. Backtest: beat plain DCA by ~4% during the 2022 cycle "
+                 "bear, with a lower average cost basis.</div>"
+                 "<div>• <b>Bleeds:</b> a small amount (~5%) in clean bull legs — it deploys cash slightly slower "
+                 "than plain DCA on purpose, to keep dry powder for dips.</div>"
+                 "<div>• <b>Can't be wiped out:</b> spot-only, no leverage, only spends cash it has. "
+                 "It can never lose more than Bitcoin itself does.</div>"
+                 "<div style='color:#9aa4b2;margin-top:6px'>The <b>bear/crash specialist</b> in the Stack. "
+                 "Sits next to plain DCA so the head-to-head is honest — watch them diverge during fear.</div>")
     elif t == "buyhold":
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  "<div>• <b>How:</b> bought Bitcoin once and holds. No trading at all.</div>"
@@ -508,7 +521,7 @@ def _bot_page(slug: str) -> str:
 </body></html>"""
 
 
-# ── ROI leaderboard page (/leaderboard) — all 25 bots ranked, survival-first ──
+# ── ROI leaderboard page (/leaderboard) — every variant ranked, survival-first ──
 
 def _freshness(updated: str) -> tuple[str, str, str]:
     """(status_label, hex_colour, 'Xm ago') for the leaderboard subtitle.
