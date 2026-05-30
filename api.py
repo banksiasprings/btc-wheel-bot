@@ -118,6 +118,11 @@ TAB_INFO = [
     ("convex", "Convex", "Options 'big payoff' bets — crash insurance, gamma scalping, backspreads. Pay a little, win big on a crash or huge move. Simplified models."),
 ]
 _TAB_KEYS = [t[0] for t in TAB_INFO]
+TAB_COLORS = {                     # restrained palette for the leaderboard tab badges
+    "grid": "#3b82f6", "funding": "#14b8a6", "longvol": "#a78bfa",
+    "premium": "#f59e0b", "trend": "#ec4899", "stack": "#64748b", "convex": "#06b6d4",
+}
+TAB_LABELS = {k: lbl for k, lbl, _ in TAB_INFO}
 
 
 def _tab_of(v):
@@ -145,7 +150,12 @@ def _page(tab: str = "grid") -> str:
         st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
         tabs += (f"<a href='/?tab={key}' style='flex:1 1 22%;text-align:center;padding:9px 4px;"
                  f"border-radius:9px;text-decoration:none;font-size:13px;font-weight:600;{st}'>{label} ({cnt})</a>")
-    tab_bar = f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px'>{tabs}</div>"
+    tab_bar = (
+        f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px'>{tabs}</div>"
+        "<a href='/leaderboard' style='display:block;text-align:center;padding:9px 4px;border-radius:9px;"
+        "text-decoration:none;font-size:13px;font-weight:600;background:#1c2230;color:#9aa4b2;"
+        "border:1px dashed #2d3850;margin-bottom:10px'>🏆 ROI leaderboard — all 25, head-to-head ›</a>"
+    )
     intro = next(t[2] for t in TAB_INFO if t[0] == tab)
     # tappable Bitcoin-price banner (sparkline only if 1W data is already cached — never blocks)
     spark = ""
@@ -488,6 +498,248 @@ def _bot_page(slug: str) -> str:
 </body></html>"""
 
 
+# ── ROI leaderboard page (/leaderboard) — all 25 bots ranked, survival-first ──
+
+def _freshness(updated: str) -> tuple[str, str, str]:
+    """(status_label, hex_colour, 'Xm ago') for the leaderboard subtitle.
+
+    Matches the widget's 3-state freshness so a single skipped hourly tick
+    doesn't look alarming: fresh ≤ 75 min, stale 75-180 min, offline > 180 min.
+    """
+    try:
+        t = datetime.fromisoformat(updated)
+        secs = (datetime.now(timezone.utc) - t).total_seconds()
+    except Exception:
+        return ("unknown", "#6b7280", "unknown")
+    if secs < 60:
+        ago = "just now"
+    elif secs < 3600:
+        ago = f"{int(secs / 60)}m ago"
+    elif secs < 86400:
+        ago = f"{secs / 3600:.1f}h ago"
+    else:
+        ago = f"{int(secs / 86400)}d ago"
+    if secs < 75 * 60:
+        return ("live", "#22c55e", ago)
+    if secs < 180 * 60:
+        return ("recent", "#f59e0b", ago)
+    return ("stale", "#ef4444", ago)
+
+
+def _leaderboard_page() -> str:
+    data = _load()
+    if not data:
+        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
+                "<h2>BSF Bot Farm — Leaderboard</h2><p>The farm isn't running yet.</p>"
+                "<a href='/' style='color:#60a5fa'>← back</a></body>")
+    allv = data.get("variants", [])
+    fresh_label, fresh_col, fresh_ago = _freshness(data.get("updated", ""))
+
+    # Survival score = return_pct − max_drawdown_pct (the weekly digest's ranking metric).
+    # Rank the medals by survival, independent of the user's chosen column sort.
+    enriched = []
+    for v in allv:
+        ret = float(v.get("return_pct", 0.0))
+        dd = float(v.get("max_drawdown_pct", 0.0))
+        days = float(v.get("days_running", 0.0))
+        ann = ret * (365.0 / days) if days >= 1 else None
+        enriched.append({**v, "_ann": ann, "_survival": ret - dd})
+    medal_rank = {v["slug"]: i for i, v in enumerate(
+        sorted(enriched, key=lambda x: x["_survival"], reverse=True))}
+    medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+
+    # Default render: sorted by survival score descending (the survival-first ranking).
+    rows = sorted(enriched, key=lambda x: x["_survival"], reverse=True)
+
+    def numfmt(v, suffix="", dash="—"):
+        if v is None:
+            return f"<span style='color:#6b7280'>{dash}</span>"
+        c = "#22c55e" if v >= 0 else "#ef4444"
+        sign = "+" if v >= 0 else ""
+        return f"<span style='color:{c};font-weight:600'>{sign}{v:.1f}{suffix}</span>"
+
+    body_rows = []
+    for i, v in enumerate(rows, 1):
+        slug = v["slug"]
+        tab = _tab_of(v)
+        tab_col = TAB_COLORS.get(tab, "#6b7280")
+        tab_lbl = TAB_LABELS.get(tab, tab)
+        medal = medals.get(medal_rank[slug], "")
+        warn = " ⚠️" if v.get("leverage", 1) > 1 else ""
+        ann = v["_ann"]
+        surv = v["_survival"]
+        ret = float(v["return_pct"])
+        dd = float(v["max_drawdown_pct"])
+        days = float(v.get("days_running", 0.0))
+        trades = int(v.get("trades", 0))
+        equity = float(v["equity"])
+        # data-sort attrs are numeric so client-side JS can sort without parsing display strings
+        body_rows.append(
+            f"<tr data-slug='{slug}'>"
+            f"<td class='c-rank' data-sort='{i}'>{i}<span class='medal'>{medal}</span></td>"
+            f"<td class='c-name'>"
+            f"<a href='/bot/{slug}'><span class='dot' style='background:{tab_col}'></span>"
+            f"{v['name']}{warn}</a>"
+            f"<span class='tabbadge' style='background:{tab_col}22;color:{tab_col};"
+            f"border:1px solid {tab_col}66'>{tab_lbl}</span></td>"
+            f"<td class='c-state hide-mob' data-sort='{slug}'>{v.get('state', '')}</td>"
+            f"<td class='c-days hide-mob' data-sort='{days}'>{days:.1f}d</td>"
+            f"<td class='c-ret' data-sort='{ret}'>{numfmt(ret, '%')}</td>"
+            f"<td class='c-ann hide-mob' data-sort='{ann if ann is not None else -1e9}'>"
+            f"{numfmt(ann, '%')}</td>"
+            f"<td class='c-dd' data-sort='{-dd}'>"
+            f"<span style='color:#ef4444;font-weight:600'>−{dd:.1f}%</span></td>"
+            f"<td class='c-surv' data-sort='{surv}'>{numfmt(surv, '%')}</td>"
+            f"<td class='c-trades hide-mob' data-sort='{trades}'>{trades}</td>"
+            f"<td class='c-eq' data-sort='{equity}'>${equity:,.0f}</td>"
+            f"</tr>"
+        )
+
+    # Columns: (label, css class, default direction). data-dir is the current click direction.
+    headers = [
+        ("#", "c-rank", "asc"),
+        ("Bot", "c-name", "asc"),
+        ("State", "c-state hide-mob", "asc"),
+        ("Days", "c-days hide-mob", "desc"),
+        ("Return", "c-ret", "desc"),
+        ("Annualised", "c-ann hide-mob", "desc"),
+        ("Drawdown", "c-dd", "desc"),
+        ("Survival", "c-surv", "desc"),
+        ("Trades", "c-trades hide-mob", "desc"),
+        ("Equity", "c-eq", "desc"),
+    ]
+    head_cells = "".join(
+        f"<th class='{cls}' data-default-dir='{d}'>{lbl}<span class='caret'></span></th>"
+        for lbl, cls, d in headers
+    )
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content=60>
+<title>Leaderboard — BSF Bot Farm</title>
+<style>
+  body{{background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:760px;margin:auto}}
+  a{{color:inherit;text-decoration:none}}
+  h2{{margin:0 0 2px}}
+  .sub{{color:#8b95a5;font-size:13px;margin-bottom:10px}}
+  .nav{{color:#60a5fa;font-size:14px}}
+  .toolbar{{display:flex;justify-content:space-between;align-items:center;margin:10px 0 8px;gap:8px}}
+  .toolbar button{{background:#1c2230;color:#9aa4b2;border:1px solid #2d3850;border-radius:8px;
+    padding:7px 11px;font-size:12.5px;font-weight:600;cursor:pointer}}
+  .toolbar button.on{{background:#2563eb;color:#fff;border-color:#2563eb}}
+  table{{width:100%;border-collapse:collapse;font-size:13px}}
+  thead th{{position:sticky;top:0;background:#11161f;color:#9aa4b2;font-weight:600;
+    font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;
+    padding:8px 4px;text-align:right;cursor:pointer;user-select:none;
+    border-bottom:1px solid #1f2733;white-space:nowrap}}
+  thead th:first-child,thead th.c-name{{text-align:left}}
+  thead th .caret{{display:inline-block;width:8px;margin-left:3px;color:#3b82f6}}
+  thead th.active{{color:#e6e6e6}}
+  tbody td{{padding:8px 4px;text-align:right;border-bottom:1px solid #151a23;white-space:nowrap}}
+  tbody td.c-rank,tbody td.c-name{{text-align:left}}
+  tbody tr:hover{{background:#11161f}}
+  td.c-rank{{color:#8b95a5;width:34px;font-variant-numeric:tabular-nums}}
+  td.c-rank .medal{{margin-left:2px}}
+  td.c-name a{{color:#e6e6e6;font-weight:600}}
+  td.c-name .dot{{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}}
+  td.c-name .tabbadge{{display:inline-block;font-size:10px;font-weight:600;padding:1px 6px;
+    border-radius:7px;margin-left:6px;vertical-align:middle;text-transform:uppercase;letter-spacing:.3px}}
+  td.c-state{{color:#9aa4b2;font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis}}
+  td.c-eq{{font-weight:600;font-variant-numeric:tabular-nums}}
+  .legend{{color:#6b7280;font-size:12px;margin-top:14px;line-height:1.55}}
+  @media (max-width:640px){{
+    body{{padding:14px}}
+    .hide-mob{{display:none}}
+    thead th,tbody td{{padding:7px 2px;font-size:12.5px}}
+    td.c-name a{{font-size:13px}}
+    td.c-name .tabbadge{{display:none}}     /* colored dot already encodes the tab on mobile */
+  }}
+  body.show-all .hide-mob{{display:table-cell}}
+</style>
+</head>
+<body>
+  <a class=nav href="/">← back to dashboard</a>
+  <h2 style="margin:10px 0 2px">🏆 BSF Bot Farm — Leaderboard</h2>
+  <div class=sub>Survival-first scorecard · sortable · <span style="color:{fresh_col};font-weight:600">●</span> Updated {fresh_ago}</div>
+  <div class=toolbar>
+    <div style="color:#8b95a5;font-size:12.5px">{len(rows)} bots · tap a header to sort · tap a bot for its graph</div>
+    <button id=allcols>Show all columns</button>
+  </div>
+  <table id=lb>
+    <thead><tr>{head_cells}</tr></thead>
+    <tbody>{''.join(body_rows)}</tbody>
+  </table>
+  <p class=legend>
+    <b>Survival score</b> = Return % − Drawdown %. The weekly digest ranks by this — a bot that earned
+    +5% with a −20% dip scores worse than one that earned +3% with a −2% dip. Default sort.
+    <br><b>Annualised</b> = recent pace projected forward (Return × 365 ÷ days). Hidden until a bot has run a full day.
+    <br>Pretend money on real Bitcoin prices. Refreshes every minute.
+  </p>
+<script>
+(function(){{
+  var tbl = document.getElementById('lb');
+  var tbody = tbl.tBodies[0];
+  var ths = tbl.tHead.rows[0].cells;
+  var state = {{col: -1, dir: 'desc'}};
+
+  function sortBy(idx) {{
+    var th = ths[idx];
+    var defaultDir = th.getAttribute('data-default-dir') || 'desc';
+    var dir = (state.col === idx) ? (state.dir === 'asc' ? 'desc' : 'asc') : defaultDir;
+    state.col = idx; state.dir = dir;
+    var rows = Array.prototype.slice.call(tbody.rows);
+    rows.sort(function(a, b) {{
+      var av = a.cells[idx].getAttribute('data-sort');
+      var bv = b.cells[idx].getAttribute('data-sort');
+      var an = parseFloat(av), bn = parseFloat(bv);
+      var cmp;
+      if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
+      else cmp = (av || '').localeCompare(bv || '');
+      return dir === 'asc' ? cmp : -cmp;
+    }});
+    rows.forEach(function(r, i) {{
+      tbody.appendChild(r);
+      r.cells[0].firstChild.nodeValue = (i + 1);
+    }});
+    for (var k = 0; k < ths.length; k++) {{
+      ths[k].classList.remove('active');
+      ths[k].querySelector('.caret').textContent = '';
+    }}
+    th.classList.add('active');
+    th.querySelector('.caret').textContent = dir === 'asc' ? '▲' : '▼';
+  }}
+
+  for (var i = 0; i < ths.length; i++) (function(i){{
+    ths[i].addEventListener('click', function(){{ sortBy(i); }});
+  }})(i);
+
+  // Mark the survival column as the default-sorted one (already server-sorted desc).
+  var survIdx = -1;
+  for (var k = 0; k < ths.length; k++) if (ths[k].classList.contains('c-surv')) survIdx = k;
+  if (survIdx >= 0) {{
+    state.col = survIdx; state.dir = 'desc';
+    ths[survIdx].classList.add('active');
+    ths[survIdx].querySelector('.caret').textContent = '▼';
+  }}
+
+  var btn = document.getElementById('allcols');
+  function setShowAll(on) {{
+    document.body.classList.toggle('show-all', on);
+    btn.classList.toggle('on', on);
+    btn.textContent = on ? 'Compact view' : 'Show all columns';
+  }}
+  try {{ setShowAll(localStorage.getItem('lb-show-all') === '1'); }} catch (e) {{}}
+  btn.addEventListener('click', function(){{
+    var on = !document.body.classList.contains('show-all');
+    setShowAll(on);
+    try {{ localStorage.setItem('lb-show-all', on ? '1' : '0'); }} catch (e) {{}}
+  }});
+}})();
+</script>
+</body></html>"""
+
+
 # ── Bitcoin price chart page (/btc) — live candles from Deribit, several ranges ─
 
 # range key → (deribit resolution [valid: 1/3/5/15/30/60/120/180/360/720/1D],
@@ -683,3 +935,8 @@ def widget():
 @app.get("/bot/{slug}", include_in_schema=False)
 def bot_detail(slug: str):
     return HTMLResponse(_bot_page(slug))
+
+
+@app.get("/leaderboard", include_in_schema=False)
+def leaderboard():
+    return HTMLResponse(_leaderboard_page())
