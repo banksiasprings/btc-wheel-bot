@@ -1,0 +1,9 @@
+{
+  "slope_threshold": 4e-07,
+  "size_increment_step": 0.2,
+  "slope_lookback_hours": 32,
+  "n_volatile_beats": 0,
+  "steady_vs_smart_pp": -12.610040815201096,
+  "sum_uplift_volatile": -93.80974025929505,
+  "rationale": "Winner picked from 27 configs. Beats best-cousin by \u2265+2%/yr in 0 of 3 volatile windows; steady vs funding-smart: -12.61pp (FAIL on \u22122pp specialist allowance). Sum of volatile uplift: -93.81pp."
+}

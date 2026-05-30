@@ -1,0 +1,39 @@
+{
+  "volatile_windows_passing_2pp": 0,
+  "volatile_bar_pass": false,
+  "steady_delta_vs_smart_pp": -12.610040815201096,
+  "steady_bar_pass": false,
+  "median_corr_vs_smart": 0.01598309244556024,
+  "corr_bar_pass": true,
+  "park_redundant": false,
+  "verdict": "FAIL-PARK (volatile-window edge insufficient)",
+  "volatile_detail": [
+    {
+      "window": "vol_2021_ramp",
+      "dyn_apr": -11.305301793057666,
+      "funding_apr": 37.47596840041585,
+      "smart_apr": 37.60304182594933,
+      "best_cousin_apr": 37.60304182594933,
+      "dyn_minus_best": -48.908343619007,
+      "pass_2pp": false
+    },
+    {
+      "window": "vol_luna_2022",
+      "dyn_apr": -7.334157865523306,
+      "funding_apr": 2.4503177421249855,
+      "smart_apr": 2.6857279863566896,
+      "best_cousin_apr": 2.6857279863566896,
+      "dyn_minus_best": -10.019885851879994,
+      "pass_2pp": false
+    },
+    {
+      "window": "vol_etf_2024",
+      "dyn_apr": -8.849206893076955,
+      "funding_apr": 25.990359923644178,
+      "smart_apr": 26.03230389533111,
+      "best_cousin_apr": 26.03230389533111,
+      "dyn_minus_best": -34.881510788408065,
+      "pass_2pp": false
+    }
+  ]
+}
