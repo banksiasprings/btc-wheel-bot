@@ -1,14 +1,14 @@
 {
-  "rsi_threshold": 45,
-  "dip_multiplier": 3.0,
-  "max_dip_buys_per_week": 3,
-  "base_size_pct": 0.015,
-  "bear_vs_dca_pp": 4.869940271620443,
-  "crab_vs_dca_pp": -0.9662830277277434,
-  "bull_vs_dca_pp": -11.957936420948611,
-  "crash_vs_dca_pp": -1.50017622312566,
-  "bear_cb_improvement_pct": 4.643790450349275,
-  "rationale": "TIER 2 PASS: 9 configs cleared the relaxed specialist bar (bear \u2265+3pp, bull \u2265\u221215pp). Full spec (crab \u2265+2pp, bull \u2265\u22121pp) not satisfied \u2014 see report \u00a73.3.",
+  "rsi_threshold": 35,
+  "dip_multiplier": 1.5,
+  "max_dip_buys_per_week": 2,
+  "base_size_pct": 0.025,
+  "bear_vs_dca_pp": 3.871180500824112,
+  "crab_vs_dca_pp": 0.39260579243454163,
+  "bull_vs_dca_pp": -4.771466314823758,
+  "crash_vs_dca_pp": -0.08786867599899217,
+  "bear_cb_improvement_pct": 3.7269052707006276,
+  "rationale": "TIER 2 PASS: 14 configs cleared the relaxed specialist bar (bear \u2265+3pp, bull \u2265\u221215pp). Full spec (crab \u2265+2pp, bull \u2265\u22121pp) not satisfied \u2014 see report \u00a73.3.",
   "n_tier1_configs": 0,
-  "n_tier2_configs": 9
+  "n_tier2_configs": 14
 }

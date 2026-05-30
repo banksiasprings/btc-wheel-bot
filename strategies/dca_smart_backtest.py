@@ -74,16 +74,22 @@ HOLDOUT_START = "2024-09-01"
 HOLDOUT_END   = "2026-05-22"
 
 # ── parameter sweep — 3 × 3 × 3 × 3 = 81 configs per regime ──────────────────
+# v2 (2026-05-31): base_size_pct shifted up after v1 found the entire {0.5%, 1.0%,
+# 1.5%} range deploys cash slower than DCABot's prod 3.33%, baking in a structural
+# bull bleed. v2 floor is the v1 winning size (1.5%); 2.5% and 3.5% are the new
+# DCA-equivalent candidates Steven approved testing. Other three knobs unchanged
+# from v1 — this isolates the base_size variable so any v1→v2 movement is
+# causally attributable to the deployment-speed knob.
 
 RSI_THRESH_SWEEP    = [35, 40, 45]
 DIP_MULT_SWEEP      = [1.5, 2.0, 3.0]
 MAX_DIP_WEEK_SWEEP  = [2, 3, 5]
-BASE_SIZE_PCT_SWEEP = [0.005, 0.010, 0.015]   # 0.5%, 1.0%, 1.5% of starting capital per buy
+BASE_SIZE_PCT_SWEEP = [0.015, 0.025, 0.035]   # v2: 1.5%, 2.5%, 3.5% (DCA prod ≈ 3.33%)
 
 QUICK_RSI    = [40]
 QUICK_DIP    = [2.0]
 QUICK_WEEK   = [3]
-QUICK_BASE   = [0.005, 0.010, 0.015]
+QUICK_BASE   = [0.015, 0.025, 0.035]
 
 
 # ── data ──────────────────────────────────────────────────────────────────────

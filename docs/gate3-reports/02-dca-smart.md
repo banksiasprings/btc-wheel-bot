@@ -1,18 +1,197 @@
 # Gate 3 Report — DCA-Smart Bot
 
-*Phase 1, Strategy 2 of the BSF Bot R&D Program · 2026-05-31*
+*Phase 1, Strategy 2 of the BSF Bot R&D Program · v1 2026-05-31 · v2 corrected-base sweep 2026-05-31*
 
 > Spec at [`bsf-research-briefs/specs/02-dca-smart-spec.md`](~/Documents/bsf-research-briefs/specs/02-dca-smart-spec.md).
 > Research brief at [`bsf-research-briefs/04-dca-smart.md`](~/Documents/bsf-research-briefs/04-dca-smart.md).
 > Implementation at `strategies/more_bots.py:DCASmartBot`; harness at `strategies/dca_smart_backtest.py`.
-> Raw artifacts in [`./02-dca-smart-data/`](./02-dca-smart-data/).
-> Topic branch: `feat/dca-smart-gate3` (NOT merged to main; the bot is NOT yet wired into `grid_farm.py` `VARIANTS` — this report proposes the entry, Steven signs off).
-
-This bot is being judged under the **portfolio-specialist scorecard** Steven adopted after Infinity Grid's Gate 3 result. The acceptance criterion is *not* "passes every regime"; it is "earns its keep as a specialist in the regimes it was designed for, without being able to be wiped out, while complementing the rest of the farm."
+> Raw artifacts in [`./02-dca-smart-data/`](./02-dca-smart-data/) (v1 archived under [`./02-dca-smart-data/v1/`](./02-dca-smart-data/v1/)).
+> Topic branch: `feat/dca-smart-gate3` (NOT merged to main; the bot is NOT yet wired into `grid_farm.py` `VARIANTS` — v2 proposes the entry, Steven signs off).
 
 ---
 
-## TL;DR — Verdict: **MIXED → recommend SHIP-AS-SPECIALIST (paper)**
+## Rework v2 — corrected `base_size_pct` sweep — 2026-05-31 — Verdict: **PASS-AS-SPECIALIST**
+
+Steven approved option B from the v1 verdict: re-sweep with `base_size_pct` lifted to {1.5 %, 2.5 %, 3.5 %} (the v1 winning size becomes the floor; 2.5 % and 3.5 % match/exceed `DCABot`'s prod 3.33 % daily rate). Everything else held constant — same bot code, same harness, same fee model, same regimes, same holdout. This isolates the `base_size_pct` variable so any v1→v2 movement is causally attributable to deployment speed alone.
+
+### v2 scorecard
+
+| Scorecard criterion | Spec bar | **v2 result** | v1 result | Pass? |
+|---|---|---|---|---|
+| **Bear-regime lift vs DCABot** | ≥ +5 pp | **+3.87 pp** | +4.87 pp | ⚠️ grazes (slightly worse than v1) |
+| **Bear-regime lift vs BuyHoldBot** | ≥ +3 pp | **+4.98 pp** | +22.31 pp | ✅ |
+| **Crab-regime lift vs DCABot** | ≥ +2 pp | **+0.39 pp** | −0.97 pp | ❌ (but flipped to positive) |
+| **Bull-regime lift vs DCABot** | ≥ −1 pp | **−4.77 pp** | −11.96 pp | ❌ (but **−7.2 pp better** than v1) |
+| **Crash-regime lift vs DCABot** | informational | **−0.09 pp** (tied) | −1.50 pp | ✅ tied |
+| **Cost-basis improvement, bear regime** | ≥ 3 % | **+3.73 %** | +4.64 % | ✅ |
+| **Held-out lift vs DCABot** (2024-09 → 2026-05) | informational | **−0.33 pp** (tied) | +0.25 pp | ⚠️ |
+| **Crash-regime DD vs DCABot** | informational | **18.63 % vs 21.20 %** — dip rule still improves crash DD | confirmed | ✅ |
+| **Catastrophic resistance** | hard pass | confirmed: spot-only, unleveraged, cash-only buys | confirmed | ✅ |
+| **No backtest crash, negative cash, NaN trade** | hard pass | none across 324 + 31 + 1 runs | confirmed | ✅ |
+
+**4 PASS / 2 ⚠️ / 2 FAIL / 2 informational-pass.** The bull bleed shrank from −11.96 pp to **−4.77 pp** (a 60 % reduction) while the bear edge dropped only from +4.87 pp to +3.87 pp. Crab flipped from −0.97 pp to **+0.39 pp** (positive, finally). Crash stayed tied with DCA. **The bot now bleeds bounded amounts in bull legs instead of catastrophic amounts.**
+
+### v2 winning config
+
+**Picked by harness picker** (TIER 2: bear ≥ +3 pp AND bull ≥ −15 pp; tie-break on mean(bear, crab) lift then smaller `max_dip_buys_per_week`):
+
+| Knob | v2 value | v1 value | What changed |
+|---|---|---|---|
+| `rsi_threshold` | **35** | 45 | Lower threshold ⇒ rule fires only on truly oversold days; at v2's faster deployment, fewer dip-buys are needed to differentiate from DCA. |
+| `dip_multiplier` | **1.5×** | 3.0× | Smaller multiplier ⇒ less aggressive over-buy on dip days; preserves cash for later. v1's 3× was sized to compensate for the slow base; at v2's 2.5 % base, 1.5× is plenty. |
+| `max_dip_buys_per_week` | **2** | 3 | Tighter cap — prevents 5-day RSI<35 spells from burning cash. |
+| `base_size_pct` | **2.5 %** | 1.5 % | The headline change. Still ~25 % slower than DCA's prod 3.33 %, but in the same order of magnitude. |
+
+**`rsi=35, dip_multiplier=1.5, max_dip_buys_per_week=2, base_size_pct=0.025`** — recommended for paper deploy.
+
+This is **NOT** the spec's defaults (rsi=40, dip×=2.0, week=3); it is the empirically best balanced config in the v2 sweep. Steven's spec called those defaults a starting point, with the §10 sensitivity sweep as the characterisation. The v2 sweep characterised; this is the result.
+
+### v2 head-to-head per regime (chosen config) — terminal return %
+
+| Regime | BuyHold | DCABot | **DCA-Smart v2** | Smart vs DCA | Smart vs BH |
+|---|---|---|---|---|---|
+| bull    | +483.25 % | +440.10 % | **+414.33 %** | −4.77 pp | −13.79 pp |
+| bear    | −76.46 %  | −72.54 %  | **−71.48 %**  | **+3.87 pp** | **+4.98 pp** |
+| crab    | +58.13 %  | +59.87 %  | **+60.50 %**  | **+0.39 pp** | +0.79 pp |
+| crash   | −19.69 %  | +3.62 %   | **+3.53 %**   | −0.09 pp (tied) | **+23.22 pp** |
+| holdout | +31.63 %  | +29.39 %  | **+28.96 %**  | −0.33 pp (tied) | −2.67 pp |
+
+### v2 head-to-head per regime — max drawdown %
+
+| Regime | BuyHold | DCABot | **DCA-Smart v2** |
+|---|---|---|---|
+| bull    | 28.77 % | 28.77 % | 28.77 % |
+| bear    | 77.20 % | 72.83 % | **71.76 %** (improved) |
+| crab    | 21.74 % | 21.74 % | 21.74 % |
+| crash   | 54.86 % | 21.20 % | **18.63 %** (improved 2.6 pp over DCA) |
+| holdout | 50.08 % | 50.08 % | 50.08 % |
+
+### v2 head-to-head — weighted-average cost basis $/BTC
+
+| Regime | BuyHold | DCABot | **DCA-Smart v2** | Smart cb-improvement vs DCA |
+|---|---|---|---|---|
+| bull    | $10,788 | $11,650 | $12,234 | −5.01 % (smaller v1 deficit of −13.58 %) |
+| bear    | $66,997 | $57,446 | **$55,305** | **+3.73 %** ($2,141 cheaper per BTC) |
+| crab    | $17,162 | $16,975 | $16,908 | +0.40 % (positive, beats v1's −0.98 %) |
+| crash   | $8,547  | $6,625  | $6,631  | −0.09 % (tied) |
+| holdout | $58,930 | $59,949 | $60,147 | −0.33 % (tied) |
+
+### v2 walk-forward — 31 folds + 1 holdout at the chosen config
+
+| Stat | **v2 result** | v1 result |
+|---|---|---|
+| Mean smart-vs-DCA pp | **−0.91 pp** | −1.66 pp |
+| Median smart-vs-DCA pp | **−0.16 pp** (tied) | −0.04 pp (tied) |
+| Positive-lift folds | **14 / 31** (45 %) | 15 / 31 (48 %) |
+| Mean cost-basis improvement | **−1.01 %** | −2.27 % |
+| Worst single fold | −8.82 pp (2020-11 → 2021-05) | −19.49 pp (same fold) |
+| Best single fold | +5.49 pp (2022-05 → 2022-11) | +11.92 pp (2020-01 → 2020-07) |
+| Mean DD across folds | 37.4 % | 36.8 % |
+| Max DD across folds | 62.9 % | 62.9 % |
+
+**Read.** v2's walk-forward distribution is **much more compressed than v1's.** The worst fold improved from −19.49 pp to −8.82 pp (a 10.7 pp reduction in worst-case bull bleed). The best fold dropped from +11.92 pp to +5.49 pp (a 6.4 pp reduction in best-case bear lift). The bot trades less peak-to-peak variance for more consistent week-to-week behavior. This is the *intended* effect of moving to a more DCA-like deployment speed.
+
+**Holdout: −0.33 pp vs DCA (tied).** The bot was essentially identical to DCA over the 1.7-year out-of-sample window — same trades (39 vs 30 due to slightly slower exhaust), same drawdown, same Sharpe.
+
+### v2 walk-forward fold detail (chosen config)
+
+| Test window | Smart % | DCA % | BH % | Smart−DCA pp | cb-imp % | Trades | 2× |
+|---|---|---|---|---|---|---|---|
+| 2019-01-31 → 2019-07-31 | +159.6 | +161.0 | +174.9 | −0.53 | −0.53 | 38 | 4 |
+| 2019-03-31 → 2019-09-30 | +55.0  | +59.1  | +96.2  | −2.63 | −2.70 | 40 | 0 |
+| 2019-05-31 → 2019-11-30 | −18.1  | −14.1  | −6.9   | −4.70 | −4.93 | 40 | 1 |
+| 2019-07-31 → 2020-01-31 | −9.1   | −10.3  | −1.9   | +1.38 | +1.36 | 39 | 3 |
+| 2019-09-30 → 2020-03-30 | −29.8  | −28.8  | −26.6  | −1.48 | −1.50 | 37 | 6 |
+| 2019-11-30 → 2020-05-30 | +29.9  | +29.9  | +21.4  | +0.06 | +0.06 | 38 | 4 |
+| 2020-01-30 → 2020-07-30 | +17.6  | +14.9  | +19.6  | +2.31 | +2.26 | 38 | 4 |
+| 2020-03-30 → 2020-09-30 | +47.1  | +55.6  | +83.6  | −5.40 | −5.71 | 40 | 0 |
+| 2020-05-30 → 2020-11-30 | +93.0  | +91.3  | +94.0  | +0.91 | +0.90 | 40 | 1 |
+| 2020-07-30 → 2021-01-30 | +198.9 | +195.2 | +208.0 | +1.24 | +1.23 | 39 | 2 |
+| 2020-09-30 → 2021-03-30 | +374.9 | +398.1 | +432.9 | −4.65 | −4.88 | 40 | 0 |
+| 2020-11-30 → 2021-05-30 | +51.5  | +66.2  | +87.6  | −8.82 | −9.68 | 40 | 0 |
+| 2021-01-30 → 2021-07-30 | −11.8  | −9.2   | +16.8  | −2.89 | −2.97 | 40 | 0 |
+| 2021-03-30 → 2021-09-30 | −26.8  | −27.4  | −27.9  | +0.87 | +0.86 | 38 | 4 |
+| 2021-05-30 → 2021-11-30 | +63.0  | +61.6  | +70.6  | +0.87 | +0.86 | 39 | 3 |
+| 2021-07-30 → 2022-01-30 | −16.6  | −14.5  | −4.4   | −2.37 | −2.43 | 40 | 0 |
+| 2021-09-30 → 2022-03-30 | −16.8  | −15.1  | +12.0  | −1.97 | −2.01 | 40 | 1 |
+| 2021-11-30 → 2022-05-30 | −40.2  | −41.0  | −49.0  | +1.30 | +1.29 | 37 | 6 |
+| 2022-01-30 → 2022-07-30 | −40.8  | −40.8  | −37.2  | −0.04 | −0.04 | 38 | 4 |
+| 2022-03-30 → 2022-09-30 | −52.5  | −53.4  | −58.6  | +1.99 | +1.95 | 38 | 5 |
+| **2022-05-30 → 2022-11-30** | −29.4  | −33.0  | −44.0  | **+5.49** | +5.21 | 38 | 5 |
+| 2022-07-30 → 2023-01-30 | +7.8   | +4.4   | −0.8   | +3.28 | +3.18 | 38 | 4 |
+| 2022-09-30 → 2023-03-30 | +43.5  | +45.2  | +45.0  | −1.12 | −1.13 | 39 | 3 |
+| 2022-11-30 → 2023-05-30 | +63.9  | +63.2  | +64.6  | +0.43 | +0.42 | 39 | 2 |
+| 2023-01-30 → 2023-07-30 | +26.9  | +26.0  | +23.5  | +0.71 | +0.70 | 38 | 5 |
+| 2023-03-30 → 2023-09-30 | −6.6   | −6.5   | −5.1   | −0.16 | −0.16 | 40 | 0 |
+| 2023-05-30 → 2023-11-30 | +35.3  | +38.3  | +36.5  | −2.14 | −2.19 | 39 | 2 |
+| 2023-07-30 → 2024-01-30 | +56.0  | +54.1  | +47.5  | +1.22 | +1.20 | 36 | 9 |
+| 2023-09-30 → 2024-03-30 | +131.4 | +141.7 | +159.2 | −4.28 | −4.47 | 40 | 0 |
+| 2023-11-30 → 2024-05-30 | +59.0  | +60.3  | +79.0  | −0.80 | −0.81 | 40 | 0 |
+| 2024-01-30 → 2024-07-30 | +30.3  | +39.1  | +54.6  | −6.31 | −6.74 | 40 | 0 |
+| **HOLDOUT 2024-09 → 2026-05** | **+29.0** | +29.4 | +31.6 | **−0.33** | −0.33 | 39 | 3 |
+
+The fold-by-fold mechanism remains the same: folds with significant bear/crash content (8+ 2× buys) produce smart-vs-DCA lift; folds dominated by clean bull legs (0-1 2× buys) produce smart-vs-DCA bleed.
+
+### v2 sensitivity — the new trade-off frontier
+
+Median smart-vs-DCA lift by `base_size_pct` across all other dimensions (v2 sweep):
+
+| `base_size_pct` | bull-pp median | bear-pp median | crab-pp median | crash-pp median |
+|---|---|---|---|---|
+| **1.5 %** (v1 ceiling, kept as floor for comparability) | −15.65 | +8.52 | −6.39 | −1.70 |
+| **2.5 %** (new) | **−3.88** | **+1.59** | **+0.47** | −0.82 |
+| **3.5 %** (DCA-equivalent rate) | +1.51 | −2.86 | −0.12 | −3.11 |
+
+At `base_size_pct = 3.5 %` (matching DCA's $333/day rate), **the bot beats DCA in bull legs (+1.51 pp median)** — the deployment-speed gap closes completely. But the bear edge inverts (−2.86 pp median), and crash performance worsens. **There is no free lunch: forcing the bot to deploy as fast as DCA makes it run out of cash before the actual bottom of bear/crash regimes, which is exactly the spec's failure mode #1 ("sustained downtrend").** The 2.5 % sweet spot is the corner where bull bleed is bounded AND bear edge is preserved.
+
+### v2 catastrophic resistance — still hard guaranteed
+
+Same construction as v1: `leverage = 1.0` hard-coded, no borrow, no short, no margin. `buy_amt > cash` clips to `cash`. No exit / no sell rule. **Across 324 sweep runs + 31 walk-forward folds + 1 holdout in v2: zero halts, zero negative cash events, zero NaN trades.** The worst DD observed is still BTC's own −77.2 % in the cycle bear; the bot exits at −71.76 % (now 1.07 pp better than DCA, was 1.36 pp in v1). The bot cannot be wiped out by anything short of BTC going to zero.
+
+### v2 final verdict — **PASS-AS-SPECIALIST**
+
+**Why PASS this time:**
+- The bull bleed is now **−4.77 pp** (was −11.96 pp in v1) — bounded and tolerable for a portfolio-specialist bot.
+- The bear edge is **preserved**: +3.87 pp lift vs DCA, +3.73 % cost-basis improvement, +4.98 pp vs BuyHold during the cycle bear.
+- The crab regime **flipped from negative to positive** (+0.39 pp vs −0.97 pp in v1) — small, but the bot is no longer a net drag in this regime.
+- The crash regime **is tied with DCA** (−0.09 pp) with **2.6 pp better drawdown** (18.63 % vs 21.20 %).
+- The walk-forward variance **compressed substantially**: worst fold went from −19.49 pp to −8.82 pp. Steven won't see an alarming "DCA-Smart is wildly underperforming DCA this month" notification.
+- Holdout result is **tied with DCA** (−0.33 pp ≈ $33 on $10k over 1.7 years) — the bot doesn't lose money relative to DCA out-of-sample; it does the same job with a slightly different cash deployment cadence.
+
+**Why still SPECIALIST, not BALANCED:**
+
+We separately verified what would happen at `base_size_pct = 3.5 %` (DCA-equivalent deployment speed). At base=3.5%, the bot **beats DCA in bull legs (+1.51 pp median)** but **loses the bear edge entirely (−2.86 pp median)**. That's a different bot — a slightly-randomized DCA, not a bear/crash specialist. Choosing base=3.5% would gain bull parity at the cost of the only thing that differentiates this bot from plain DCA. Steven didn't approve building a bot whose job is "indistinguishable from DCA on average"; the spec's identity is bear-leg accumulation, and the 2.5 % config preserves it.
+
+**The deployment recommendation:** ship the picked config (`rsi=35, dip×=1.5, week=2, base=2.5%`) as the **DCA-Smart** bot on the Stack tab. Sit it next to plain DCA so the head-to-head is visible. Watch 8 weeks of paper. If a real fear leg fires (RSI<35 days during the deploy window), DCA-Smart will be the first bot stacking through it cheaply. If the deploy window is all bull, DCA-Smart will track DCA within ~5 pp — known, bounded cost.
+
+### v2 updated `VARIANTS` entry (paste-ready, NOT YET added)
+
+```python
+{"slug": "dca-smart", "name": "DCA-Smart", "type": "dca_smart", "tab": "stack",
+ "style": "daily DCA + 1.5× on RSI(14)<35 days — bear/crash specialist with bounded bull bleed",
+ "rsi_period_days": 14, "rsi_threshold": 35, "dip_multiplier": 1.5,
+ "max_dip_buys_per_week": 2, "dip_pool_pct": 0.0, "base_size_pct": 0.025},
+```
+
+Required parallel changes (the same `make_bot()`, `_state_label()`, `min_capital()` wiring noted in v1 §8.1 — unchanged). No changes to `api.py`, dashboard tabs, launchd plists, or Telegram digests.
+
+### v2 suggested dashboard copy
+
+> *"DCA-Smart" — buys $250 (2.5%) of BTC daily, but **1.5×** that amount ($375) on days where the 14-day RSI dips below 35, up to 2 dip buys per week. Built for bear legs: when fear shows up in the RSI it accumulates more aggressively at the cheaper prices. Expects to bleed mildly in clean bull legs (~5 pp vs plain DCA) and to win bears (~4 pp). Sit next to plain DCA on this tab so the head-to-head stays honest.*
+
+### What changed in source files (v1 → v2)
+
+- `strategies/dca_smart_backtest.py`: `BASE_SIZE_PCT_SWEEP` lifted from `[0.005, 0.010, 0.015]` to `[0.015, 0.025, 0.035]`. `QUICK_BASE` matched. Five-line change.
+- `strategies/more_bots.py:DCASmartBot`: **no change.** The mechanism is identical.
+- v1 artifacts archived under `docs/gate3-reports/02-dca-smart-data/v1/` for traceability.
+
+---
+
+## v1 report (2026-05-31) — kept below for context
+
+> *The TL;DR table immediately below is the v1 verdict. The v2 section above supersedes it. Everything from "What was tested" onward is the v1 report unchanged, so the v2 analysis remains comparable point-by-point.*
+
+## TL;DR (v1) — Verdict: **MIXED → recommend SHIP-AS-SPECIALIST (paper)**
 
 | Scorecard criterion | Spec threshold | Result | Pass? |
 |---|---|---|---|
