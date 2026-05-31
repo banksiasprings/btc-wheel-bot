@@ -359,6 +359,142 @@ class DCASmartBot(DCABot):
                                               self.capital * self.dip_pool_pct))
 
 
+class DonchianBot(TrendBot):
+    """Donchian channel breakout — long-only, binary 100% sizing (v1).
+
+    Enters long when today's daily close exceeds the prior `entry_lookback`-day
+    high. Exits when today's close drops below the prior `exit_lookback`-day
+    low. Today's close is excluded from both extrema (Faith 2007 convention).
+    No leverage, no pyramid, no re-entry cooldown. A 35% drawdown halt blocks
+    new entries but lets an open long exit on the M-day-low rule normally
+    (forcing a flatten would lock in the bottom).
+
+    Inherits `_SpotBot` plumbing via `TrendBot` (cash / btc / fee / peak /
+    steps / trades + `_bump`). The parent `ma_q` / `ma_sum` fields are
+    initialised at `ma_hours=1` (zero-cost ring) so the inherited
+    `to_dict()` / `load_dict()` shape round-trips cleanly without special-
+    casing the parent fields.
+
+    Daily-close construction is synthetic rolling-24h, mirroring
+    `DCASmartBot.warmup()` / `step()`: stepped hourly by the farm, and every
+    24 hourly closes one synthetic daily close is appended to the deque.
+    """
+
+    def __init__(self, capital=10_000.0,
+                 entry_lookback_days=20, exit_lookback_days=10,
+                 position_size_pct=1.0, long_only=True,
+                 max_drawdown_halt_pct=0.35,
+                 halt_release_recovery_pct=0.10,
+                 fee=FEE):
+        super().__init__(capital=capital, ma_hours=1, fee=fee)
+        self.entry_lookback = int(entry_lookback_days)
+        self.exit_lookback = int(exit_lookback_days)
+        self.position_size_pct = float(position_size_pct)
+        self.long_only = bool(long_only)
+        self.max_dd_halt = float(max_drawdown_halt_pct)
+        self.halt_release_recovery = float(halt_release_recovery_pct)
+        # +1 so we can compute "prior N closes" while today's close is held.
+        self.daily_closes = deque(maxlen=self.entry_lookback + 1)
+        self.hours_since_last_close = 0
+        self.position = 0           # 0 = flat, 1 = long (−1 reserved for v2)
+        self.entry_price = None
+        self.consecutive_losing_trades = 0
+        self.halt_active = False
+        self.total_trades = 0       # entry + exit events; mirrors self.trades
+
+    def warmup(self, prices):
+        """Seed the daily-close deque from an hourly warm-up array.
+        Takes every 24th close so the channel is valid as soon as the
+        bot enters the live loop. Mirrors `DCASmartBot.warmup()`."""
+        for i, p in enumerate(prices):
+            if i % 24 == 23:
+                self.daily_closes.append(float(p))
+        if prices:
+            self.last_price = prices[-1]
+
+    def step(self, price):
+        # Roll the synthetic daily-close bucket: every 24h append the latest.
+        self.hours_since_last_close += 1
+        if self.hours_since_last_close >= 24:
+            self.daily_closes.append(float(price))
+            self.hours_since_last_close = 0
+
+        # Drawdown halt: trips at -max_dd_halt vs peak, clears when equity
+        # recovers to within halt_release_recovery of the peak.
+        eq = self.equity(price)
+        if self.peak > 0:
+            if eq / self.peak < (1.0 - self.max_dd_halt):
+                self.halt_active = True
+            elif (self.halt_active
+                  and eq / self.peak >= (1.0 - self.halt_release_recovery)):
+                self.halt_active = False
+
+        # Need entry_lookback + 1 closes for a fresh breakout signal.
+        if len(self.daily_closes) >= self.entry_lookback + 1:
+            closes = list(self.daily_closes)
+            today = closes[-1]
+            prior = closes[:-1]
+            n_high = max(prior[-self.entry_lookback:])
+            m_low = min(prior[-self.exit_lookback:])
+
+            # Exit first (same-bar collision: exit wins, re-evaluate next bar).
+            if self.position == 1 and today < m_low:
+                exit_value = self.btc * price * (1 - self.fee)
+                if self.entry_price is not None and price < self.entry_price:
+                    self.consecutive_losing_trades += 1
+                else:
+                    self.consecutive_losing_trades = 0
+                self.cash += exit_value
+                self.btc = 0.0
+                self.position = 0
+                self.entry_price = None
+                self.trades += 1
+                self.total_trades += 1
+            elif (self.position == 0 and today > n_high
+                  and not self.halt_active and self.cash > 0):
+                allot = self.cash * self.position_size_pct
+                self.btc += allot / price * (1 - self.fee)
+                self.cash -= allot
+                self.position = 1
+                self.entry_price = price
+                self.trades += 1
+                self.total_trades += 1
+
+        self._bump(price)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update({
+            "entry_lookback": self.entry_lookback,
+            "exit_lookback": self.exit_lookback,
+            "position_size_pct": self.position_size_pct,
+            "long_only": self.long_only,
+            "max_dd_halt": self.max_dd_halt,
+            "halt_release_recovery": self.halt_release_recovery,
+            "daily_closes": list(self.daily_closes),
+            "hours_since_last_close": self.hours_since_last_close,
+            "position": self.position,
+            "entry_price": self.entry_price,
+            "consecutive_losing_trades": self.consecutive_losing_trades,
+            "halt_active": self.halt_active,
+            "total_trades": self.total_trades,
+        })
+        return d
+
+    def load_dict(self, d):
+        super().load_dict(d)
+        self.daily_closes.clear()
+        for c in d.get("daily_closes", []):
+            self.daily_closes.append(float(c))
+        self.hours_since_last_close = int(d.get("hours_since_last_close", 0))
+        self.position = int(d.get("position", 0))
+        ep = d.get("entry_price")
+        self.entry_price = float(ep) if ep is not None else None
+        self.consecutive_losing_trades = int(d.get("consecutive_losing_trades", 0))
+        self.halt_active = bool(d.get("halt_active", False))
+        self.total_trades = int(d.get("total_trades", self.trades))
+
+
 # ── sanity test on daily data ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -390,3 +526,29 @@ if __name__ == "__main__":
         for p in closes:
             b.step(p)
         rep(name, b.equity(closes[-1]))
+
+    # Donchian sanity rows — daily-cadence harness feeds raw daily closes;
+    # the bot's 24h synthetic counter still triggers on each one (1 step =
+    # 1 day, hours_since_last_close steps 1→24→0 every call).
+    for label, n, m in (("Donchian 20/10", 20, 10), ("Donchian 55/20", 55, 20)):
+        b = DonchianBot(entry_lookback_days=n, exit_lookback_days=m)
+        # Daily closes: increment counter by 24 each step so a daily close is
+        # always appended. The synthetic counter is the live-bot path; in
+        # daily-driven sanity we short-circuit by direct append.
+        for p in closes:
+            b.daily_closes.append(float(p))
+            b.hours_since_last_close = 0
+            # Re-run signal logic without the bucket roll (above did it).
+            if len(b.daily_closes) >= b.entry_lookback + 1:
+                cs = list(b.daily_closes)
+                today, prior = cs[-1], cs[:-1]
+                nh = max(prior[-b.entry_lookback:])
+                ml = min(prior[-b.exit_lookback:])
+                if b.position == 1 and today < ml:
+                    b.cash += b.btc * p * (1 - b.fee); b.btc = 0.0
+                    b.position = 0; b.trades += 1
+                elif b.position == 0 and today > nh and b.cash > 0:
+                    b.btc += b.cash / p * (1 - b.fee); b.cash = 0.0
+                    b.position = 1; b.trades += 1
+            b._bump(p)
+        rep(label, b.equity(closes[-1]))

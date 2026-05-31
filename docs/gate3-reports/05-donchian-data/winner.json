@@ -1,0 +1,29 @@
+{
+  "entry_lookback": 20,
+  "exit_lookback": 10,
+  "position_size_pct": 1.0,
+  "rationale": "NO variant cleared K2 + K4. Picked by best holdout APR so downstream stages have a target; verdict is PARK (cite K2/K4 in report).",
+  "pass_status": "K2+K4 FAIL",
+  "n_eligible": 0,
+  "metrics": {
+    "bull_vs_trend": -2064.6154436088564,
+    "bear_vs_trend": 16.266172815618326,
+    "crab_vs_trend": -31.313501455555716,
+    "crash_vs_trend": -159.92031116849108,
+    "bull_apr": 417.2029421375898,
+    "bear_apr": -33.547505070115825,
+    "crab_apr": 26.682279426011178,
+    "crash_apr": -16.86822253797101,
+    "bull_dd": 28.76871375662689,
+    "bear_dd": 37.414739706559544,
+    "crab_dd": 20.393007433628753,
+    "crash_dd": 9.56076754220479,
+    "holdout_apr": 31.78191360717406,
+    "holdout_dd": 24.4981327844523,
+    "full_apr": 26.82734476278896,
+    "full_dd": 37.522048891712515,
+    "full_sharpe": 0.9454671229780137,
+    "passes_k4": true,
+    "passes_k2": false
+  }
+}
