@@ -29,7 +29,7 @@ from grid_bot import GridBot                      # noqa: E402
 from infinity_grid_bot import InfinityGridBot     # noqa: E402
 from income_bots import FundingBot, LongVolBot    # noqa: E402
 from more_bots import (BuyHoldBot, DCABot, DCASmartBot,     # noqa: E402
-                       RebalanceBot, ShortVolBot, TrendBot)
+                       DonchianBot, RebalanceBot, ShortVolBot, TrendBot)
 from convex_bots import (BackspreadBot, GammaScalpBot,      # noqa: E402
                          TailHedgeBot)
 
@@ -92,6 +92,10 @@ VARIANTS = [
      "style": "rides uptrends, sits in cash in downtrends (7-day signal)"},
     {"slug": "trend-slow", "name": "Trend (slow)", "type": "trend", "tab": "trend", "ma_hours": 1200,
      "style": "rides big trends only (50-day signal) — fewer flips"},
+    {"slug": "donchian-20-10", "name": "Donchian 20/10", "type": "donchian", "tab": "trend",
+     "style": "20-day breakout / 10-day exit (Turtle System 1) — bull-leg specialist, dominated holdout",
+     "entry_lookback_days": 20, "exit_lookback_days": 10, "position_size_pct": 1.0,
+     "long_only": True, "max_drawdown_halt_pct": 0.35},
     # ── Stack: accumulation & benchmarks ──
     {"slug": "rebalance",  "name": "Rebalance 50/50", "type": "rebalance", "tab": "stack",
      "style": "half BTC / half cash, rebalances on drift — buys low, sells high"},
@@ -165,7 +169,7 @@ def min_capital(v):
         return int(max(100, round(200 / v.get("leverage", 1.0) / 50) * 50))
     if t in ("longvol", "shortvol", "tailhedge", "gammascalp", "backspread"):
         return int(max(200, round(500 / v.get("leverage", 1.0) / 50) * 50))
-    if t in ("trend", "rebalance", "dca", "dca_smart", "buyhold"):
+    if t in ("trend", "donchian", "rebalance", "dca", "dca_smart", "buyhold"):
         return 50          # just needs to hold a little BTC above the exchange minimum
     return 100
 
@@ -188,6 +192,15 @@ def make_bot(v):
         return BackspreadBot(capital=PAPER_CAPITAL, leverage=v.get("leverage", 1.0))
     if t == "trend":
         return TrendBot(capital=PAPER_CAPITAL, ma_hours=v.get("ma_hours", 168))
+    if t == "donchian":
+        return DonchianBot(
+            capital=PAPER_CAPITAL,
+            entry_lookback_days=v.get("entry_lookback_days", 20),
+            exit_lookback_days=v.get("exit_lookback_days", 10),
+            position_size_pct=v.get("position_size_pct", 1.0),
+            long_only=v.get("long_only", True),
+            max_drawdown_halt_pct=v.get("max_drawdown_halt_pct", 0.35),
+        )
     if t == "rebalance":
         return RebalanceBot(capital=PAPER_CAPITAL)
     if t == "dca":
@@ -245,6 +258,13 @@ def load_variant(v, rest):
             log(f"{v['name']}: warmed up from {len(closes)}h of history")
     elif v.get("type") == "dca_smart":            # seed daily-close deque for RSI
         hours = v.get("rsi_period_days", 14) * 24 + 24
+        closes = warmup_closes(rest, hours)
+        if closes:
+            bot.warmup(closes)
+            log(f"{v['name']}: warmed up from {len(closes)}h of history "
+                f"(daily closes: {len(bot.daily_closes)})")
+    elif v.get("type") == "donchian":             # seed daily-close deque for channel
+        hours = (v.get("entry_lookback_days", 20) + 1) * 24 + 24
         closes = warmup_closes(rest, hours)
         if closes:
             bot.warmup(closes)
@@ -313,6 +333,14 @@ def _state_label(v, bot):
     held = bot.btc_held() if hasattr(bot, "btc_held") else 0.0
     if t == "trend":
         return "long BTC (uptrend)" if held > 1e-9 else "in cash (downtrend)"
+    if t == "donchian":
+        if getattr(bot, "halt_active", False):
+            return "🛑 HALTED — drawdown ≥ 35% (no new entries until recovery)"
+        if held > 1e-9:
+            ep = getattr(bot, "entry_price", None)
+            return (f"long since ${ep:,.0f} breakout" if ep
+                    else f"long {held:.4f} BTC (breakout)")
+        return "in cash (waiting for N-day high breakout)"
     if t == "dca":
         return f"stacked {held:.4f} BTC"
     if t == "dca_smart":

@@ -423,6 +423,26 @@ def _bot_page(slug: str) -> str:
                  "<div>• <b>Wins:</b> in strong, sustained trends — rides the ups, dodges the downs.</div>"
                  "<div>• <b>Loses:</b> in choppy markets (whipsaws in and out, paying fees).</div>"
                  "<div style='color:#9aa4b2;margin-top:4px'>This one DOES bet on direction — the contrast to the neutral bots.</div>")
+    elif t == "donchian":
+        n = v.get("entry_lookback_days", 20); m = v.get("exit_lookback_days", 10)
+        works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
+                 f"<div>• <b>How:</b> buys all-in when today's close breaks the highest close of the last {n} days; "
+                 f"sells everything when today's close drops below the lowest close of the last {m} days. "
+                 "The classic Turtle-trader rule — binary, in or out, no leverage.</div>"
+                 "<div>• <b>Wins:</b> sustained bull legs after a quiet stretch — captured "
+                 "+31.78%/yr on the 2024-09 → 2026-05 holdout, beating both Trend bots and Buy &amp; Hold.</div>"
+                 "<div>• <b>Loses:</b> in choppy markets and during the very first burst of a bull leg "
+                 "(it waits for the breakout to confirm, missing the early move TrendBot catches).</div>"
+                 "<div>• <b>Safety brake:</b> 35% drawdown halt blocks new entries; an open long still "
+                 "exits cleanly on the M-day-low rule. No leverage. Long-only spot-equivalent — "
+                 "can never be wiped out.</div>"
+                 "<div style='color:#9aa4b2;margin-top:6px'>The <b>portfolio-specialist deploy</b> — Gate 3 "
+                 "K1 + K2 fired on 2020-2022 history (the cousin TrendBot dominated three regimes; walk-forward "
+                 "max DD 39%), but K3 corr stayed at 0.79 with TrendBot and K4 holdout passed by 27 ppt over "
+                 "the floor. Steven greenlit deploy on the holdout strength + K3/K5 catastrophic resistance; "
+                 "the historical kill conditions were calibrated on a regime that the 2024-2026 data doesn't "
+                 "look like. Watch how it tracks alongside Trend (fast) and Trend (slow) — that's the live "
+                 "K3 check.</div>")
     elif t == "rebalance":
         works = (f"<div>• <b>Right now:</b> {v['state']}</div>"
                  "<div>• <b>How:</b> keeps about half in Bitcoin, half in cash; rebalances when it drifts.</div>"
