@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  com.bsf.hyperliquid.snapshot.plist — daily Hyperliquid leaderboard + HLP
+  vault snapshot.
+
+  Runs scripts/fetch_hyperliquid_leaderboard.py once per day. The fetch is
+  idempotent on date — re-running on the same day exits without re-pulling.
+
+  Schedule: 10:30 AEST (= 00:30 UTC). launchd's StartCalendarInterval uses
+  the *local* system timezone, so AEST (UTC+10, no DST) at 10:30 maps to
+  00:30 UTC. 00:30 UTC is chosen because Hyperliquid funding rolls hourly
+  on the hour — 30 minutes past gives the leaderboard time to settle.
+
+  Install:
+      cp scripts/com.bsf.hyperliquid.snapshot.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.bsf.hyperliquid.snapshot.plist
+
+  Fire it once now (sanity check):
+      launchctl kickstart -k gui/$(id -u)/com.bsf.hyperliquid.snapshot
+
+  Unload:
+      launchctl unload ~/Library/LaunchAgents/com.bsf.hyperliquid.snapshot.plist
+
+  Logs: /tmp/bsf_hyperliquid_snapshot.log
+        data/logs/fetch_hyperliquid.log (the script's own rotating log)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.bsf.hyperliquid.snapshot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/python3.11</string>
+        <string>scripts/fetch_hyperliquid_leaderboard.py</string>
+        <string>--top</string>
+        <string>100</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/openclaw/Documents/btc-wheel-bot</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>10</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/tmp/bsf_hyperliquid_snapshot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/bsf_hyperliquid_snapshot.log</string>
+</dict>
+</plist>

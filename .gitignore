@@ -38,6 +38,9 @@ backtest_results.png
 !/data/raw/
 /data/raw/*
 !/data/raw/README.md
+!/data/raw/hyperliquid/
+/data/raw/hyperliquid/*
+!/data/raw/hyperliquid/README.md
 
 # Optimizer outputs
 sweep_sensitivity.png
