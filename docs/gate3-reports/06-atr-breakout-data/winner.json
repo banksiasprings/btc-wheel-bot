@@ -1,0 +1,10 @@
+{
+  "entry_lookback": 20,
+  "atr_period": 14,
+  "atr_K": 3.0,
+  "position_size_pct": 1.0,
+  "rationale": "A-priori kept (Steven's Open Q #3 default). Training \u0394=-426.12pp, holdout APR=+2.62%. No challenger cleared the \u2265+5pp double-lead bar.",
+  "override_fired": false,
+  "apriori_train_delta_pp": -426.1156979055129,
+  "apriori_holdout_apr_pct": 2.618735171247466
+}

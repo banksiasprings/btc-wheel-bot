@@ -495,6 +495,253 @@ class DonchianBot(TrendBot):
         self.total_trades = int(d.get("total_trades", self.trades))
 
 
+class ATRBreakoutBot(TrendBot):
+    """Turtle S1 N-day breakout entry + K×ATR(p) monotonic trailing stop.
+
+    Enters long when today's daily close exceeds the prior `entry_lookback`-day
+    high (today excluded, Faith 2007). Trails a stop at K × ATR(p) below the
+    running peak-since-entry — the stop only ever ratchets up: when today's
+    close beats the running peak, the peak rises and the candidate new stop
+    `peak − K × ATR` is taken if it's higher than the current stop. ATR is
+    Wilder TR averaged (SMA, not exponential) over the last p days. Exits when
+    today's close falls to or below the current stop. Sits flat until a fresh
+    N-day high re-fires entry; no re-entry cooldown in v1 (the trail itself is
+    the cooldown).
+
+    Long-only, binary 100 % cash sizing, no pyramid. 35 % drawdown halt blocks
+    new entries; open longs still exit on the trail rule normally (forcing a
+    flatten would lock the bottom).
+
+    Inherits `_SpotBot` plumbing via `TrendBot` (cash / btc / fee / peak /
+    steps / trades + `_bump`). Parent `ma_q` / `ma_sum` are initialised at
+    `ma_hours=1` (zero-cost ring) so the inherited `to_dict()` / `load_dict()`
+    shape round-trips. Daily H/L/C deques are built from an hourly OHLC
+    accumulator: stepped hourly by the farm, every 24 hourly closes one
+    synthetic daily bar is appended. Same construction shape as `DonchianBot`,
+    extended with high/low for the ATR True Range calc.
+    """
+
+    def __init__(self, capital=10_000.0,
+                 entry_lookback_days=20, atr_period_days=14,
+                 atr_multiplier_K=3.0, position_size_pct=1.0,
+                 reentry_cooldown_days=0, long_only=True,
+                 max_drawdown_halt_pct=0.35,
+                 halt_release_recovery_pct=0.10,
+                 hours_per_bar=24, fee=FEE):
+        super().__init__(capital=capital, ma_hours=1, fee=fee)
+        self.entry_lookback = int(entry_lookback_days)
+        self.atr_period = int(atr_period_days)
+        self.atr_K = float(atr_multiplier_K)
+        self.position_size_pct = float(position_size_pct)
+        self.reentry_cooldown_days = int(reentry_cooldown_days)
+        self.long_only = bool(long_only)
+        self.max_dd_halt = float(max_drawdown_halt_pct)
+        self.halt_release_recovery = float(halt_release_recovery_pct)
+        self.hours_per_bar = int(hours_per_bar)
+
+        # Need prior-N high (N+1 entries with today held) and prior-p TR (needs
+        # closes[-p-1:] so p+1 entries). Size the ring to max(N, p) + 1.
+        size = max(self.entry_lookback, self.atr_period) + 1
+        self.daily_highs = deque(maxlen=size)
+        self.daily_lows = deque(maxlen=size)
+        self.daily_closes = deque(maxlen=size)
+
+        # Sub-day OHLC bucket
+        self.bar_high = None
+        self.bar_low = None
+        self.bar_close = None
+        self.bar_hours = 0
+
+        # Position state
+        self.position = 0           # 0 = flat, 1 = long (-1 reserved for v2)
+        self.entry_price = None
+        self.peak_since_entry = None
+        self.current_stop = None
+        self.cooldown_remaining_days = 0
+
+        # Diagnostics
+        self.consecutive_losing_trades = 0
+        self.halt_active = False
+        self.total_trades = 0
+
+    def _compute_atr(self):
+        """Wilder TR averaged over the last p days (SMA per spec §2.1).
+        TR_i = max(H_i − L_i, |H_i − C_{i−1}|, |L_i − C_{i−1}|). Returns None
+        until the deque holds p+1 closes (need previous close for TR_1)."""
+        if len(self.daily_closes) < self.atr_period + 1:
+            return None
+        highs = list(self.daily_highs)
+        lows = list(self.daily_lows)
+        closes = list(self.daily_closes)
+        total = 0.0
+        for i in range(-self.atr_period, 0):
+            h, l, c_prev = highs[i], lows[i], closes[i - 1]
+            tr = max(h - l, abs(h - c_prev), abs(l - c_prev))
+            total += tr
+        return total / self.atr_period
+
+    def warmup(self, prices):
+        """Seed daily H/L/C deques from an hourly warmup array. Chunks every
+        24 hourly bars into one synthetic daily bar (max=high, min=low,
+        last=close). Partial trailing chunk is dropped — matches the
+        DonchianBot pattern of taking every 24th close."""
+        n_days = len(prices) // 24
+        for d in range(n_days):
+            chunk = prices[d * 24:(d + 1) * 24]
+            self.daily_highs.append(float(max(chunk)))
+            self.daily_lows.append(float(min(chunk)))
+            self.daily_closes.append(float(chunk[-1]))
+        if prices:
+            self.last_price = prices[-1]
+
+    def step(self, price):
+        p = float(price)
+        # Sub-day OHLC accumulator
+        if self.bar_high is None:
+            self.bar_high = p
+            self.bar_low = p
+        else:
+            if p > self.bar_high:
+                self.bar_high = p
+            if p < self.bar_low:
+                self.bar_low = p
+        self.bar_close = p
+        self.bar_hours += 1
+
+        bar_closed = (self.bar_hours >= self.hours_per_bar)
+        if bar_closed:
+            self.daily_highs.append(self.bar_high)
+            self.daily_lows.append(self.bar_low)
+            self.daily_closes.append(self.bar_close)
+            self.bar_high = None
+            self.bar_low = None
+            self.bar_close = None
+            self.bar_hours = 0
+            if self.cooldown_remaining_days > 0:
+                self.cooldown_remaining_days -= 1
+
+        # Drawdown halt: trips at −max_dd_halt vs peak, clears when equity
+        # recovers to within halt_release_recovery of the peak. Halt blocks
+        # new entries; open longs still exit on the normal trail rule.
+        eq = self.equity(p)
+        if self.peak > 0:
+            if eq / self.peak < (1.0 - self.max_dd_halt):
+                self.halt_active = True
+            elif (self.halt_active
+                  and eq / self.peak >= (1.0 - self.halt_release_recovery)):
+                self.halt_active = False
+
+        # Breakout / trail logic runs at daily-bar close, once the deques
+        # are long enough.
+        min_ready = max(self.entry_lookback, self.atr_period) + 1
+        if bar_closed and len(self.daily_closes) >= min_ready:
+            closes = list(self.daily_closes)
+            highs = list(self.daily_highs)
+            today_close = closes[-1]
+            # Prior N-day high (today excluded).
+            prior_highs = highs[-self.entry_lookback - 1:-1]
+            n_high = max(prior_highs)
+            atr = self._compute_atr()
+
+            if self.position == 1:
+                # Trail update FIRST — peak ratchet, then candidate new stop.
+                if self.peak_since_entry is None or today_close > self.peak_since_entry:
+                    self.peak_since_entry = today_close
+                    if atr is not None:
+                        new_stop = self.peak_since_entry - self.atr_K * atr
+                        if self.current_stop is None or new_stop > self.current_stop:
+                            self.current_stop = new_stop
+                # Exit check — close at or below the trail.
+                if self.current_stop is not None and today_close <= self.current_stop:
+                    exit_value = self.btc * p * (1 - self.fee)
+                    if self.entry_price is not None and p < self.entry_price:
+                        self.consecutive_losing_trades += 1
+                    else:
+                        self.consecutive_losing_trades = 0
+                    self.cash += exit_value
+                    self.btc = 0.0
+                    self.position = 0
+                    self.entry_price = None
+                    self.peak_since_entry = None
+                    self.current_stop = None
+                    self.cooldown_remaining_days = self.reentry_cooldown_days
+                    self.trades += 1
+                    self.total_trades += 1
+            elif (self.position == 0
+                  and today_close > n_high
+                  and atr is not None
+                  and self.cooldown_remaining_days == 0
+                  and not self.halt_active
+                  and self.cash > 0):
+                allot = self.cash * self.position_size_pct
+                self.btc += allot / p * (1 - self.fee)
+                self.cash -= allot
+                self.position = 1
+                self.entry_price = p
+                self.peak_since_entry = today_close
+                self.current_stop = today_close - self.atr_K * atr
+                self.trades += 1
+                self.total_trades += 1
+
+        self._bump(p)
+
+    def to_dict(self):
+        d = super().to_dict()
+        d.update({
+            "entry_lookback": self.entry_lookback,
+            "atr_period": self.atr_period,
+            "atr_K": self.atr_K,
+            "position_size_pct": self.position_size_pct,
+            "reentry_cooldown_days": self.reentry_cooldown_days,
+            "long_only": self.long_only,
+            "max_dd_halt": self.max_dd_halt,
+            "halt_release_recovery": self.halt_release_recovery,
+            "hours_per_bar": self.hours_per_bar,
+            "daily_highs": list(self.daily_highs),
+            "daily_lows": list(self.daily_lows),
+            "daily_closes": list(self.daily_closes),
+            "bar_high": self.bar_high,
+            "bar_low": self.bar_low,
+            "bar_close": self.bar_close,
+            "bar_hours": self.bar_hours,
+            "position": self.position,
+            "entry_price": self.entry_price,
+            "peak_since_entry": self.peak_since_entry,
+            "current_stop": self.current_stop,
+            "cooldown_remaining_days": self.cooldown_remaining_days,
+            "consecutive_losing_trades": self.consecutive_losing_trades,
+            "halt_active": self.halt_active,
+            "total_trades": self.total_trades,
+        })
+        return d
+
+    def load_dict(self, d):
+        super().load_dict(d)
+        self.daily_highs.clear()
+        for c in d.get("daily_highs", []):
+            self.daily_highs.append(float(c))
+        self.daily_lows.clear()
+        for c in d.get("daily_lows", []):
+            self.daily_lows.append(float(c))
+        self.daily_closes.clear()
+        for c in d.get("daily_closes", []):
+            self.daily_closes.append(float(c))
+        def _maybe_float(v):
+            return float(v) if v is not None else None
+        self.bar_high = _maybe_float(d.get("bar_high"))
+        self.bar_low = _maybe_float(d.get("bar_low"))
+        self.bar_close = _maybe_float(d.get("bar_close"))
+        self.bar_hours = int(d.get("bar_hours", 0))
+        self.position = int(d.get("position", 0))
+        self.entry_price = _maybe_float(d.get("entry_price"))
+        self.peak_since_entry = _maybe_float(d.get("peak_since_entry"))
+        self.current_stop = _maybe_float(d.get("current_stop"))
+        self.cooldown_remaining_days = int(d.get("cooldown_remaining_days", 0))
+        self.consecutive_losing_trades = int(d.get("consecutive_losing_trades", 0))
+        self.halt_active = bool(d.get("halt_active", False))
+        self.total_trades = int(d.get("total_trades", self.trades))
+
+
 # ── sanity test on daily data ─────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -530,6 +777,18 @@ if __name__ == "__main__":
     # Donchian sanity rows — daily-cadence harness feeds raw daily closes;
     # the bot's 24h synthetic counter still triggers on each one (1 step =
     # 1 day, hours_since_last_close steps 1→24→0 every call).
+    # ATR breakout sanity rows — daily-cadence harness feeds raw daily closes
+    # and treats each as a full daily bar (H=L=C=close, single-day candle).
+    # Real backtests use the hourly OHLC path; this is just a smoke check.
+    for label, n, p, k in (("ATR 20/14/3.0", 20, 14, 3.0),
+                           ("ATR 20/14/1.5", 20, 14, 1.5),
+                           ("ATR 40/21/2.0", 40, 21, 2.0)):
+        b = ATRBreakoutBot(entry_lookback_days=n, atr_period_days=p,
+                            atr_multiplier_K=k, hours_per_bar=1)
+        for price in closes:
+            b.step(price)
+        rep(label, b.equity(closes[-1]))
+
     for label, n, m in (("Donchian 20/10", 20, 10), ("Donchian 55/20", 55, 20)):
         b = DonchianBot(entry_lookback_days=n, exit_lookback_days=m)
         # Daily closes: increment counter by 24 each step so a daily close is
