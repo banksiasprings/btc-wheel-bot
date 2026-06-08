@@ -443,6 +443,65 @@ def _ann_span(v) -> str:
     return f"<span style='color:{c};font-weight:600'>{v:+,.0f}%</span>"
 
 
+def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
+    """Annualised run-rate ROI projected from the trailing 7 / 30 / 365 days,
+    plus realised return YTD. rows = [(datetime, equity)] ascending.
+
+    Each window: period_return × (365 / elapsed_days). A window returns None
+    (rendered 'TBD') when there isn't enough history — in particular the 1y
+    figure is None until the track spans most of a year, since projecting an
+    annual number off a few weeks would be pure noise. YTD is the realised
+    return since 1 Jan of the latest point's year (= total return for a bot that
+    launched this year)."""
+    out = {"w": None, "mo": None, "y": None, "ytd": None}
+    if len(rows) < 2:
+        return out
+    now_t, now_e = rows[-1]
+
+    def ann(window_days: float, min_hours: float):
+        cutoff = now_t - timedelta(days=window_days)
+        base = None
+        for t, e in rows:
+            if t <= cutoff:
+                base = (t, e)
+            else:
+                break
+        if base is None:
+            base = rows[0]           # < window_days of history → project off all of it
+        bt, be = base
+        elapsed = (now_t - bt).total_seconds() / 86400.0
+        if be <= 0 or elapsed * 24 < min_hours:
+            return None
+        return (now_e / be - 1) * (365.0 / elapsed) * 100
+
+    span_days = (now_t - rows[0][0]).total_seconds() / 86400.0
+    out["w"] = ann(7, 12)
+    out["mo"] = ann(30, 36)
+    out["y"] = ann(365, 12) if span_days >= 300 else None   # else TBD — not a year yet
+    jan1 = datetime(now_t.year, 1, 1, tzinfo=now_t.tzinfo)
+    ybase = next(((t, e) for t, e in rows if t >= jan1), rows[-1])
+    out["ytd"] = (now_e / ybase[1] - 1) * 100 if ybase[1] > 0 else None
+    return out
+
+
+# Switching cost — reuses Freyr's crypto cost model (rules/registry.yaml:
+# crypto-cost-bps = 3.0 bps/side = 2 bps fee + 1 bp slippage on Hyperliquid/Binance
+# majors). A round trip (fully exit + re-enter a sleeve) is 2 sides = 6.0 bps of the
+# gross notional; as a fraction of NAV that scales with the bot's gross leverage:
+# 1× ≈ 0.06% (cheap-exit specialist — can take narrow edges), 3× ≈ 0.18% (needs a
+# fatter edge to be worth running). Methodology mirrors ~/Documents/freyr/switching.py
+# (derive_round_trip_bps = 2 × per-side cost).
+CRYPTO_ROUND_TRIP_BPS = 6.0
+
+
+def _switch_cost(leverage: float) -> tuple[float, str]:
+    """(round-trip switching cost as % of NAV, colour) for a bot's gross leverage.
+    Green < 0.1% · amber 0.1–0.5% · red > 0.5%."""
+    pct = CRYPTO_ROUND_TRIP_BPS * max(leverage or 1.0, 0.0) / 100.0
+    col = "#22c55e" if pct < 0.1 else ("#f59e0b" if pct <= 0.5 else "#ef4444")
+    return pct, col
+
+
 def _svg_chart(rows: list[tuple[datetime, float]], start: float, up: bool) -> str:
     """One bot's account value (vertical, $) over time (horizontal). rows=[(dt, equity)]."""
     if len(rows) < 2:
@@ -1576,6 +1635,39 @@ def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
             f"<div style='font-size:14px;font-weight:700;color:{col};margin-top:2px'>{value}</div></div>")
 
 
+def _forecast_strip(ann: dict, basis: str = "") -> str:
+    """Four mini-cells pinned to a card: annualised projection from the trailing
+    1w / 1mo / 1y, plus realised YTD as context. Lets Steven spot at a glance when
+    the short-term pace is running hot or cold versus the longer trend."""
+    def cell(label, v, is_ytd=False):
+        if v is None:
+            val = "<span style='color:#6b7280;font-weight:700'>TBD</span>"
+        else:
+            c = "#22c55e" if v >= 0 else "#ef4444"
+            suf = "" if is_ytd else "/yr"
+            val = f"<span style='color:{c};font-weight:700'>{v:+,.0f}%{suf}</span>"
+        return (f"<div style='flex:1 1 0;min-width:58px;background:#0f141c;border-radius:8px;"
+                f"padding:6px 5px;text-align:center'>"
+                f"<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>{label}</div>"
+                f"<div style='font-size:12px;margin-top:2px'>{val}</div></div>")
+    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Annualised projection · {basis}</div>"
+            if basis else "")
+    return (note + "<div style='display:flex;gap:5px'>"
+            + cell("from 1w", ann["w"]) + cell("from 1mo", ann["mo"])
+            + cell("from 1y", ann["y"]) + cell("YTD real", ann["ytd"], is_ytd=True)
+            + "</div>")
+
+
+def _switch_chip(leverage: float) -> str:
+    """A single at-a-glance switching-cost badge (% of NAV to fully exit+re-enter)."""
+    pct, col = _switch_cost(leverage)
+    return (f"<span style='display:inline-flex;align-items:center;gap:6px;background:#0f141c;"
+            f"border:1px solid {col}40;border-radius:8px;padding:4px 10px;font-size:11px;white-space:nowrap'>"
+            f"<span style='width:7px;height:7px;border-radius:50%;background:{col};display:inline-block'></span>"
+            f"<span style='color:#8b95a5'>Switch cost</span>"
+            f"<b style='color:{col}'>{pct:.2f}% of NAV</b></span>")
+
+
 def _freyr_card(variant: str) -> str:
     snap, summ = _freyr_load(variant)
     emoji, pname, accent, sub = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
@@ -1606,6 +1698,10 @@ def _freyr_card(variant: str) -> str:
 
     track = [pt["equity"] for pt in (snap.get("model_track") or [])[-30:]]
     spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True)
+    mt = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+          for pt in (snap.get("model_track") or []) if pt.get("date")]
+    fc = _forecast_strip(_ann_windows(mt), basis="from model track · paper is days old")
+    sw = _switch_chip(lev)
     sign = "+" if ret >= 0 else ""
     chips = "".join([
         _chip("Drawdown", f"{dd:.1f}%", ddc),
@@ -1631,6 +1727,8 @@ def _freyr_card(variant: str) -> str:
       </div>
       <div style="margin:12px 0 4px">{spark}</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">{chips}</div>
+      {fc}
+      <div style="margin-top:8px">{sw}</div>
       <div style="color:#6b7280;font-size:11.5px;margin-top:9px">{ereason} · as of {date} · tap for per-book ›</div>
     </div></a>"""
 
@@ -1639,7 +1737,7 @@ def _survivor_card(v: dict) -> str:
     up = v["profit"] >= 0
     col = "#22c55e" if up else "#ef4444"
     sign = "+" if up else ""
-    a = _annualised(v["slug"])
+    ann = _ann_windows(_equity_rows(v["slug"]))
     tabc = TAB_COLORS.get(_tab_of(v), "#64748b")
     bemoji, blabel, bcol = BRACKETS.get(v["slug"], ("", "", "#64748b"))
     chip = (f"<span style='display:inline-block;background:#0f141c;color:{bcol};font-size:10.5px;"
@@ -1657,9 +1755,8 @@ def _survivor_card(v: dict) -> str:
         <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
         <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
       </div>
-      <div style="display:flex;justify-content:flex-end;font-size:12px;margin-top:4px">
-        <span style="color:#8b95a5">mo pace {_ann_span(a['monthly'])}</span>
-      </div>
+      <div style="margin-top:8px">{_forecast_strip(ann, basis="from paper track")}</div>
+      <div style="margin-top:8px">{_switch_chip(v.get('leverage', 1.0))}</div>
     </div></a>"""
 
 
@@ -1725,45 +1822,81 @@ def _home_page() -> str:
     freyr_cards = "".join(_freyr_card(v) for v in FREYR_VARIANTS)
     surv_cards = "".join(_survivor_card(v) for v in (_variant_by_slug(s) for s in SURVIVORS) if v)
     combined = _combined_leaderboard()
+    freyr_n, farm_n = len(FREYR_VARIANTS), len(SURVIVORS)
+    board_n = freyr_n + farm_n
+
+    # Client-side tab switching: all three panels are rendered, JS toggles
+    # visibility so swapping is instant (no round-trip). The active tab is kept in
+    # the URL #hash so the 60s soft refresh (location.reload, which preserves the
+    # hash) lands the user back on the tab they were reading.
+    tab_js = """<script>
+function showTab(name){
+  ['freyr','farm','leaderboard'].forEach(function(t){
+    var p=document.getElementById('panel-'+t), b=document.getElementById('tab-'+t);
+    if(!p||!b)return;
+    p.style.display=(t===name)?'block':'none';
+    b.style.background=(t===name)?'#2563eb':'#1c2230';
+    b.style.color=(t===name)?'#fff':'#9aa4b2';
+  });
+  if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+}
+(function(){
+  var h=(location.hash||'').replace('#','');
+  if(['freyr','farm','leaderboard'].indexOf(h)<0)h='freyr';
+  showTab(h);
+  setTimeout(function(){location.reload();},60000);
+})();
+</script>"""
+
+    btnbase = ("flex:1 1 0;padding:13px 4px;border:none;border-radius:11px;font-family:inherit;"
+               "font-size:14px;font-weight:700;cursor:pointer")
+    cnt = "<span style='opacity:.65;font-weight:600'>"
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<meta http-equiv=refresh content="60;url=/">
 <title>Banksia Springs — Live Bots</title></head>
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
   <h2 style="margin:0 0 2px">🌱 Banksia Springs — Live Bots</h2>
-  <div style="color:#8b95a5;font-size:13.5px;margin-bottom:14px">
+  <div style="color:#8b95a5;font-size:13.5px;margin-bottom:12px">
     Freyr ensemble (live paper track to the 2026-06-30 deployment) + BTC farm survivors · all pretend money
   </div>
   {btc_banner}
 
-  <div style="display:flex;align-items:baseline;justify-content:space-between;margin:6px 0 2px">
-    <h3 style="margin:0;font-size:16px">Freyr ensemble</h3>
-    <span style="color:#6b7280;font-size:12px">3 risk profiles · 12 books each</span>
+  <div id="tabbar" style="position:sticky;top:0;z-index:30;background:#0b0e14;display:flex;gap:6px;padding:10px 0;margin-bottom:8px;border-bottom:1px solid #161c27">
+    <button id="tab-freyr" onclick="showTab('freyr')" style="{btnbase};background:#2563eb;color:#fff">⚡ Freyr {cnt}· {freyr_n}</span></button>
+    <button id="tab-farm" onclick="showTab('farm')" style="{btnbase};background:#1c2230;color:#9aa4b2">🌾 Farm {cnt}· {farm_n}</span></button>
+    <button id="tab-leaderboard" onclick="showTab('leaderboard')" style="{btnbase};background:#1c2230;color:#9aa4b2">🏆 Board {cnt}· {board_n}</span></button>
   </div>
-  <div style="color:#8b95a5;font-size:12px;margin-bottom:2px">
-    Multi-book system with an escape-tier risk governor &amp; portfolio kill-switch. Tap a card for the per-book breakdown.
-  </div>
-  {freyr_cards}
 
-  <div style="display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 2px">
-    <h3 style="margin:0;font-size:16px">BTC farm favourites</h3>
-    <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:12.5px">all {n_all} bots ›</a>
+  <div id="panel-freyr">
+    <div style="color:#8b95a5;font-size:12px;margin:2px 0 2px">
+      Multi-book system with an escape-tier risk governor &amp; portfolio kill-switch · 3 risk profiles, 12 books each.
+      Each card carries its annualised pace and switching cost. Tap for the per-book breakdown.
+    </div>
+    {freyr_cards}
   </div>
-  <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">
-    {len(SURVIVORS)} picks grouped by <b>specialist bracket</b> — which bot to hold for which market.
-    Tags preview the bracket structure. <span style="color:#f59e0b">⚠️ = leveraged (paper-only).</span>
-  </div>
-  {surv_cards}
 
-  <h3 style="margin:22px 0 2px;font-size:16px">Combined leaderboard</h3>
-  <div style="color:#8b95a5;font-size:12px;margin-bottom:6px">
-    Head-to-head by annualised pace. Freyr = model-track CAGR; survivors = 30-day paper pace.
+  <div id="panel-farm" style="display:none">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin:2px 0 2px">
+      <span style="color:#8b95a5;font-size:12px">{farm_n} survivors by <b>specialist bracket</b> — which bot for which market.</span>
+      <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:12.5px">all {n_all} ›</a>
+    </div>
+    <div style="color:#6b7280;font-size:11.5px;margin-bottom:4px">
+      <span style="color:#f59e0b">⚠️ leveraged = paper-only.</span> Green switch cost = cheap-exit (can take narrow edges).
+    </div>
+    {surv_cards}
   </div>
-  {combined}
+
+  <div id="panel-leaderboard" style="display:none">
+    <div style="color:#8b95a5;font-size:12px;margin:2px 0 6px">
+      Freyr + farm survivors head-to-head by annualised pace. Freyr = model-track CAGR; survivors = 30-day paper pace.
+    </div>
+    {combined}
+  </div>
 
   <p style="color:#6b7280;font-size:12px;margin-top:18px">
     Everything here is paper (pretend money). Updated {updated} UTC · refreshes each minute.</p>
+  {tab_js}
 </body></html>"""
 
 

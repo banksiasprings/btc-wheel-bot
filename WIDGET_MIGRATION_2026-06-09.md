@@ -86,9 +86,44 @@ Bracket map = `BRACKETS` dict in `api.py`. Each card shows a colour-matched brac
 ⚠️ = leveraged (paper-only). The header is now "BTC farm favourites". All bots remain
 browseable at `/farm`.
 
+### Revision (2026-06-09, later same day) — tabs + per-card annualised forecasts + switching cost
+
+The home `/` is no longer one long scroll. The three sections are now **tabs** (sticky
+bar under the title, ~45px tap targets, dark-theme active state in `#2563eb`):
+
+| Tab | Default | Content |
+|-----|---------|---------|
+| **⚡ Freyr** | yes | the 3 Freyr variant cards |
+| **🌾 Farm** | — | the 7 farm survivors with bracket tags |
+| **🏆 Board** | — | combined Freyr + survivor leaderboard |
+
+Switching is **client-side** (all three panels rendered; JS toggles visibility — instant,
+no round-trip). The active tab is held in the URL `#hash`; the 60s soft refresh is now a
+JS `location.reload()` (which preserves the hash), so the auto-refresh lands you back on the
+tab you were reading. The old `<meta http-equiv=refresh>` was removed in favour of this.
+
+**Annualised forecasts pinned to every card** (`_forecast_strip` + `_ann_windows`): four
+mini-cells — annualised projection from the trailing **1w / 1mo / 1y** plus **realised YTD**.
+1y reads **TBD** until a track spans ≥300 days (every bot, for now — paper is weeks old).
+Survivor strips derive from the paper equity curve; Freyr strips from the 180-day
+`model_track` (paper is only days old). `_annualised` (day/week/month) is still used by `/farm`.
+
+**Switching cost on every card** (`_switch_cost` + `_switch_chip`): one number —
+*round-trip cost to fully exit + re-enter the position, as % of NAV* — colour-coded
+green `<0.1%` / amber `0.1–0.5%` / red `>0.5%`. Methodology reuses Freyr's crypto cost
+model (`~/Documents/freyr/switching.py` + `rules/registry.yaml: crypto-cost-bps=3.0/side`):
+round-trip = 2 × 3.0 = **6.0 bps** of gross notional, scaled by the bot's gross leverage —
+so 1× ≈ 0.06% (green, cheap-exit specialist; can take narrow edges), 3× ≈ 0.18% (amber;
+needs a fatter edge). Freyr cards use the snapshot's live `leverage`; survivors use the
+`leverage` field on `grid_farm/status.json`. This is the input for the cheap-exit-specialist
+analysis (green-switch bots take narrow edges; red-switch bots need fat edges).
+
 ## Caveats
 
 - Combined-leaderboard pace mixes bases (Freyr = model-track CAGR since paper history is
   only days old; survivors = 30-day annualised paper pace). Labelled on the page.
 - Freyr `$ on $10k` is a notional display so the two systems compare in %; Freyr's real
   unit is fraction-of-capital (1.0 = start), not a $10k account.
+- Forecast strips likewise mix bases (survivor = paper curve, Freyr = model track); each
+  strip is labelled with its basis. Switching cost assumes the 3.0 bps/side crypto cost is
+  accurate — it's a modelled (not yet realised-fill-reconciled) figure, same as Freyr's.

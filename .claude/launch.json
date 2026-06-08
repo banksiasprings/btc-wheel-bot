@@ -6,6 +6,12 @@
       "runtimeExecutable": "caffeinate",
       "runtimeArgs": ["-i", "-t", "600"],
       "port": 8765
+    },
+    {
+      "name": "widget",
+      "runtimeExecutable": "python3.11",
+      "runtimeArgs": ["-m", "uvicorn", "api:app", "--host", "127.0.0.1", "--port", "8799"],
+      "port": 8799
     }
   ]
 }
