@@ -1554,12 +1554,14 @@ def leaderboard():
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr"]
 FREYR_META = {
     #            emoji   profile-name    accent     one-line knob summary
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
     "v0.2":   ("⚖️", "Moderate",     "#3b82f6", "Escape-governed · vol 15% · 2.0× target"),
     "v0.3":   ("🚀", "Aggressive",   "#a78bfa", "Escape-governed · vol 20% · 3.0× target"),
+    # First specialist-library bot — independent paper P&L, 🔥 crash bracket.
+    "surtr":  ("🔥", "Crash specialist", "#ef4444", "Surtr · gated long-gamma · flat in calm · armed on BTC 5d-vol z>2σ OR VIX>30"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
