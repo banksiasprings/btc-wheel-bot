@@ -62,8 +62,29 @@ metric the Sunday digest uses).
 the **Trend / Premium / Stack** families (flat or losing — Buy&Hold −13.6% is the
 benchmark to beat, not a survivor).
 
-Selection lives in `api.py` as `SURVIVORS = ["aggressive","longvol","gamma-scalp","funding-smart"]`.
-To change it, edit that list — no other change needed.
+Selection lives in `api.py` as `SURVIVORS`. To change it, edit that list — no other change needed.
+
+### Revision (2026-06-09, later same day) — favourites + bracket tags
+
+Steven's framework is **"don't die ≠ don't drawdown"**: high leverage and deep dips are
+fine as long as the escape strategy works, so the survival-first filter (return − worst-dip)
+was too conservative. He asked three leveraged favourites back onto the home page, and the
+set is now **7 bots grouped by specialist bracket** (a preview of the bracket-header
+restructure coming next):
+
+| Bot | Bracket | Note |
+|-----|---------|------|
+| Long-Vol 3× ⚠️ (`longvol-3x`) | 🔥 Crash specialist | un-gated 3× crash hedge |
+| Long-Vol 3× DVOL≤65 ⚠️ (`longvol-3x-dvol`) | 🔥 Crash specialist | "Long-Vol 65" — fires only when implied vol is cheap |
+| Long-Vol (`longvol`) | 🔥 Crash specialist | smoothest, unleveraged |
+| Degen ⚠️ (`degen`) | 🐂 Bull / Aggressive | 3× grid |
+| Aggressive (`aggressive`) | 🐂 Bull / Aggressive | best unleveraged grid |
+| Gamma Scalp (`gamma-scalp`) | 🌪 Chop / Convex | long-vol that trades |
+| Funding (smart) (`funding-smart`) | 😴 Calm / Carry | near-zero-risk carry floor |
+
+Bracket map = `BRACKETS` dict in `api.py`. Each card shows a colour-matched bracket chip;
+⚠️ = leveraged (paper-only). The header is now "BTC farm favourites". All bots remain
+browseable at `/farm`.
 
 ## Caveats
 

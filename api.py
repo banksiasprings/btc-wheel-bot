@@ -1505,13 +1505,34 @@ FREYR_META = {
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
-# The BTC-farm survivors kept visible on the home page. Selection (2026-06-09):
-# unleveraged only (leveraged bots are paper-only "for kicks" per CONTEXT hard rule),
-# then the best performer of each strategy family that earns its slot, ranked by the
-# survival-first metric (return − worst-dip). Excluded: all 2×/3× bots, plus the
-# Trend / Premium / Stack families (flat or losing — Buy&Hold is the benchmark to
-# beat, not a survivor). Full rationale in WIDGET_MIGRATION_2026-06-09.md.
-SURVIVORS = ["aggressive", "longvol", "gamma-scalp", "funding-smart"]
+# The BTC-farm favourites kept visible on the home page. Selection (2026-06-09,
+# revised): Steven's framework is "don't die ≠ don't drawdown" — high leverage and
+# deep dips are fine as long as the escape works, so leveraged high-flyers are back.
+# The 4 original survival-first picks (aggressive / longvol / gamma-scalp /
+# funding-smart) PLUS three favourites Steven asked back: degen (3× grid),
+# longvol-3x (un-gated 3× crash hedge) and longvol-3x-dvol (the "Long-Vol 65" —
+# 3× crash hedge that only fires when implied vol DVOL≤65 is cheap). Ordered so
+# same-bracket bots sit together (previews the specialist-bracket restructure).
+# Full bots still browseable at /farm. See WIDGET_MIGRATION_2026-06-09.md.
+SURVIVORS = [
+    "longvol-3x", "longvol-3x-dvol", "longvol",   # 🔥 crash specialists
+    "degen", "aggressive",                        # 🐂 bull / aggressive
+    "gamma-scalp",                                # 🌪 chop / convex
+    "funding-smart",                             # 😴 calm / carry
+]
+
+# Specialist bracket each favourite fits — the lens Steven wants surfaced: which bot
+# do you hold for which kind of market. Behaviour-based, not family-based (e.g. degen
+# is a grid by engine but a bull/aggressive bot by behaviour). (emoji, label, accent).
+BRACKETS = {
+    "longvol-3x":      ("🔥", "Crash specialist", "#ef4444"),
+    "longvol-3x-dvol": ("🔥", "Crash specialist", "#ef4444"),
+    "longvol":         ("🔥", "Crash specialist", "#ef4444"),
+    "degen":           ("🐂", "Bull / Aggressive", "#f59e0b"),
+    "aggressive":      ("🐂", "Bull / Aggressive", "#f59e0b"),
+    "gamma-scalp":     ("🌪", "Chop / Convex",     "#06b6d4"),
+    "funding-smart":   ("😴", "Calm / Carry",      "#14b8a6"),
+}
 
 
 def _freyr_load(variant: str):
@@ -1620,16 +1641,23 @@ def _survivor_card(v: dict) -> str:
     sign = "+" if up else ""
     a = _annualised(v["slug"])
     tabc = TAB_COLORS.get(_tab_of(v), "#64748b")
+    bemoji, blabel, bcol = BRACKETS.get(v["slug"], ("", "", "#64748b"))
+    chip = (f"<span style='display:inline-block;background:#0f141c;color:{bcol};font-size:10.5px;"
+            f"font-weight:700;padding:2px 8px;border-radius:7px;border:1px solid {bcol}33;"
+            f"white-space:nowrap'>{bemoji} {blabel}</span>") if blabel else ""
     return f"""
     <a href="/bot/{v['slug']}" style="text-decoration:none;color:inherit;display:block">
-    <div style="background:#151a23;border-radius:12px;padding:12px 14px;margin:8px 0;border-left:3px solid {col}">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <div style="background:#151a23;border-radius:12px;padding:12px 14px;margin:8px 0;border-left:3px solid {bcol}">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <span style="font-size:15px;font-weight:600">{v['name']}
           <span style="font-size:11px;color:{tabc}">· {TAB_LABELS.get(_tab_of(v), '')}</span></span>
+        {chip}
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
+        <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
         <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:5px">
-        <span style="color:{col};font-weight:600">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
+      <div style="display:flex;justify-content:flex-end;font-size:12px;margin-top:4px">
         <span style="color:#8b95a5">mo pace {_ann_span(a['monthly'])}</span>
       </div>
     </div></a>"""
@@ -1719,11 +1747,12 @@ def _home_page() -> str:
   {freyr_cards}
 
   <div style="display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 2px">
-    <h3 style="margin:0;font-size:16px">BTC farm survivors</h3>
+    <h3 style="margin:0;font-size:16px">BTC farm favourites</h3>
     <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:12.5px">all {n_all} bots ›</a>
   </div>
   <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">
-    The {len(SURVIVORS)} best-earning <b>unleveraged</b> bots, one per strategy family (survival-first: return − worst-dip).
+    {len(SURVIVORS)} picks grouped by <b>specialist bracket</b> — which bot to hold for which market.
+    Tags preview the bracket structure. <span style="color:#f59e0b">⚠️ = leveraged (paper-only).</span>
   </div>
   {surv_cards}
 
