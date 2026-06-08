@@ -148,7 +148,7 @@ def _page(tab: str = "grid") -> str:
         cnt = sum(1 for v in allv if _tab_of(v) == key)
         on = key == tab
         st = "background:#2563eb;color:#fff" if on else "background:#1c2230;color:#9aa4b2"
-        tabs += (f"<a href='/?tab={key}' style='flex:1 1 22%;text-align:center;padding:9px 4px;"
+        tabs += (f"<a href='/farm?tab={key}' style='flex:1 1 22%;text-align:center;padding:9px 4px;"
                  f"border-radius:9px;text-decoration:none;font-size:13px;font-weight:600;{st}'>{label} ({cnt})</a>")
     tab_bar = (
         f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 6px'>{tabs}</div>"
@@ -199,12 +199,13 @@ def _page(tab: str = "grid") -> str:
         </div></a>""")
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<meta http-equiv=refresh content="60;url=/?tab={tab}">
-<title>BTC Bot Farm</title></head>
+<meta http-equiv=refresh content="60;url=/farm?tab={tab}">
+<title>BTC Farm — all bots</title></head>
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
-  <h2 style="margin:0 0 2px">📈 BTC Bot Farm</h2>
+  <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← Home (Freyr + survivors)</a>
+  <h2 style="margin:8px 0 2px">📈 BTC Farm — all {len(allv)} bots</h2>
   <div style="color:#8b95a5;font-size:14px;margin-bottom:8px">
-    {len(allv)} bots · pretend money · updated {updated} UTC
+    pretend money · updated {updated} UTC
   </div>
   {btc_banner}
   {tab_bar}
@@ -234,6 +235,125 @@ def _equity_rows(slug: str) -> list[tuple[datetime, float]]:
     except FileNotFoundError:
         pass
     return rows
+
+
+def _full_rows(slug: str) -> list[dict]:
+    """Full (timestamp, btc_price, equity, btc_held) history — used by the
+    comparison chart to mark BUY/SELL events alongside BTC price + bot equity."""
+    path = BASE_DIR / "grid_farm" / slug / "equity.csv"
+    rows: list[dict] = []
+    try:
+        with open(path) as f:
+            for r in csv.DictReader(f):
+                try:
+                    rows.append({
+                        "ts": datetime.fromisoformat(r["timestamp"]),
+                        "btc": float(r["btc_price"]),
+                        "equity": float(r["equity"]),
+                        "btc_held": float(r["btc_held"]),
+                    })
+                except Exception:
+                    pass
+    except FileNotFoundError:
+        pass
+    return rows
+
+
+def _detect_trades(rows: list[dict]) -> list[dict]:
+    """Detect BUY/SELL events by looking for btc_held changes between rows."""
+    trades: list[dict] = []
+    prev = None
+    for r in rows:
+        if prev is not None and abs(r["btc_held"] - prev["btc_held"]) > 1e-7:
+            delta = r["btc_held"] - prev["btc_held"]
+            trades.append({
+                "ts": r["ts"],
+                "btc": r["btc"],
+                "equity": r["equity"],
+                "side": "BUY" if delta > 0 else "SELL",
+                "qty": abs(delta),
+            })
+        prev = r
+    return trades
+
+
+def _attribute_trades(trades: list[dict], current_btc: float) -> list[dict]:
+    """Walk through trades and compute per-trade profit/loss attribution.
+
+    Each SELL is matched FIFO against the oldest open BUY at the same qty (with
+    a small tolerance) to compute realized P&L = (sell_price - entry_price) × qty.
+    BUYs that haven't been closed yet get a mark-to-market P&L at `current_btc`.
+
+    Adds to each trade dict:
+      - `notional`: USD value at the trade (price × qty)
+      - For BUY:  `entry_price` (= self), `unrealized_pnl` at current_btc
+                  `unrealized_pct` vs entry
+      - For SELL: `entry_price` of the lot matched (BUY price), `realized_pnl`,
+                  `realized_pct` (return on the matched-lot capital), `hold_hours`
+
+    FIFO matching: if a SELL doesn't perfectly match the oldest BUY's qty
+    (e.g. partial closes), we proportionally consume the BUY's qty.
+    """
+    open_lots: list[dict] = []   # list of {entry_price, qty_remaining, ts}
+    out: list[dict] = []
+    for t in trades:
+        notional = t["btc"] * t["qty"]
+        new_t = dict(t)
+        new_t["notional"] = notional
+        if t["side"] == "BUY":
+            open_lots.append({
+                "entry_price": t["btc"],
+                "qty_remaining": t["qty"],
+                "ts": t["ts"],
+            })
+            new_t["entry_price"] = t["btc"]
+            # Unrealized at current price
+            mtm = (current_btc - t["btc"]) * t["qty"]
+            new_t["unrealized_pnl"] = mtm
+            new_t["unrealized_pct"] = (current_btc / t["btc"] - 1) * 100
+            new_t["status"] = "open"   # might still be in book at end-of-window
+        else:  # SELL
+            # FIFO match against open lots
+            qty_to_sell = t["qty"]
+            total_realized = 0.0
+            matched_entry_prices: list[tuple[float, float]] = []  # (entry, qty_consumed)
+            earliest_match_ts = None
+            while qty_to_sell > 1e-9 and open_lots:
+                lot = open_lots[0]
+                if earliest_match_ts is None:
+                    earliest_match_ts = lot["ts"]
+                consume = min(qty_to_sell, lot["qty_remaining"])
+                pnl = (t["btc"] - lot["entry_price"]) * consume
+                total_realized += pnl
+                matched_entry_prices.append((lot["entry_price"], consume))
+                lot["qty_remaining"] -= consume
+                qty_to_sell -= consume
+                if lot["qty_remaining"] < 1e-9:
+                    open_lots.pop(0)
+            # Weighted-average entry price across matched lots
+            if matched_entry_prices:
+                tot = sum(q for _, q in matched_entry_prices) or 1.0
+                weighted_entry = sum(p * q for p, q in matched_entry_prices) / tot
+            else:
+                weighted_entry = t["btc"]  # safety fallback
+            new_t["entry_price"] = weighted_entry
+            new_t["realized_pnl"] = total_realized
+            new_t["realized_pct"] = (
+                (t["btc"] / weighted_entry - 1) * 100 if weighted_entry > 0 else 0.0
+            )
+            if earliest_match_ts is not None:
+                hold_secs = (t["ts"] - earliest_match_ts).total_seconds()
+                new_t["hold_hours"] = hold_secs / 3600.0
+            else:
+                new_t["hold_hours"] = 0.0
+            new_t["status"] = "closed"
+        out.append(new_t)
+    # Mark BUYs that are STILL in open_lots as "still_open" (cleaner UX)
+    open_ts = {l["ts"]: l for l in open_lots}
+    for t in out:
+        if t["side"] == "BUY" and t["ts"] in open_ts:
+            t["status"] = "still_open"
+    return out
 
 
 PALETTE =["#22c55e", "#60a5fa", "#f59e0b", "#ef4444", "#a78bfa", "#ec4899", "#14b8a6", "#eab308"]
@@ -354,6 +474,353 @@ def _svg_chart(rows: list[tuple[datetime, float]], start: float, up: bool) -> st
       <text x="{w - padR}" y="{h - 17}" fill="#6b7280" font-size="11" text-anchor="end">{tmax.strftime(fmt)}</text>
       <text x="{(padL + w - padR) / 2:.0f}" y="{h - 4}" fill="#8b95a5" font-size="11" text-anchor="middle">Time (older → newer)</text>
     </svg>"""
+
+
+def _comparison_chart_svg(rows: list[dict], trades: list[dict], start_equity: float,
+                          w: int = 720, h_btc: int = 250, h_eq: int = 180) -> str:
+    """Two-panel SVG: BTC price (top) with BUY/SELL markers + bot equity (bottom),
+    sharing the x-axis. Each marker is a triangle on the BTC line at the price
+    where the trade fired. The lower panel shows the equity curve so you can see
+    cause-and-effect between bot actions and account value."""
+    if len(rows) < 2:
+        return ("<div style='color:#6b7280;padding:28px 0;text-align:center'>"
+                "Chart fills in as this bot trades. Check back soon.</div>")
+
+    padL, padR, padT, padB_top, padT_bot, padB = 56, 14, 22, 8, 8, 38
+    h_total = padT + h_btc + padB_top + padT_bot + h_eq + padB
+
+    btc_ys = [r["btc"] for r in rows]
+    eq_ys = [r["equity"] for r in rows]
+    ts = [r["ts"] for r in rows]
+    btc_lo, btc_hi = min(btc_ys), max(btc_ys)
+    btc_lo *= 0.998; btc_hi *= 1.002  # tiny padding
+    eq_lo, eq_hi = min(min(eq_ys), start_equity), max(max(eq_ys), start_equity)
+    eq_rng = (eq_hi - eq_lo) or 1.0
+    eq_lo -= eq_rng * 0.05; eq_hi += eq_rng * 0.05
+    btc_rng = (btc_hi - btc_lo) or 1.0
+    eq_rng = (eq_hi - eq_lo) or 1.0
+    tmin, tmax = ts[0], ts[-1]
+    tspan = (tmax - tmin).total_seconds() or 1.0
+
+    # Y origins for the two panels
+    y_btc_top = padT
+    y_btc_bot = padT + h_btc
+    y_eq_top = y_btc_bot + padB_top + padT_bot
+    y_eq_bot = y_eq_top + h_eq
+
+    fx = lambda t: padL + (t - tmin).total_seconds() / tspan * (w - padL - padR)
+    fy_btc = lambda v: y_btc_top + h_btc * (1 - (v - btc_lo) / btc_rng)
+    fy_eq = lambda v: y_eq_top + h_eq * (1 - (v - eq_lo) / eq_rng)
+
+    btc_pts = " ".join(f"{fx(r['ts']):.1f},{fy_btc(r['btc']):.1f}" for r in rows)
+    eq_pts = " ".join(f"{fx(r['ts']):.1f},{fy_eq(r['equity']):.1f}" for r in rows)
+    eq_col = "#22c55e" if eq_ys[-1] >= start_equity else "#ef4444"
+    eq_base = fy_eq(start_equity)
+
+    # Trade markers — triangles on the BTC panel.
+    # Each marker is wrapped in a <g class="tm"> with data-* attributes so a
+    # mobile tap opens a modal with trade detail (handled by JS at page bottom).
+    # An invisible larger circle (r=18) underneath gives a generous tap target —
+    # the triangle itself is only ~14px tall which is hard to hit on a phone.
+    n_buys = sum(1 for t in trades if t["side"] == "BUY")
+    n_sells = sum(1 for t in trades if t["side"] == "SELL")
+    marker_svg = []
+    for idx, t in enumerate(trades):
+        x = fx(t["ts"]); y = fy_btc(t["btc"])
+        ts_str = t["ts"].strftime("%d %b %H:%M UTC")
+        eq_str = f"{t['equity']:,.2f}"
+        # Per-trade P&L attribution attrs (computed in _attribute_trades and merged in here)
+        pnl_attrs = (
+            f' data-entry="{t.get("entry_price", t["btc"]):.2f}"'
+            f' data-notional="{t.get("notional", 0):.2f}"'
+            f' data-status="{t.get("status", "")}"'
+        )
+        if t["side"] == "BUY":
+            pnl_attrs += (
+                f' data-unrealized-pnl="{t.get("unrealized_pnl", 0):.2f}"'
+                f' data-unrealized-pct="{t.get("unrealized_pct", 0):.4f}"'
+            )
+            colour = "#22c55e"
+            tri = (f'<polygon points="{x:.1f},{y-9:.1f} {x-7:.1f},{y+4:.1f} {x+7:.1f},{y+4:.1f}" '
+                   f'fill="{colour}" stroke="#0f141c" stroke-width="1" pointer-events="none"/>')
+        else:
+            pnl_attrs += (
+                f' data-realized-pnl="{t.get("realized_pnl", 0):.2f}"'
+                f' data-realized-pct="{t.get("realized_pct", 0):.4f}"'
+                f' data-hold-hours="{t.get("hold_hours", 0):.2f}"'
+            )
+            colour = "#ef4444"
+            tri = (f'<polygon points="{x:.1f},{y+9:.1f} {x-7:.1f},{y-4:.1f} {x+7:.1f},{y-4:.1f}" '
+                   f'fill="{colour}" stroke="#0f141c" stroke-width="1" pointer-events="none"/>')
+        marker_svg.append(
+            f'<g class="tm" tabindex="0" role="button" '
+            f'data-side="{t["side"]}" data-price="{t["btc"]:.2f}" data-qty="{t["qty"]:.6f}" '
+            f'data-time="{ts_str}" data-equity="{eq_str}"{pnl_attrs} '
+            f'style="cursor:pointer">'
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="18" fill="transparent" />'
+            f'<title>{t["side"]} @ ${t["btc"]:,.0f} · {t["qty"]:.4f} BTC · {ts_str}</title>'
+            f'{tri}</g>'
+        )
+
+    # Gain/loss shading on the equity panel — pre-clip with polygon
+    gain_pts = [f"{fx(rows[0]['ts']):.1f},{eq_base:.1f}"]
+    for r in rows:
+        gain_pts.append(f"{fx(r['ts']):.1f},{fy_eq(r['equity']):.1f}")
+    gain_pts.append(f"{fx(rows[-1]['ts']):.1f},{eq_base:.1f}")
+    eq_fill_pts = " ".join(gain_pts)
+
+    fmt = "%d %b %H:%M" if tspan < 3 * 86400 else "%d %b"
+    btc_final = btc_ys[-1]
+    btc_initial = btc_ys[0]
+    btc_pct = (btc_final / btc_initial - 1) * 100
+    eq_pct = (eq_ys[-1] / start_equity - 1) * 100
+
+    btc_col = "#f59e0b"
+    return f"""<svg viewBox="0 0 {w} {h_total}" width="100%" style="background:#0f141c;border-radius:10px;display:block">
+      <!-- BTC panel background grid -->
+      <line x1="{padL}" y1="{y_btc_top}" x2="{padL}" y2="{y_btc_bot}" stroke="#1f2937" stroke-width="1"/>
+      <line x1="{padL}" y1="{y_btc_bot}" x2="{w - padR}" y2="{y_btc_bot}" stroke="#1f2937" stroke-width="1"/>
+      <!-- BTC panel: price line -->
+      <polyline points="{btc_pts}" fill="none" stroke="{btc_col}" stroke-width="2"/>
+      <!-- BTC y-axis labels -->
+      <text x="{padL - 6}" y="{y_btc_top + 4}" fill="#6b7280" font-size="11" text-anchor="end">${btc_hi:,.0f}</text>
+      <text x="{padL - 6}" y="{y_btc_bot + 4}" fill="#6b7280" font-size="11" text-anchor="end">${btc_lo:,.0f}</text>
+      <text x="13" y="{(y_btc_top + y_btc_bot) / 2:.0f}" fill="{btc_col}" font-size="11" text-anchor="middle" font-weight="bold"
+            transform="rotate(-90 13 {(y_btc_top + y_btc_bot) / 2:.0f})">₿ BTC price</text>
+      <!-- BTC headline (top right) -->
+      <text x="{w - padR}" y="{y_btc_top + 12}" fill="{btc_col}" font-size="12" text-anchor="end" font-weight="bold">
+        BTC ${btc_initial:,.0f} → ${btc_final:,.0f} ({btc_pct:+.2f}%)</text>
+      <!-- Trade markers -->
+      {''.join(marker_svg)}
+      <!-- Legend (BTC panel) -->
+      <g transform="translate({padL + 6}, {y_btc_top + 4})">
+        <polygon points="0,4 -5,12 5,12" fill="#22c55e" stroke="#0f141c" stroke-width="0.8"/>
+        <text x="10" y="13" fill="#9aa4b2" font-size="10">BUY × {n_buys}</text>
+        <polygon points="56,12 51,4 61,4" fill="#ef4444" stroke="#0f141c" stroke-width="0.8"/>
+        <text x="66" y="13" fill="#9aa4b2" font-size="10">SELL × {n_sells}</text>
+      </g>
+
+      <!-- Equity panel background grid -->
+      <line x1="{padL}" y1="{y_eq_top}" x2="{padL}" y2="{y_eq_bot}" stroke="#1f2937" stroke-width="1"/>
+      <line x1="{padL}" y1="{y_eq_bot}" x2="{w - padR}" y2="{y_eq_bot}" stroke="#1f2937" stroke-width="1"/>
+      <!-- Starting line -->
+      <line x1="{padL}" y1="{eq_base:.1f}" x2="{w - padR}" y2="{eq_base:.1f}" stroke="#3a4253" stroke-width="1" stroke-dasharray="4 4"/>
+      <!-- Gain/loss fill -->
+      <polygon points="{eq_fill_pts}" fill="{eq_col}" fill-opacity="0.18"/>
+      <!-- Equity line -->
+      <polyline points="{eq_pts}" fill="none" stroke="{eq_col}" stroke-width="2.5"/>
+      <!-- Equity y-axis labels -->
+      <text x="{padL - 6}" y="{y_eq_top + 4}" fill="#6b7280" font-size="11" text-anchor="end">${eq_hi:,.0f}</text>
+      <text x="{padL - 6}" y="{y_eq_bot + 4}" fill="#6b7280" font-size="11" text-anchor="end">${eq_lo:,.0f}</text>
+      <text x="13" y="{(y_eq_top + y_eq_bot) / 2:.0f}" fill="{eq_col}" font-size="11" text-anchor="middle" font-weight="bold"
+            transform="rotate(-90 13 {(y_eq_top + y_eq_bot) / 2:.0f})">$ Account value</text>
+      <!-- Equity headline -->
+      <text x="{w - padR}" y="{y_eq_top + 12}" fill="{eq_col}" font-size="12" text-anchor="end" font-weight="bold">
+        Bot ${start_equity:,.0f} → ${eq_ys[-1]:,.0f} ({eq_pct:+.2f}%)</text>
+      <text x="{w - padR}" y="{eq_base - 4:.1f}" fill="#6b7280" font-size="10" text-anchor="end">start ${start_equity:,.0f}</text>
+
+      <!-- Shared x-axis labels -->
+      <text x="{padL}" y="{h_total - 18}" fill="#6b7280" font-size="11">{tmin.strftime(fmt)}</text>
+      <text x="{w - padR}" y="{h_total - 18}" fill="#6b7280" font-size="11" text-anchor="end">{tmax.strftime(fmt)}</text>
+      <text x="{(padL + w - padR) / 2:.0f}" y="{h_total - 4}" fill="#8b95a5" font-size="11" text-anchor="middle">Time (older → newer)</text>
+    </svg>"""
+
+
+def _chart_page(slug: str) -> str:
+    """Full-screen comparison chart page — opened when the user taps the small
+    chart on the bot detail page. Shows BTC + equity + trade markers."""
+    data = _load() or {}
+    v = next((x for x in data.get("variants", []) if x.get("slug") == slug), None)
+    if v is None:
+        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
+                f"<p>Bot '{slug}' not found.</p><a href='/' style='color:#60a5fa'>← back</a></body>")
+    start_equity = data.get("paper_capital", 10_000.0)
+    rows = _full_rows(slug)
+    current_btc = rows[-1]["btc"] if rows else data.get("btc_price", 0)
+    raw_trades = _detect_trades(rows)
+    trades = _attribute_trades(raw_trades, current_btc)
+    n_buys = sum(1 for t in trades if t["side"] == "BUY")
+    n_sells = sum(1 for t in trades if t["side"] == "SELL")
+    total_realized = sum(t.get("realized_pnl", 0) for t in trades if t["side"] == "SELL")
+    total_unrealized = sum(
+        t.get("unrealized_pnl", 0) for t in trades
+        if t["side"] == "BUY" and t.get("status") == "still_open"
+    )
+    chart_svg = _comparison_chart_svg(rows, trades, start_equity)
+
+    # Recent trade list for the dashboard below the chart — now with P&L column
+    def _pnl_cell(t):
+        if t["side"] == "SELL":
+            pnl = t.get("realized_pnl", 0)
+            pct = t.get("realized_pct", 0)
+            colour = "#22c55e" if pnl >= 0 else "#ef4444"
+            sign = "+" if pnl >= 0 else ""
+            return (f"<span style='color:{colour};font-weight:bold'>{sign}${pnl:,.2f}</span>"
+                    f"<br><span style='color:#6b7280;font-size:10px'>{sign}{pct:.2f}%</span>")
+        # BUY — show entry / mark-to-market
+        if t.get("status") == "still_open":
+            mtm = t.get("unrealized_pnl", 0)
+            pct = t.get("unrealized_pct", 0)
+            colour = "#22c55e" if mtm >= 0 else "#ef4444"
+            sign = "+" if mtm >= 0 else ""
+            return (f"<span style='color:{colour}'>{sign}${mtm:,.2f}</span>"
+                    f"<br><span style='color:#6b7280;font-size:10px'>open · {sign}{pct:.2f}%</span>")
+        # Closed BUY — entry that was later sold; no standalone P&L
+        return "<span style='color:#6b7280'>—</span><br><span style='color:#6b7280;font-size:10px'>closed</span>"
+
+    recent = trades[-12:] if len(trades) > 12 else trades
+    trade_rows_html = "".join(
+        f"<tr><td style='color:#9aa4b2;padding:5px 8px;font-size:12px'>{t['ts'].strftime('%d %b %H:%M')}</td>"
+        f"<td style='padding:5px 8px;font-size:12px'>"
+        f"<span style='color:{'#22c55e' if t['side']=='BUY' else '#ef4444'};font-weight:bold'>{t['side']}</span></td>"
+        f"<td style='padding:5px 8px;text-align:right;font-size:12px'>${t['btc']:,.0f}</td>"
+        f"<td style='padding:5px 8px;text-align:right;font-size:12px;color:#9aa4b2'>{t['qty']:.4f} BTC</td>"
+        f"<td style='padding:5px 8px;text-align:right;font-size:12px'>{_pnl_cell(t)}</td></tr>"
+        for t in reversed(recent)
+    ) or ("<tr><td colspan='5' style='color:#6b7280;text-align:center;padding:14px;font-size:12.5px'>"
+          "No trades yet — this bot hasn't transacted in this window.</td></tr>")
+    # P&L summary at the top of the table
+    pnl_summary_colour_r = "#22c55e" if total_realized >= 0 else "#ef4444"
+    pnl_summary_colour_u = "#22c55e" if total_unrealized >= 0 else "#ef4444"
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content=60>
+<title>{v['name']} — full chart</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:14px;max-width:820px;margin:auto">
+  <a href="/bot/{slug}" style="color:#60a5fa;text-decoration:none;font-size:14px">← back to {v['name']}</a>
+  <h2 style="margin:10px 0 2px">{v['name']} — full chart</h2>
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:12px">
+    BTC price on top with <span style="color:#22c55e">▲ BUY</span> /
+    <span style="color:#ef4444">▼ SELL</span> markers · bot equity on bottom · same time axis
+  </div>
+  {chart_svg}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">
+    <div style="background:#151a23;border-radius:10px;padding:10px 8px;text-align:center">
+      <div style="color:#8b95a5;font-size:11px">Realized P&L (closed trades)</div>
+      <div style="font-size:20px;margin-top:2px;color:{pnl_summary_colour_r};font-weight:bold">
+        {"+" if total_realized >= 0 else ""}${total_realized:,.2f}
+      </div>
+      <div style="color:#6b7280;font-size:10.5px">{n_sells} SELLs</div>
+    </div>
+    <div style="background:#151a23;border-radius:10px;padding:10px 8px;text-align:center">
+      <div style="color:#8b95a5;font-size:11px">Unrealized P&L (still-open BUYs)</div>
+      <div style="font-size:20px;margin-top:2px;color:{pnl_summary_colour_u};font-weight:bold">
+        {"+" if total_unrealized >= 0 else ""}${total_unrealized:,.2f}
+      </div>
+      <div style="color:#6b7280;font-size:10.5px">at BTC ${current_btc:,.0f}</div>
+    </div>
+  </div>
+  <div style="background:#151a23;border-radius:10px;padding:12px;margin-top:10px">
+    <div style="color:#8b95a5;font-size:12px;margin-bottom:6px">RECENT TRADES (newest first, up to 12) — tap any row's matching triangle for full detail</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:#6b7280;font-size:10.5px;text-align:left">
+        <th style="padding:4px 8px;font-weight:normal">Time</th>
+        <th style="padding:4px 8px;font-weight:normal">Side</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">Price</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">Qty</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">P&L</th>
+      </tr></thead>
+      <tbody>{trade_rows_html}</tbody>
+    </table>
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:12px;line-height:1.5">
+    The triangles on the BTC panel mark every BUY (green ▲) and SELL (red ▼) the bot fired.
+    The bottom panel shows what happened to the account value as a result.
+    Pretend money on real prices. Refreshes every minute. Tap a triangle for trade detail.</p>
+
+  <!-- Trade detail modal — slides up from the bottom when a triangle is tapped -->
+  <div id="trade-modal" style="position:fixed;left:0;right:0;bottom:0;background:#151a23;
+        border-top:1px solid #2a3242;border-radius:14px 14px 0 0;padding:18px 22px 26px;
+        box-shadow:0 -8px 24px rgba(0,0,0,0.5);transform:translateY(110%);
+        transition:transform 0.22s ease;z-index:100;font-family:system-ui">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div id="tm-title" style="font-size:18px;font-weight:bold"></div>
+      <button id="tm-close" style="background:#1f2937;color:#e6e6e6;border:none;border-radius:8px;
+              width:36px;height:36px;font-size:18px;cursor:pointer">×</button>
+    </div>
+    <div id="tm-body" style="font-size:14px;line-height:1.7"></div>
+  </div>
+
+  <script>
+    (function(){{
+      const modal = document.getElementById('trade-modal');
+      const title = document.getElementById('tm-title');
+      const body = document.getElementById('tm-body');
+      const close = document.getElementById('tm-close');
+      function fmtUSD(v) {{ return '$' + Number(v).toLocaleString('en-US', {{maximumFractionDigits:2, minimumFractionDigits:2}}); }}
+      function fmtPct(v) {{ return Number(v).toFixed(2) + '%'; }}
+      function pnlLine(label, dollar, pct) {{
+        const colour = Number(dollar) >= 0 ? '#22c55e' : '#ef4444';
+        const sign = Number(dollar) >= 0 ? '+' : '';
+        return `<div><b>${{label}}</b> · <span style="color:${{colour}};font-weight:bold">${{sign}}${{fmtUSD(dollar)}}</span> <span style="color:${{colour}};font-size:11px">(${{sign}}${{fmtPct(pct)}})</span></div>`;
+      }}
+      function open(t) {{
+        const side = t.dataset.side;
+        const price = parseFloat(t.dataset.price);
+        const qty = parseFloat(t.dataset.qty);
+        const time = t.dataset.time;
+        const equity = t.dataset.equity;
+        const notional = parseFloat(t.dataset.notional);
+        const status = t.dataset.status;
+        const colour = side === 'BUY' ? '#22c55e' : '#ef4444';
+        title.style.color = colour;
+        title.textContent = side === 'BUY' ? '▲ BUY' : '▼ SELL';
+        // Build the body in two sections: trade facts + P&L attribution
+        let html = '';
+        html += `<div style="margin-bottom:10px">
+          <div><b>Price</b> · <span style="color:#9aa4b2">${{fmtUSD(price)}}</span></div>
+          <div><b>Quantity</b> · <span style="color:#9aa4b2">${{qty.toFixed(6)}} BTC</span></div>
+          <div><b>Notional</b> · <span style="color:#9aa4b2">${{fmtUSD(notional)}}</span></div>
+          <div><b>When</b> · <span style="color:#9aa4b2">${{time}}</span></div>
+          <div><b>Account value at trade</b> · <span style="color:#9aa4b2">$${{equity}}</span></div>
+        </div>`;
+        html += `<div style="border-top:1px solid #2a3242;padding-top:10px;margin-top:8px">
+          <div style="color:#8b95a5;font-size:11px;margin-bottom:6px">P&L ATTRIBUTION</div>`;
+        if (side === 'SELL') {{
+          const entry = parseFloat(t.dataset.entry);
+          const realizedPnl = parseFloat(t.dataset.realizedPnl);
+          const realizedPct = parseFloat(t.dataset.realizedPct);
+          const holdHours = parseFloat(t.dataset.holdHours);
+          html += `<div><b>Matched entry</b> · <span style="color:#9aa4b2">${{fmtUSD(entry)}}</span></div>`;
+          html += pnlLine('Realized P&L', realizedPnl, realizedPct);
+          if (holdHours > 0) {{
+            const days = holdHours / 24;
+            const holdStr = holdHours < 24 ? holdHours.toFixed(1) + ' hours' : days.toFixed(1) + ' days';
+            html += `<div><b>Held for</b> · <span style="color:#9aa4b2">${{holdStr}}</span></div>`;
+          }}
+        }} else {{
+          // BUY
+          if (status === 'still_open') {{
+            const unrealizedPnl = parseFloat(t.dataset.unrealizedPnl);
+            const unrealizedPct = parseFloat(t.dataset.unrealizedPct);
+            html += `<div><b>Entry price</b> · <span style="color:#9aa4b2">${{fmtUSD(price)}}</span></div>`;
+            html += `<div style="color:#fbbf24;font-size:11px;margin:4px 0">⚠ Still open at end of window</div>`;
+            html += pnlLine('Unrealized P&L (mark-to-market)', unrealizedPnl, unrealizedPct);
+          }} else {{
+            // BUY that's been closed by a later SELL
+            html += `<div><b>Entry price</b> · <span style="color:#9aa4b2">${{fmtUSD(price)}}</span></div>`;
+            html += `<div style="color:#9aa4b2;font-size:11px;margin-top:4px">Position closed by a later SELL. See that SELL marker for realized P&L.</div>`;
+          }}
+        }}
+        html += `</div>`;
+        body.innerHTML = html;
+        modal.style.transform = 'translateY(0)';
+      }}
+      function dismiss() {{ modal.style.transform = 'translateY(110%)'; }}
+      close.addEventListener('click', dismiss);
+      document.querySelectorAll('g.tm').forEach(g => {{
+        g.addEventListener('click', () => open(g));
+        g.addEventListener('keydown', e => {{ if (e.key === 'Enter' || e.key === ' ') open(g); }});
+      }});
+      // Tap outside modal closes it
+      document.addEventListener('click', e => {{
+        if (!modal.contains(e.target) && !e.target.closest('g.tm')) {{ dismiss(); }}
+      }});
+    }})();
+  </script>
+</body></html>"""
 
 
 def _bot_page(slug: str) -> str:
@@ -517,12 +984,12 @@ def _bot_page(slug: str) -> str:
 <meta http-equiv=refresh content=60>
 <title>{v['name']} — BTC Grid Farm</title></head>
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
-  <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← all bots</a>
+  <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:14px">← all bots</a>
   <h2 style="margin:10px 0 2px">{v['name']}</h2>
   <div style="color:#8b95a5;font-size:14px;margin-bottom:12px">{v['style']}</div>
   {warn}
-  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value ($) over time — the line above the dashed start line means profit</div>
-  {_svg_chart(eq_rows, start, up)}
+  <div style="font-size:13px;color:#8b95a5;margin-bottom:4px">Account value ($) over time — <a href="/bot/{slug}/chart" style="color:#60a5fa;text-decoration:none">tap for full chart with BTC + buy/sell markers ›</a></div>
+  <a href="/bot/{slug}/chart" style="display:block;text-decoration:none">{_svg_chart(eq_rows, start, up)}</a>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">{stats}</div>
   <div style="color:#9aa4b2;font-size:12.5px;margin:-2px 0 2px">Smoothness: <b>{smooth}</b>
     <span style="color:#6b7280">return per 1% dip — higher = smoother ride</span></div>
@@ -712,7 +1179,7 @@ def _leaderboard_page() -> str:
 </style>
 </head>
 <body>
-  <a class=nav href="/">← back to dashboard</a>
+  <a class=nav href="/farm">← back to the farm</a>
   <h2 style="margin:10px 0 2px">🏆 BSF Bot Farm — Leaderboard</h2>
   <div class=sub>Survival-first scorecard · sortable · <span style="color:{fresh_col};font-weight:600">●</span> Updated {fresh_ago}</div>
   <div class=toolbar>
@@ -982,13 +1449,23 @@ def btc_chart(range: str = "1M"):
 
 
 @app.get("/", include_in_schema=False)
-def index(tab: str = "grid"):
-    return HTMLResponse(_page(tab))
+def index():
+    return HTMLResponse(_home_page())
 
 
 @app.get("/widget", include_in_schema=False)
 def widget():
-    return HTMLResponse(_page())
+    return HTMLResponse(_home_page())
+
+
+@app.get("/farm", include_in_schema=False)
+def farm_view(tab: str = "grid"):
+    return HTMLResponse(_page(tab))
+
+
+@app.get("/freyr/{variant}", include_in_schema=False)
+def freyr_detail(variant: str):
+    return HTMLResponse(_freyr_detail_page(variant))
 
 
 @app.get("/bot/{slug}", include_in_schema=False)
@@ -996,6 +1473,352 @@ def bot_detail(slug: str):
     return HTMLResponse(_bot_page(slug))
 
 
+@app.get("/bot/{slug}/chart", include_in_schema=False)
+def bot_chart(slug: str):
+    """Full-screen comparison chart — BTC price + bot equity + trade markers.
+    Linked from the small chart on the /bot/{slug} page."""
+    return HTMLResponse(_chart_page(slug))
+
+
 @app.get("/leaderboard", include_in_schema=False)
 def leaderboard():
     return HTMLResponse(_leaderboard_page())
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Freyr ensemble — the PRIMARY section of the dashboard.
+#
+# Freyr is Steven's multi-book trading system (a sibling repo at ~/Documents/freyr).
+# Its paper variants write JSON snapshots; we read the latest off disk directly
+# (same Mac — no network fetch, no cross-origin). This dashboard now leads with
+# Freyr; the 34-bot BTC farm lives under /farm with a tight survivor set surfaced
+# here on the home page. See WIDGET_MIGRATION_2026-06-09.md.
+# ══════════════════════════════════════════════════════════════════════════════
+
+FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3"]
+FREYR_META = {
+    #            emoji   profile-name    accent     one-line knob summary
+    "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
+    "v0.2":   ("⚖️", "Moderate",     "#3b82f6", "Escape-governed · vol 15% · 2.0× target"),
+    "v0.3":   ("🚀", "Aggressive",   "#a78bfa", "Escape-governed · vol 20% · 3.0× target"),
+}
+FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
+
+# The BTC-farm survivors kept visible on the home page. Selection (2026-06-09):
+# unleveraged only (leveraged bots are paper-only "for kicks" per CONTEXT hard rule),
+# then the best performer of each strategy family that earns its slot, ranked by the
+# survival-first metric (return − worst-dip). Excluded: all 2×/3× bots, plus the
+# Trend / Premium / Stack families (flat or losing — Buy&Hold is the benchmark to
+# beat, not a survivor). Full rationale in WIDGET_MIGRATION_2026-06-09.md.
+SURVIVORS = ["aggressive", "longvol", "gamma-scalp", "funding-smart"]
+
+
+def _freyr_load(variant: str):
+    """(snapshot dict, index-summary dict) for a variant's latest day, or (None, None)."""
+    base = FREYR_SNAP / variant
+    try:
+        idx = json.loads((base / "index.json").read_text())
+        latest = idx["latest"]
+        snap = json.loads((base / f"{latest}.json").read_text())
+        summ = next((s for s in idx.get("summary", []) if s.get("date") == latest), {})
+        return snap, summ
+    except Exception:
+        return None, None
+
+
+def _variant_by_slug(slug: str) -> dict | None:
+    for v in (_load() or {}).get("variants", []):
+        if v.get("slug") == slug:
+            return v
+    return None
+
+
+def _mini_spark(vals: list[float], up: bool, w: int = 150, h: int = 46) -> str:
+    """Tiny line sparkline from a list of equity values (no axes)."""
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1.0
+    n = len(vals)
+    fx = lambda i: i / (n - 1) * (w - 2) + 1
+    fy = lambda v: 2 + (h - 4) * (1 - (v - lo) / rng)
+    pts = " ".join(f"{fx(i):.1f},{fy(v):.1f}" for i, v in enumerate(vals))
+    col = "#22c55e" if up else "#ef4444"
+    return (f"<svg viewBox='0 0 {w} {h}' width='100%' style='display:block;max-width:{w}px'>"
+            f"<polyline points='{pts}' fill='none' stroke='{col}' stroke-width='2'/></svg>")
+
+
+def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
+    return (f"<div style='background:#0f141c;border-radius:9px;padding:7px 9px;flex:1 1 auto;min-width:80px'>"
+            f"<div style='color:#6b7280;font-size:10px;text-transform:uppercase;letter-spacing:.4px'>{label}</div>"
+            f"<div style='font-size:14px;font-weight:700;color:{col};margin-top:2px'>{value}</div></div>")
+
+
+def _freyr_card(variant: str) -> str:
+    snap, summ = _freyr_load(variant)
+    emoji, pname, accent, sub = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
+    if not snap:
+        return (f"<div style='background:#151a23;border-radius:16px;padding:16px;margin:12px 0;"
+                f"border-left:5px solid {accent}'><b style='font-size:18px'>{emoji} Freyr {variant}</b>"
+                f"<div style='color:#6b7280;font-size:13px;margin-top:6px'>No snapshot yet — "
+                f"the paper tick writes one daily.</div></div>")
+    p = snap.get("portfolio", {})
+    eq = p.get("paper_equity", 1.0)
+    ret = (eq - 1) * 100
+    dd = p.get("current_dd", 0.0) * 100
+    lev = p.get("leverage", 1.0)
+    regime = (p.get("regime") or "—")
+    nb_a, nb = p.get("n_books_active", 0), p.get("n_books", 0)
+    esc = snap.get("escape", {})
+    tier, tname = esc.get("tier", 0), esc.get("tier_name", "observe")
+    ereason = esc.get("reason", "")
+    kill = (summ or {}).get("kill_status", "ARMED")
+    hb_ok = snap.get("heartbeat", {}).get("all_ok", False)
+    date = snap.get("date", "")
+
+    rc = "#22c55e" if ret >= 0 else "#ef4444"
+    ddc = "#22c55e" if dd > -5 else ("#f59e0b" if dd > -15 else "#ef4444")
+    tierc = "#22c55e" if tier == 0 else ("#f59e0b" if tier == 1 else "#ef4444")
+    killc = "#22c55e" if kill == "ARMED" else "#ef4444"
+    hbc, hbt = (("#22c55e", "OK") if hb_ok else ("#ef4444", "STALE"))
+
+    track = [pt["equity"] for pt in (snap.get("model_track") or [])[-30:]]
+    spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True)
+    sign = "+" if ret >= 0 else ""
+    chips = "".join([
+        _chip("Drawdown", f"{dd:.1f}%", ddc),
+        _chip("Leverage", f"{lev:.2f}×"),
+        _chip("Regime", regime.title()),
+        _chip("Books", f"{nb_a}/{nb}"),
+        _chip("Kill switch", kill, killc),
+        _chip("Escape", f"T{tier} · {tname}", tierc),
+        _chip("Heartbeat", hbt, hbc),
+    ])
+    return f"""
+    <a href="/freyr/{variant}" style="text-decoration:none;color:inherit;display:block">
+    <div style="background:#151a23;border-radius:16px;padding:18px;margin:12px 0;border-left:5px solid {accent}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div style="font-size:20px;font-weight:800">{emoji} Freyr {variant}</div>
+          <div style="color:#8b95a5;font-size:12.5px;margin-top:2px">{pname} · {sub}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:26px;font-weight:800;color:{rc}">{sign}{ret:.2f}%</div>
+          <div style="color:#8b95a5;font-size:12px">${eq * FREYR_NOTIONAL:,.0f} on $10k</div>
+        </div>
+      </div>
+      <div style="margin:12px 0 4px">{spark}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">{chips}</div>
+      <div style="color:#6b7280;font-size:11.5px;margin-top:9px">{ereason} · as of {date} · tap for per-book ›</div>
+    </div></a>"""
+
+
+def _survivor_card(v: dict) -> str:
+    up = v["profit"] >= 0
+    col = "#22c55e" if up else "#ef4444"
+    sign = "+" if up else ""
+    a = _annualised(v["slug"])
+    tabc = TAB_COLORS.get(_tab_of(v), "#64748b")
+    return f"""
+    <a href="/bot/{v['slug']}" style="text-decoration:none;color:inherit;display:block">
+    <div style="background:#151a23;border-radius:12px;padding:12px 14px;margin:8px 0;border-left:3px solid {col}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:15px;font-weight:600">{v['name']}
+          <span style="font-size:11px;color:{tabc}">· {TAB_LABELS.get(_tab_of(v), '')}</span></span>
+        <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-top:5px">
+        <span style="color:{col};font-weight:600">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
+        <span style="color:#8b95a5">mo pace {_ann_span(a['monthly'])}</span>
+      </div>
+    </div></a>"""
+
+
+def _combined_leaderboard() -> str:
+    """Freyr variants + farm survivors, head-to-head, by annualised pace.
+    Freyr pace = model-track CAGR (paper history is only days old); survivor pace =
+    30-day annualised from the paper equity curve. Mixed bases — labelled as such."""
+    rows = []
+    for variant in FREYR_VARIANTS:
+        snap, _ = _freyr_load(variant)
+        if not snap:
+            continue
+        p = snap.get("portfolio", {})
+        emoji, _pn, accent, _ = FREYR_META[variant]
+        rows.append({"pace": p.get("cagr", 0.0) * 100, "name": f"{emoji} Freyr {variant}",
+                     "ret": (p.get("paper_equity", 1.0) - 1) * 100, "dd": p.get("current_dd", 0.0) * 100,
+                     "accent": accent, "href": f"/freyr/{variant}"})
+    for slug in SURVIVORS:
+        v = _variant_by_slug(slug)
+        if not v:
+            continue
+        rows.append({"pace": _annualised(slug)["monthly"], "name": v["name"],
+                     "ret": v["return_pct"], "dd": -v["max_drawdown_pct"],
+                     "accent": TAB_COLORS.get(_tab_of(v), "#64748b"), "href": f"/bot/{v['slug']}"})
+    rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
+    out = []
+    for i, r in enumerate(rows, 1):
+        rc = "#22c55e" if r["ret"] >= 0 else "#ef4444"
+        pace = "—" if r["pace"] is None else f"{r['pace']:+,.0f}%/yr"
+        pacec = "#6b7280" if r["pace"] is None else ("#22c55e" if r["pace"] >= 0 else "#ef4444")
+        out.append(
+            f"<a href='{r['href']}' style='text-decoration:none;color:inherit;display:flex;align-items:center;"
+            f"gap:10px;background:#151a23;border-left:3px solid {r['accent']};border-radius:10px;"
+            f"padding:10px 12px;margin:6px 0'>"
+            f"<span style='color:#6b7280;font-weight:700;width:18px'>{i}</span>"
+            f"<span style='flex:1;font-size:14px;font-weight:600'>{r['name']}</span>"
+            f"<span style='color:{rc};font-size:13px;font-weight:600;width:70px;text-align:right'>{r['ret']:+.2f}%</span>"
+            f"<span style='color:{pacec};font-size:13px;font-weight:700;width:84px;text-align:right'>{pace}</span>"
+            f"</a>")
+    return "".join(out)
+
+
+def _home_page() -> str:
+    data = _load() or {}
+    btc = data.get("btc_price", 0)
+    updated = data.get("updated", "")[:16].replace("T", " ")
+    n_all = len(data.get("variants", []))
+
+    spark = ""
+    wk = _btc_history("1W", allow_fetch=False)
+    if len(wk) >= 2:
+        spark = ("<div style='width:110px;flex:0 0 auto'>"
+                 + _btc_chart_svg(wk, "1W", wk[-1][1] >= wk[0][1], w=110, h=40, mini=True) + "</div>")
+    btc_banner = (
+        "<a href='/btc' style='display:flex;align-items:center;gap:12px;text-decoration:none;"
+        "background:#11203a;border:1px solid #1d3a66;border-radius:12px;padding:12px 14px;margin-bottom:14px'>"
+        "<div style='flex:1'>"
+        "<div style='color:#8b95a5;font-size:12px'>₿ Bitcoin price · tap for full chart</div>"
+        f"<div style='font-size:23px;font-weight:800;color:#e6e6e6'>${btc:,.0f} "
+        "<span style='font-size:13px;color:#60a5fa;font-weight:600'>1W·1M·1Y·5Y ›</span></div>"
+        f"</div>{spark}</a>")
+
+    freyr_cards = "".join(_freyr_card(v) for v in FREYR_VARIANTS)
+    surv_cards = "".join(_survivor_card(v) for v in (_variant_by_slug(s) for s in SURVIVORS) if v)
+    combined = _combined_leaderboard()
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content="60;url=/">
+<title>Banksia Springs — Live Bots</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
+  <h2 style="margin:0 0 2px">🌱 Banksia Springs — Live Bots</h2>
+  <div style="color:#8b95a5;font-size:13.5px;margin-bottom:14px">
+    Freyr ensemble (live paper track to the 2026-06-30 deployment) + BTC farm survivors · all pretend money
+  </div>
+  {btc_banner}
+
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin:6px 0 2px">
+    <h3 style="margin:0;font-size:16px">Freyr ensemble</h3>
+    <span style="color:#6b7280;font-size:12px">3 risk profiles · 12 books each</span>
+  </div>
+  <div style="color:#8b95a5;font-size:12px;margin-bottom:2px">
+    Multi-book system with an escape-tier risk governor &amp; portfolio kill-switch. Tap a card for the per-book breakdown.
+  </div>
+  {freyr_cards}
+
+  <div style="display:flex;align-items:baseline;justify-content:space-between;margin:20px 0 2px">
+    <h3 style="margin:0;font-size:16px">BTC farm survivors</h3>
+    <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:12.5px">all {n_all} bots ›</a>
+  </div>
+  <div style="color:#8b95a5;font-size:12px;margin-bottom:4px">
+    The {len(SURVIVORS)} best-earning <b>unleveraged</b> bots, one per strategy family (survival-first: return − worst-dip).
+  </div>
+  {surv_cards}
+
+  <h3 style="margin:22px 0 2px;font-size:16px">Combined leaderboard</h3>
+  <div style="color:#8b95a5;font-size:12px;margin-bottom:6px">
+    Head-to-head by annualised pace. Freyr = model-track CAGR; survivors = 30-day paper pace.
+  </div>
+  {combined}
+
+  <p style="color:#6b7280;font-size:12px;margin-top:18px">
+    Everything here is paper (pretend money). Updated {updated} UTC · refreshes each minute.</p>
+</body></html>"""
+
+
+def _freyr_detail_page(variant: str) -> str:
+    snap, summ = _freyr_load(variant)
+    emoji, pname, accent, sub = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
+    if not snap:
+        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
+                f"<p>No snapshot for Freyr '{variant}'.</p>"
+                "<a href='/' style='color:#60a5fa'>← back</a></body>")
+    p = snap.get("portfolio", {})
+    esc = snap.get("escape", {})
+    eq = p.get("paper_equity", 1.0)
+    ret = (eq - 1) * 100
+    rc = "#22c55e" if ret >= 0 else "#ef4444"
+    track = [pt["equity"] for pt in (snap.get("model_track") or [])[-60:]]
+    spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True, w=620, h=120)
+
+    def stat(label, value, c="#e6e6e6"):
+        return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
+                f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
+                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div></div>")
+
+    kill = (summ or {}).get("kill_status", "ARMED")
+    killc = "#22c55e" if kill == "ARMED" else "#ef4444"
+    tier = esc.get("tier", 0)
+    tierc = "#22c55e" if tier == 0 else ("#f59e0b" if tier == 1 else "#ef4444")
+    stats = "".join([
+        stat("Equity (on $10k)", f"${eq * FREYR_NOTIONAL:,.0f}", rc),
+        stat("Return", f"{ret:+.2f}%", rc),
+        stat("Drawdown", f"{p.get('current_dd', 0) * 100:.1f}%"),
+        stat("Leverage", f"{p.get('leverage', 1.0):.2f}×"),
+        stat("Regime", (p.get("regime") or "—").title()),
+        stat("Sharpe", f"{p.get('sharpe', 0):.2f}"),
+        stat("Model CAGR", f"{p.get('cagr', 0) * 100:.1f}%"),
+        stat("Kill switch", kill, killc),
+        stat("Escape", f"T{tier} {esc.get('tier_name', '')}", tierc),
+    ])
+
+    # Per-book breakdown
+    books = snap.get("books", []) or []
+    book_rows = []
+    for b in sorted(books, key=lambda x: x.get("realized_weight", 0), reverse=True):
+        st = b.get("activation_state", "—")
+        stc = "#22c55e" if st == "active" else ("#6b7280" if st == "dormant" else "#f59e0b")
+        pnl = b.get("pnl_cum", 0) * 100
+        pc = "#22c55e" if pnl >= 0 else "#ef4444"
+        bdd = b.get("book_dd", 0) * 100
+        armed = b.get("armed", True)
+        armc = "#22c55e" if armed else "#ef4444"
+        book_rows.append(
+            f"<tr style='border-top:1px solid #1c2230'>"
+            f"<td style='padding:8px 6px;font-weight:600'>{b.get('key', '?')}"
+            f"<div style='color:#6b7280;font-size:11px'>{b.get('category', '')} · tier {b.get('tier', '?')}</div></td>"
+            f"<td style='padding:8px 6px;text-align:right'>{b.get('realized_weight', 0) * 100:.1f}%</td>"
+            f"<td style='padding:8px 6px;text-align:right;color:{pc};font-weight:600'>{pnl:+.1f}%</td>"
+            f"<td style='padding:8px 6px;text-align:right'>{b.get('standalone_sharpe', 0):.2f}</td>"
+            f"<td style='padding:8px 6px;text-align:right'>{bdd:.1f}%</td>"
+            f"<td style='padding:8px 6px;text-align:center;color:{stc};font-size:12px'>{st}"
+            f"{'' if armed else ' <span style=color:#ef4444>⨯</span>'}</td>"
+            f"</tr>")
+    book_table = (
+        "<table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px'>"
+        "<thead><tr style='color:#9aa4b2;font-size:11px;text-align:left'>"
+        "<th style='padding:6px'>Book</th><th style='padding:6px;text-align:right'>Weight</th>"
+        "<th style='padding:6px;text-align:right'>Cum P&amp;L</th><th style='padding:6px;text-align:right'>Sharpe</th>"
+        "<th style='padding:6px;text-align:right'>Book DD</th><th style='padding:6px;text-align:center'>State</th>"
+        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table>")
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Freyr {variant}</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:720px;margin:auto">
+  <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← Home</a>
+  <h2 style="margin:8px 0 2px">{emoji} Freyr {variant} <span style="font-size:14px;color:#8b95a5;font-weight:500">· {pname}</span></h2>
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{snap.get('label', sub)} · as of {snap.get('date', '')}</div>
+  <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{spark}
+    <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">model equity, last 60 days (paper live since {p.get('paper_start', '—')})</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
+  <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
+  <h3 style="margin:16px 0 2px;font-size:15px">Books ({len(books)})</h3>
+  <div style="color:#8b95a5;font-size:12px">Each book is one strategy. "State" = active (trading) / dormant (flat, awaiting signal). ⨯ = disarmed by its drawdown trip.</div>
+  {book_table}
+  <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
+</body></html>"""
