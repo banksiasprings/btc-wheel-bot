@@ -86,7 +86,7 @@ Bracket map = `BRACKETS` dict in `api.py`. Each card shows a colour-matched brac
 ⚠️ = leveraged (paper-only). The header is now "BTC farm favourites". All bots remain
 browseable at `/farm`.
 
-### Revision (2026-06-09, later same day) — tabs + per-card annualised forecasts + switching cost
+### Revision (2026-06-09, later same day) — tabs + per-card annualised pace + switching cost
 
 The home `/` is no longer one long scroll. The three sections are now **tabs** (sticky
 bar under the title, ~45px tap targets, dark-theme active state in `#2563eb`):
@@ -102,11 +102,14 @@ no round-trip). The active tab is held in the URL `#hash`; the 60s soft refresh 
 JS `location.reload()` (which preserves the hash), so the auto-refresh lands you back on the
 tab you were reading. The old `<meta http-equiv=refresh>` was removed in favour of this.
 
-**Annualised forecasts pinned to every card** (`_forecast_strip` + `_ann_windows`): four
-mini-cells — annualised projection from the trailing **1w / 1mo / 1y** plus **realised YTD**.
-1y reads **TBD** until a track spans ≥300 days (every bot, for now — paper is weeks old).
-Survivor strips derive from the paper equity curve; Freyr strips from the 180-day
-`model_track` (paper is only days old). `_annualised` (day/week/month) is still used by `/farm`.
+**Annualised pace pinned to every card** (`_ann_strip` + `_ann_windows`): four mini-cells —
+the **realised** trailing return scaled to a year (NOT a forecast — `realised_return ×
+365/elapsed`, i.e. 1w ≈ ×52, 1mo ≈ ×12, 1y ≈ ×1), for the **1w / 1mo / 1y** windows, plus
+**realised YTD**. It's the same formula the rest of the widget already uses for day/week/month.
+1y reads **TBD** until a track spans a full year (every bot, for now — paper is weeks old);
+once it does, it's simply the actual 365-day return. Survivor strips derive from the paper
+equity curve; Freyr strips from the 180-day `model_track` (paper is only days old).
+`_annualised` (day/week/month) is still used by `/farm`.
 
 **Switching cost on every card** (`_switch_cost` + `_switch_chip`): one number —
 *round-trip cost to fully exit + re-enter the position, as % of NAV* — colour-coded

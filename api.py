@@ -444,15 +444,14 @@ def _ann_span(v) -> str:
 
 
 def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
-    """Annualised run-rate ROI projected from the trailing 7 / 30 / 365 days,
-    plus realised return YTD. rows = [(datetime, equity)] ascending.
+    """Annualised pace — the realised trailing return scaled to a full year, the
+    same formula the rest of the widget uses. rows = [(datetime, equity)] ascending.
 
-    Each window: period_return × (365 / elapsed_days). A window returns None
-    (rendered 'TBD') when there isn't enough history — in particular the 1y
-    figure is None until the track spans most of a year, since projecting an
-    annual number off a few weeks would be pure noise. YTD is the realised
-    return since 1 Jan of the latest point's year (= total return for a bot that
-    launched this year)."""
+    Not a forecast: each window is just realised_return × (365 / elapsed_days),
+    i.e. 1w ≈ ×52, 1mo ≈ ×12, 1y ≈ ×1. The 1y figure is None ('TBD') until the
+    track spans a full year — then it is simply the actual 365-day return (×1).
+    YTD is the realised return since 1 Jan of the latest point's year (= total
+    return for a bot that launched this year)."""
     out = {"w": None, "mo": None, "y": None, "ytd": None}
     if len(rows) < 2:
         return out
@@ -467,7 +466,7 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
             else:
                 break
         if base is None:
-            base = rows[0]           # < window_days of history → project off all of it
+            base = rows[0]           # < window_days of history → scale up what we have
         bt, be = base
         elapsed = (now_t - bt).total_seconds() / 86400.0
         if be <= 0 or elapsed * 24 < min_hours:
@@ -477,7 +476,7 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
     span_days = (now_t - rows[0][0]).total_seconds() / 86400.0
     out["w"] = ann(7, 12)
     out["mo"] = ann(30, 36)
-    out["y"] = ann(365, 12) if span_days >= 300 else None   # else TBD — not a year yet
+    out["y"] = ann(365, 12) if span_days >= 365 else None   # else TBD — not 12 months yet
     jan1 = datetime(now_t.year, 1, 1, tzinfo=now_t.tzinfo)
     ybase = next(((t, e) for t, e in rows if t >= jan1), rows[-1])
     out["ytd"] = (now_e / ybase[1] - 1) * 100 if ybase[1] > 0 else None
@@ -1635,10 +1634,11 @@ def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
             f"<div style='font-size:14px;font-weight:700;color:{col};margin-top:2px'>{value}</div></div>")
 
 
-def _forecast_strip(ann: dict, basis: str = "") -> str:
-    """Four mini-cells pinned to a card: annualised projection from the trailing
-    1w / 1mo / 1y, plus realised YTD as context. Lets Steven spot at a glance when
-    the short-term pace is running hot or cold versus the longer trend."""
+def _ann_strip(ann: dict, basis: str = "") -> str:
+    """Four mini-cells pinned to a card: annualised pace from the trailing
+    1w / 1mo / 1y (realised return × periods/yr — not a forecast), plus realised
+    YTD as context. Lets Steven spot at a glance when the short-term pace is
+    running hot or cold versus the longer trend."""
     def cell(label, v, is_ytd=False):
         if v is None:
             val = "<span style='color:#6b7280;font-weight:700'>TBD</span>"
@@ -1650,7 +1650,7 @@ def _forecast_strip(ann: dict, basis: str = "") -> str:
                 f"padding:6px 5px;text-align:center'>"
                 f"<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>{label}</div>"
                 f"<div style='font-size:12px;margin-top:2px'>{val}</div></div>")
-    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Annualised projection · {basis}</div>"
+    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Annualised pace · realised × periods/yr · {basis}</div>"
             if basis else "")
     return (note + "<div style='display:flex;gap:5px'>"
             + cell("from 1w", ann["w"]) + cell("from 1mo", ann["mo"])
@@ -1700,7 +1700,7 @@ def _freyr_card(variant: str) -> str:
     spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True)
     mt = [(datetime.fromisoformat(pt["date"]), pt["equity"])
           for pt in (snap.get("model_track") or []) if pt.get("date")]
-    fc = _forecast_strip(_ann_windows(mt), basis="from model track · paper is days old")
+    fc = _ann_strip(_ann_windows(mt), basis="model track (paper is days old)")
     sw = _switch_chip(lev)
     sign = "+" if ret >= 0 else ""
     chips = "".join([
@@ -1755,7 +1755,7 @@ def _survivor_card(v: dict) -> str:
         <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
         <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
       </div>
-      <div style="margin-top:8px">{_forecast_strip(ann, basis="from paper track")}</div>
+      <div style="margin-top:8px">{_ann_strip(ann, basis="paper track")}</div>
       <div style="margin-top:8px">{_switch_chip(v.get('leverage', 1.0))}</div>
     </div></a>"""
 
