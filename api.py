@@ -1614,7 +1614,7 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki", "aegir", "sif", "skadi"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi"]
 FREYR_META = {
     # Seventh specialist-library bot — FIRST member of the new 📊 Options bracket.
     "skadi":  ("📊", "Options specialist", "#8b5cf6", "Skadi · options VRP harvester · SELLS defined-risk BTC credit spreads · collects implied-vol premium · FLEES on vol eruption (inverse of Surtr) · honest finding: real Sharpe~0.85 carry, 500% needs ~136× (ruinous) → reported actual ~+44% active-window CAGR · LIBRARY book, deploys on Deribit/Lyra not Hyperliquid"),
@@ -1626,6 +1626,8 @@ FREYR_META = {
     "surtr":  ("🔥", "Crash specialist", "#ef4444", "Surtr · gated long-gamma · flat in calm · armed on BTC 5d-vol z>2σ OR VIX>30"),
     # Second specialist-library bot — independent paper P&L, 🐂 bull bracket.
     "vidar":  ("🐂", "Bull specialist", "#f59e0b", "Vidar · gated Kelly-levered long · flat in calm · armed on 50d-mom>0 & >200d-SMA & clean trend, NOT a vol-spike"),
+    # AGGRESSIVE sibling of Vidar — same 🐂 bull bracket, second bull slot, independent paper P&L.
+    "thor":   ("🐂", "Bull specialist (aggressive)", "#fb923c", "Thor · AGGRESSIVE Vidar sibling · responsive 15d-Kelly long to 5× · TIGHT −15% trailing stop (Mjölnir returns) · same bull gate as Vidar · backtest in-bull +614% (both eras >500% ✅) vs Vidar +267% · honest cost maxDD −83% · edge rests on the 15d window → paper must confirm OOS"),
     # Third specialist-library bot — independent paper P&L, 😴 calm/carry bracket.
     "idunn":  ("😴", "Calm specialist", "#14b8a6", "Idunn · gated delta-neutral funding harvest · flat outside calm · low vol + paid funding + no trend"),
     # Fourth specialist-library bot — independent paper P&L, 🌪 chop bracket.
@@ -1634,6 +1636,10 @@ FREYR_META = {
     "aegir":  ("🌪", "Chop specialist (aggr)", "#0891b2", "Aegir · gated FINE-BAND GRID (12 bands) · harvests intraday wobble at 3–8× gross · ~500% pure-chop CAGR, breakout-constrained all-time · edge-stopped + KILLS on breakout"),
     # Sixth specialist-library bot — AGGRESSIVE sibling of Idunn, 😴 calm/carry bracket.
     "sif":    ("😴", "Calm specialist (aggr)", "#eab308", "Sif · gated delta-neutral funding harvest LEVERED 10–20× · calm-streak compounding ramp · low switching · honest finding: flat Sharpe ceiling, 500% needs ~55× (basis tail = ruin), survivable ~12× ≈ +50% CAGR"),
+    # Aggressive 🔥 crash sibling of Surtr — independent paper P&L. HONEST MISS:
+    # directional levered short loses in crashes (vol-drag/bounce symmetry); kept as the
+    # counter-example proving convexity (Surtr) beats selling the asset. Do NOT deploy.
+    "fenrir": ("🔥", "Crash specialist (aggr)", "#dc2626", "Fenrir · gated LEVERED SHORT 2.5–5× · armed on a DOWN crash (5d-vol z>2σ OR VIX>30 OR −10% gap + down trend) · exits on 10% rebound off low · honest finding: −50% CAGR / −99.8% DD, leverage monotonically worsens it — directional short ≠ Surtr's convexity"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
