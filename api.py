@@ -1559,6 +1559,26 @@ def freyr_detail(variant: str):
     return HTMLResponse(_freyr_detail_page(variant))
 
 
+@app.get("/testnet", include_in_schema=False)
+def testnet_detail():
+    """Live Testnet drill-down (positions, orders, fills, equity chart)."""
+    return HTMLResponse(_testnet_detail_page())
+
+
+@app.get("/testnet/live", include_in_schema=False)
+def testnet_live():
+    """Current Live Testnet card state as JSON (read-only; never contains the key).
+    The widget renders server-side off the same snapshot; this is the raw feed."""
+    snap = _testnet_load()
+    semoji, slabel, scol = _testnet_status(snap)
+    if not snap:
+        return {"status": "disconnected", "display": {"emoji": semoji, "label": slabel},
+                "snapshot": None}
+    return {"status": snap.get("status", "ok"),
+            "display": {"emoji": semoji, "label": slabel, "color": scol},
+            "snapshot": snap}
+
+
 @app.get("/bot/{slug}", include_in_schema=False)
 def bot_detail(slug: str):
     return HTMLResponse(_bot_page(slug))
@@ -1645,6 +1665,37 @@ FREYR_META = {
     "hermod": ("🏃", "Cheap-exit", "#10b981", "Hermod · Freyr's FIRST market-maker · passive maker-only quotes BOTH sides of BTC perp top-of-book, inventory-neutral via spread skew · PAID to round-trip: +1.16bps net per round-trip (spread 6bps − 2×1.5bps Hyperliquid maker − 1.84bps adverse) = LOWEST switching cost in the library · always-on in CALM, flat in fast tape (makers get adversely selected) · uncorrelated calm-yield: deployed +3.2%/yr Sharpe 5.8 maxDD −0.2% (full-notional +28%/yr) · daily-bar fill PROXY, calm gate is a microstructure prior pending tick/paper — ROI is NOT the point, the strategy class + switching cost is"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
+
+# ── Live Testnet ────────────────────────────────────────────────────────────────
+# The real Hyperliquid TESTNET account (real orders, fake money). A read-only
+# poller in the freyr repo (data/sources/hyperliquid_testnet_live.py, every 60s)
+# writes this snapshot off disk; we render it server-side like the Freyr cards and
+# also expose it raw at /testnet/live. We NEVER touch the venue from here.
+TESTNET_LIVE = Path("/Users/openclaw/Documents/freyr/paper/snapshots/testnet_live.json")
+TESTNET_UI_URL = "https://app.hyperliquid-testnet.xyz"
+
+
+def _testnet_load() -> dict | None:
+    try:
+        return json.loads(TESTNET_LIVE.read_text())
+    except Exception:
+        return None
+
+
+def _testnet_status(snap: dict | None) -> tuple[str, str, str]:
+    """(emoji, label, color) for the connection chip. 🟢 fresh ok · 🟡 stale /
+    slow · 🔴 no data. 'Stale' kicks in after 3 missed 60s polls."""
+    if not snap or snap.get("status") == "error" and not snap.get("portfolio_value"):
+        return ("🔴", "Disconnected", "#ef4444")
+    age = 1e9
+    try:
+        fetched = datetime.strptime(snap.get("fetched_at", ""), "%Y-%m-%dT%H:%M:%SZ")
+        age = (datetime.utcnow() - fetched).total_seconds()
+    except Exception:
+        pass
+    if snap.get("status") == "stale" or age > 180:
+        return ("🟡", "Stale data", "#f59e0b")
+    return ("🟢", "Connected", "#22c55e")
 
 # The BTC-farm favourites kept visible on the home page. Selection (2026-06-09,
 # revised): Steven's framework is "don't die ≠ don't drawdown" — high leverage and
@@ -1988,6 +2039,85 @@ def _freyr_card(variant: str) -> str:
     </div></a>"""
 
 
+def _testnet_card() -> str:
+    """The 🔌 Live Testnet card — the real Hyperliquid testnet account, rendered in
+    the Freyr card style and pinned to the top of the Freyr tab. Tap → /testnet."""
+    snap = _testnet_load()
+    accent = "#38bdf8"
+    semoji, slabel, scol = _testnet_status(snap)
+    if not snap:
+        return (f"<a href='/testnet' style='text-decoration:none;color:inherit;display:block'>"
+                f"<div style='background:#151a23;border-radius:16px;padding:18px;margin:12px 0;"
+                f"border-left:5px solid {accent}'>"
+                f"<div style='font-size:20px;font-weight:800'>🔌 Live Testnet</div>"
+                f"<div style='color:#8b95a5;font-size:12.5px;margin-top:2px'>Real orders, fake money, paper test phase.</div>"
+                f"<div style='color:#6b7280;font-size:13px;margin-top:10px'>"
+                f"{semoji} {slabel} — no snapshot yet. The minute poller writes one once it connects.</div>"
+                f"</div></a>")
+
+    pv = snap.get("portfolio_value", 0.0)
+    pnl_abs, pnl_pct = snap.get("pnl_24h_abs"), snap.get("pnl_24h_pct")
+    lev = snap.get("leverage", 0.0)
+    notional = snap.get("total_notional", 0.0)
+    n_pos, n_ord = snap.get("n_positions", 0), snap.get("n_orders", 0)
+    ft = snap.get("fills_today", {}) or {}
+    fdate = snap.get("fetched_at", "")[:16].replace("T", " ")
+
+    # 24h P&L — TBD until we have a row ≥24h old (history grows over time).
+    if pnl_abs is None:
+        pnl_html = "<span style='color:#6b7280'>TBD · building history</span>"
+    else:
+        pc = "#22c55e" if pnl_abs >= 0 else "#ef4444"
+        pnl_html = f"<span style='color:{pc}'>{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)</span>"
+
+    # equity sparkline (7d daily closes; blank until ≥2 points)
+    eq_vals = [v for _, v in (snap.get("equity_spark") or [])]
+    spark = _spark_pair(eq_vals, days=7) if len(eq_vals) >= 2 else (
+        "<div style='color:#6b7280;font-size:11.5px;padding:6px 0'>Equity chart builds as daily snapshots accumulate.</div>")
+
+    pos_v = f"{n_pos} · ${notional:,.0f}" if n_pos else "0 · flat"
+    fills_v = ("No fills today" if ft.get("count", 0) == 0
+               else f"{ft['count']} · {ft.get('realized_pnl', 0):+,.2f}")
+    fillsc = "#8b95a5" if ft.get("count", 0) == 0 else (
+        "#22c55e" if ft.get("realized_pnl", 0) >= 0 else "#ef4444")
+
+    sw = snap.get("switching_cost")
+    if sw:
+        sw_html = _switch_chip(round_trip_bps=sw["round_trip_bps"], gross=sw["gross"],
+                               name="Live Testnet", last_measured=snap.get("fetched_at", "")[:10])
+    else:
+        sw_html = ("<span style='display:inline-flex;align-items:center;gap:6px;background:#0f141c;"
+                   "border:1px solid #232b39;border-radius:8px;padding:4px 10px;font-size:11px'>"
+                   "<span style='color:#8b95a5'>Switch cost</span><b style='color:#6b7280'>— no fills yet</b></span>")
+
+    chips = "".join([
+        _chip("Positions", pos_v),
+        _chip("Open orders", str(n_ord)),
+        _chip("Fills today", fills_v, fillsc),
+        _chip("Leverage", f"{lev:.2f}×"),
+        _chip("Status", f"{semoji} {slabel}", scol),
+    ])
+    pvc = "#22c55e" if (pnl_abs or 0) >= 0 else "#ef4444"
+    return f"""
+    <a href="/testnet" style="text-decoration:none;color:inherit;display:block">
+    <div style="background:#151a23;border-radius:16px;padding:18px;margin:12px 0;border-left:5px solid {accent}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div>
+          <div style="font-size:20px;font-weight:800">🔌 Live Testnet</div>
+          <div style="color:#8b95a5;font-size:12.5px;margin-top:2px">Real orders, fake money, paper test phase.</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:26px;font-weight:800;color:{pvc}">${pv:,.2f}</div>
+          <div style="color:#8b95a5;font-size:12px">portfolio · 24h {pnl_html}</div>
+        </div>
+      </div>
+      <div style="margin:12px 0 4px">{spark}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">{chips}</div>
+      <div style="margin-top:8px">{sw_html}</div>
+      <div style="color:#6b7280;font-size:11.5px;margin-top:9px">Hyperliquid testnet · as of {fdate} UTC · tap for positions, orders &amp; fills ›</div>
+    </div></a>"""
+
+
 def _survivor_card(v: dict) -> str:
     up = v["profit"] >= 0
     col = "#22c55e" if up else "#ef4444"
@@ -2293,7 +2423,7 @@ def _home_page() -> str:
         "<span style='font-size:13px;color:#60a5fa;font-weight:600'>1W·1M·1Y·5Y ›</span></div>"
         f"</div>{spark}</a>")
 
-    freyr_cards = "".join(_freyr_card(v) for v in FREYR_VARIANTS)
+    freyr_cards = _testnet_card() + "".join(_freyr_card(v) for v in FREYR_VARIANTS)
     surv_cards = "".join(_survivor_card(v) for v in (_variant_by_slug(s) for s in SURVIVORS) if v)
     combined = _combined_leaderboard()
     universe, meta = _bot_universe()
@@ -2701,5 +2831,140 @@ def _freyr_detail_page(variant: str) -> str:
   <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
   {book_section}
   <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
+  {_switch_modal_html()}
+</body></html>"""
+
+
+def _testnet_detail_page() -> str:
+    snap = _testnet_load()
+    semoji, slabel, scol = _testnet_status(snap)
+    back = "<a href='/' style='color:#60a5fa;text-decoration:none;font-size:14px'>← Home</a>"
+    if not snap:
+        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
+                f"{back}<h2>🔌 Live Testnet</h2>"
+                f"<p style='color:#8b95a5'>{semoji} {slabel} — no snapshot on disk yet. The minute "
+                "poller writes one once it reaches the testnet API.</p></body>")
+
+    pv = snap.get("portfolio_value", 0.0)
+    pnl_abs, pnl_pct = snap.get("pnl_24h_abs"), snap.get("pnl_24h_pct")
+    fdate = snap.get("fetched_at", "")[:16].replace("T", " ")
+
+    def stat(label, value, c="#e6e6e6"):
+        return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
+                f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
+                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div></div>")
+
+    if pnl_abs is None:
+        pnl_v, pnl_c = "TBD", "#6b7280"
+    else:
+        pnl_c = "#22c55e" if pnl_abs >= 0 else "#ef4444"
+        pnl_v = f"{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)"
+    stats = "".join([
+        stat("Portfolio (USDC)", f"${pv:,.2f}"),
+        stat("24h P&L", pnl_v, pnl_c),
+        stat("Spot USDC", f"${snap.get('spot_usdc', 0):,.2f}"),
+        stat("Perp value", f"${snap.get('perp_account_value', 0):,.2f}"),
+        stat("Notional", f"${snap.get('total_notional', 0):,.0f}"),
+        stat("Leverage", f"{snap.get('leverage', 0):.2f}×"),
+        stat("Margin used", f"${snap.get('margin_used', 0):,.2f}"),
+        stat("Status", f"{semoji} {slabel}", scol),
+    ])
+
+    # live equity chart (7d, intraday granularity)
+    series = [v for _, v in (snap.get("equity_series") or [])]
+    if len(series) >= 2:
+        chart = _mini_spark(series, series[-1] >= series[0], w=660, h=120)
+        chart_note = "portfolio value · last 7 days (intraday, grows over time)"
+    else:
+        chart = "<div style='color:#6b7280;font-size:12px;padding:18px;text-align:center'>Equity chart builds as the minute poller accumulates snapshots.</div>"
+        chart_note = ""
+
+    def _table(title, head, rows, empty):
+        body = ("".join(rows) if rows
+                else f"<tr><td colspan='{len(head)}' style='padding:14px 6px;color:#6b7280;text-align:center'>{empty}</td></tr>")
+        ths = "".join(f"<th style='padding:6px;text-align:left;white-space:nowrap'>{h}</th>" for h in head)
+        return (f"<h3 style='margin:18px 0 4px;font-size:15px'>{title}</h3>"
+                "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+                "<table style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
+                f"<thead><tr style='color:#9aa4b2;font-size:11px'>{ths}</tr></thead>"
+                f"<tbody>{body}</tbody></table></div>")
+
+    def _sc(side):  # side colour
+        return "#22c55e" if side in ("buy", "long") else "#ef4444"
+
+    def _td(v, c="#e6e6e6", align="left", bold=False):
+        return (f"<td style='padding:7px 6px;text-align:{align};color:{c};"
+                f"font-weight:{700 if bold else 400};white-space:nowrap'>{v}</td>")
+
+    def _book(b):
+        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>" if b else "<span style='color:#475569'>—</span>"
+
+    # positions
+    prows = []
+    for p in snap.get("positions", []):
+        upnl = p.get("unrealized_pnl", 0)
+        prows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(p.get("coin"), bold=True) + _td(p.get("side"), _sc(p.get("side")))
+                     + _td(f"{p.get('size', 0):g}", align="right")
+                     + _td(f"${p.get('entry_px', 0):,.1f}", align="right")
+                     + _td(f"${p.get('mark_px', 0):,.1f}", align="right")
+                     + _td(f"{upnl:+,.2f}", "#22c55e" if upnl >= 0 else "#ef4444", "right", True)
+                     + _td(_book(p.get("book"))) + "</tr>")
+    pos_table = _table(f"Open positions ({snap.get('n_positions', 0)})",
+                       ["Symbol", "Side", "Size", "Entry", "Mark", "uP&L", "Book"],
+                       prows, "No open positions.")
+
+    # orders
+    orows = []
+    for o in snap.get("orders", []):
+        orows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(o.get("coin"), bold=True) + _td(o.get("side"), _sc(o.get("side")))
+                     + _td(f"{o.get('size', 0):g}", align="right")
+                     + _td(f"${o.get('limit_px', 0):,.1f}", align="right")
+                     + _td(o.get("age_str", "—"), "#8b95a5", "right")
+                     + _td(_book(o.get("book"))) + "</tr>")
+    ord_table = _table(f"Open orders ({snap.get('n_orders', 0)})",
+                       ["Symbol", "Side", "Size", "Limit", "Age", "Book"],
+                       orows, "No open orders.")
+
+    # fills
+    frows = []
+    for f in snap.get("recent_fills", []):
+        cp = f.get("closed_pnl", 0)
+        cpc = "#6b7280" if cp == 0 else ("#22c55e" if cp > 0 else "#ef4444")
+        frows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(f.get("coin"), bold=True) + _td(f.get("side"), _sc(f.get("side")))
+                     + _td(f"{f.get('size', 0):g}", align="right")
+                     + _td(f"${f.get('px', 0):,.1f}", align="right")
+                     + _td(f.get("time_str", "—"), "#8b95a5")
+                     + _td(f"{cp:+,.2f}" if cp else "—", cpc, "right")
+                     + _td(_book(f.get("book"))) + "</tr>")
+    ft = snap.get("fills_today", {}) or {}
+    fills_caption = (f"None today · {snap.get('n_fills_total', 0)} all-time" if ft.get("count", 0) == 0
+                     else f"{ft['count']} today ({ft.get('realized_pnl', 0):+,.2f}) · last 20 shown")
+    fill_table = _table(f"Recent fills · {fills_caption}",
+                        ["Symbol", "Side", "Size", "Price", "Time", "P&L", "Book"],
+                        frows, "No fills yet — the account is funded but hasn't traded.")
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Live Testnet</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:720px;margin:auto">
+  {back}
+  <h2 style="margin:8px 0 2px">🔌 Live Testnet <span style="font-size:14px;color:#8b95a5;font-weight:500">· {semoji} {slabel}</span></h2>
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">Real orders, fake money — Freyr's actual Hyperliquid testnet account · as of {fdate} UTC</div>
+  <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{chart}
+    <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">{chart_note}</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
+  {pos_table}
+  {ord_table}
+  {fill_table}
+  <div style="background:#11203a;border:1px solid #1d3a66;border-radius:12px;padding:13px 14px;margin-top:18px;color:#cbd5e1;font-size:12.5px;line-height:1.5">
+    <b style="color:#e6e6e6">What "testnet" means.</b> This is the real Hyperliquid exchange's test network — live order matching, real market data, but the money is fake faucet USDC. It's the dress rehearsal before any real capital: we prove the plumbing (orders, fills, reconciliation) works against a live venue with nothing at stake.
+    <div style="margin-top:8px">Authoritative source: <a href="{TESTNET_UI_URL}" style="color:#60a5fa">{TESTNET_UI_URL}</a> ›</div>
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:14px">Read-only view · polled every minute · this dashboard never places or cancels orders.</p>
   {_switch_modal_html()}
 </body></html>"""
