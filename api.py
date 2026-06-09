@@ -1614,7 +1614,7 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki", "aegir", "sif"]
 FREYR_META = {
     #            emoji   profile-name    accent     one-line knob summary
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
@@ -1628,6 +1628,10 @@ FREYR_META = {
     "idunn":  ("😴", "Calm specialist", "#14b8a6", "Idunn · gated delta-neutral funding harvest · flat outside calm · low vol + paid funding + no trend"),
     # Fourth specialist-library bot — independent paper P&L, 🌪 chop bracket.
     "loki":   ("🌪", "Chop specialist", "#06b6d4", "Loki · gated overreaction-fade · flat in trend · armed on moderate vol + flat 50d mom/Sharpe + intact 30d range · KILLS on breakout"),
+    # Fifth specialist-library bot — AGGRESSIVE sibling of Loki, 🌪 chop bracket.
+    "aegir":  ("🌪", "Chop specialist (aggr)", "#0891b2", "Aegir · gated FINE-BAND GRID (12 bands) · harvests intraday wobble at 3–8× gross · ~500% pure-chop CAGR, breakout-constrained all-time · edge-stopped + KILLS on breakout"),
+    # Sixth specialist-library bot — AGGRESSIVE sibling of Idunn, 😴 calm/carry bracket.
+    "sif":    ("😴", "Calm specialist (aggr)", "#eab308", "Sif · gated delta-neutral funding harvest LEVERED 10–20× · calm-streak compounding ramp · low switching · honest finding: flat Sharpe ceiling, 500% needs ~55× (basis tail = ruin), survivable ~12× ≈ +50% CAGR"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
