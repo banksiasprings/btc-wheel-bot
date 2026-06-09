@@ -1614,7 +1614,7 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki"]
 FREYR_META = {
     #            emoji   profile-name    accent     one-line knob summary
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
@@ -1626,6 +1626,8 @@ FREYR_META = {
     "vidar":  ("🐂", "Bull specialist", "#f59e0b", "Vidar · gated Kelly-levered long · flat in calm · armed on 50d-mom>0 & >200d-SMA & clean trend, NOT a vol-spike"),
     # Third specialist-library bot — independent paper P&L, 😴 calm/carry bracket.
     "idunn":  ("😴", "Calm specialist", "#14b8a6", "Idunn · gated delta-neutral funding harvest · flat outside calm · low vol + paid funding + no trend"),
+    # Fourth specialist-library bot — independent paper P&L, 🌪 chop bracket.
+    "loki":   ("🌪", "Chop specialist", "#06b6d4", "Loki · gated overreaction-fade · flat in trend · armed on moderate vol + flat 50d mom/Sharpe + intact 30d range · KILLS on breakout"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
