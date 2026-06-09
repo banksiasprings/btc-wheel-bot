@@ -1711,6 +1711,102 @@ def _mini_spark(vals: list[float], up: bool, w: int = 150, h: int = 46) -> str:
             f"<polyline points='{pts}' fill='none' stroke='{col}' stroke-width='2'/></svg>")
 
 
+def _dd_from_equity(vals: list[float]) -> list[float]:
+    """Drawdown % series derived from an equity track: at each point, how far below
+    the running peak (≤ 0). Honest — computed from the same equity the line shows,
+    no extra data needed."""
+    out, peak = [], vals[0] if vals else 1.0
+    for v in vals:
+        peak = max(peak, v)
+        out.append((v / peak - 1) * 100 if peak else 0.0)
+    return out
+
+
+def _dd_spark(equity_vals: list[float], w: int = 150, h: int = 46) -> str:
+    """Underwater (drawdown) sparkline: 0% pinned at the top, the trough at the
+    bottom, filled red. Derived from the equity track so it always matches the
+    equity sparkline beside it."""
+    if len(equity_vals) < 2:
+        return ""
+    dd = _dd_from_equity(equity_vals)
+    lo = min(dd + [0.0])          # most negative; floor at 0 so a flat track still renders
+    rng = (-lo) or 1.0
+    n = len(dd)
+    fx = lambda i: i / (n - 1) * (w - 2) + 1
+    fy = lambda v: 2 + (h - 4) * (-v / rng)   # 0% → top, trough → bottom
+    line = " ".join(f"{fx(i):.1f},{fy(v):.1f}" for i, v in enumerate(dd))
+    area = f"1,{fy(0):.1f} " + line + f" {fx(n-1):.1f},{fy(0):.1f}"
+    return (f"<svg viewBox='0 0 {w} {h}' width='100%' style='display:block;max-width:{w}px'>"
+            f"<polygon points='{area}' fill='#ef444422'/>"
+            f"<polyline points='{line}' fill='none' stroke='#ef4444' stroke-width='2'/></svg>")
+
+
+def _spark_pair(equity_vals: list[float], days: int = 30) -> str:
+    """Equity + underwater drawdown sparklines side by side, both off the same
+    trailing equity track and both labelled — the farm-card visual standard."""
+    vals = equity_vals[-days:]
+    if len(vals) < 2:
+        return ""
+    up = vals[-1] >= vals[0]
+    trough = min(_dd_from_equity(vals))
+    cell = lambda label, sub, svg, subc: (
+        f"<div style='flex:1 1 0;min-width:0'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+        f"<span style='color:#8b95a5;font-size:10px;text-transform:uppercase;letter-spacing:.3px'>{label}</span>"
+        f"<span style='color:{subc};font-size:10px;font-weight:700'>{sub}</span></div>"
+        f"<div style='margin-top:2px'>{svg}</div></div>")
+    eq_sub = f"{(vals[-1]/vals[0]-1)*100:+.1f}% · {days}d"
+    return ("<div style='display:flex;gap:12px'>"
+            + cell("Equity", eq_sub, _mini_spark(vals, up), "#22c55e" if up else "#ef4444")
+            + cell("Drawdown", f"worst {trough:.1f}%", _dd_spark(vals), "#ef4444")
+            + "</div>")
+
+
+def _contrib_chart(books: list[dict]) -> str:
+    """Diverging horizontal bar chart of every book's standalone cumulative P&L,
+    sorted best→worst, green right / red left of a zero line. Book name + current
+    portfolio weight on the left, P&L value at the bar tip. Lets Steven scan in a
+    couple of seconds which strategy is pulling weight and which is dragging.
+
+    Note: pnl_cum is each book's STANDALONE track (long-horizon), not a paper-period
+    attribution to the portfolio — labelled as such. Per-book equity *curves over
+    time* aren't in the snapshot (only the current cumulative), so a bar of the
+    standalone result is the honest 'who-won-who-dragged' view."""
+    rows = sorted(books, key=lambda b: b.get("pnl_cum", 0.0), reverse=True)
+    if not rows:
+        return ""
+    maxabs = max((abs(b.get("pnl_cum", 0.0)) for b in rows), default=0.0) * 100 or 1.0
+    rowH, namew, barw, pad = 30, 132, 150, 6
+    W = namew + barw + 56
+    zero = namew + barw / 2
+    half = barw / 2 - 4
+    H = len(rows) * rowH + 6
+    svg = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='display:block;font-family:system-ui'>",
+           f"<line x1='{zero}' y1='2' x2='{zero}' y2='{H-2}' stroke='#2a3441' stroke-width='1'/>"]
+    for i, b in enumerate(rows):
+        pnl = b.get("pnl_cum", 0.0) * 100
+        wgt = b.get("realized_weight", 0.0) * 100
+        active = b.get("activation_state", "") == "active"
+        name = b.get("key", "?")
+        name = name if len(name) <= 18 else name[:17] + "…"
+        cy = i * rowH + rowH / 2 + 3
+        L = abs(pnl) / maxabs * half
+        col = "#22c55e" if pnl >= 0 else "#ef4444"
+        ncol = "#e6e6e6" if active else "#8b95a5"
+        if pnl >= 0:
+            bar = f"<rect x='{zero:.1f}' y='{cy-7:.1f}' width='{L:.1f}' height='13' rx='2' fill='{col}'/>"
+            val = f"<text x='{zero+L+4:.1f}' y='{cy+4:.1f}' fill='{col}' font-size='12' font-weight='700'>{pnl:+.0f}%</text>"
+        else:
+            bar = f"<rect x='{zero-L:.1f}' y='{cy-7:.1f}' width='{L:.1f}' height='13' rx='2' fill='{col}'/>"
+            val = f"<text x='{zero-L-4:.1f}' y='{cy+4:.1f}' text-anchor='end' fill='{col}' font-size='12' font-weight='700'>{pnl:+.0f}%</text>"
+        svg.append(
+            f"<text x='{namew-pad}' y='{cy:.1f}' text-anchor='end' fill='{ncol}' font-size='12' font-weight='600'>{html_escape(name)}</text>"
+            f"<text x='{namew-pad}' y='{cy+11:.1f}' text-anchor='end' fill='#6b7280' font-size='9.5'>{wgt:.0f}% weight{'' if active else ' · dormant'}</text>"
+            + bar + val)
+    svg.append("</svg>")
+    return "".join(svg)
+
+
 def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
     return (f"<div style='background:#0f141c;border-radius:9px;padding:7px 9px;flex:1 1 auto;min-width:80px'>"
             f"<div style='color:#6b7280;font-size:10px;text-transform:uppercase;letter-spacing:.4px'>{label}</div>"
@@ -1855,8 +1951,8 @@ def _freyr_card(variant: str) -> str:
     killc = "#22c55e" if kill == "ARMED" else "#ef4444"
     hbc, hbt = (("#22c55e", "OK") if hb_ok else ("#ef4444", "STALE"))
 
-    track = [pt["equity"] for pt in (snap.get("model_track") or [])[-30:]]
-    spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True)
+    track = [pt["equity"] for pt in (snap.get("model_track") or [])]
+    spark = _spark_pair(track, days=30)
     mt = [(datetime.fromisoformat(pt["date"]), pt["equity"])
           for pt in (snap.get("model_track") or []) if pt.get("date")]
     fc = _ann_strip(_ann_windows(mt), basis="model track (paper is days old)")
@@ -2493,6 +2589,7 @@ def _freyr_detail_page(variant: str) -> str:
     rc = "#22c55e" if ret >= 0 else "#ef4444"
     track = [pt["equity"] for pt in (snap.get("model_track") or [])[-60:]]
     spark = _mini_spark(track, track[-1] >= track[0] if len(track) >= 2 else True, w=620, h=120)
+    dd_spark = _dd_spark(track, w=620, h=70)
 
     def stat(label, value, c="#e6e6e6"):
         return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
@@ -2526,26 +2623,45 @@ def _freyr_detail_page(variant: str) -> str:
         bdd = b.get("book_dd", 0) * 100
         armed = b.get("armed", True)
         armc = "#22c55e" if armed else "#ef4444"
+        wgt = b.get("realized_weight", 0) * 100
+        shp = b.get("standalone_sharpe", 0)
         book_rows.append(
             f"<tr onclick=\"openBook('{b.get('key', '')}')\" style='border-top:1px solid #1c2230;cursor:pointer'>"
-            f"<td style='padding:8px 6px;font-weight:600'>{b.get('key', '?')}"
+            f"<td data-v='{html_escape(b.get('key','?'))}' style='padding:8px 6px;font-weight:600'>{b.get('key', '?')}"
             f"<div style='color:#6b7280;font-size:11px'>{b.get('category', '')} · tier {b.get('tier', '?')}</div></td>"
-            f"<td style='padding:8px 6px;text-align:right'>{b.get('realized_weight', 0) * 100:.1f}%</td>"
-            f"<td style='padding:8px 6px;text-align:right;color:{pc};font-weight:600'>{pnl:+.1f}%</td>"
-            f"<td style='padding:8px 6px;text-align:right'>{b.get('standalone_sharpe', 0):.2f}</td>"
-            f"<td style='padding:8px 6px;text-align:right'>{bdd:.1f}%</td>"
-            f"<td style='padding:8px 6px;text-align:center;color:{stc};font-size:12px'>{st}"
+            f"<td data-v='{wgt:.4f}' style='padding:8px 6px;text-align:right'>{wgt:.1f}%</td>"
+            f"<td data-v='{pnl:.4f}' style='padding:8px 6px;text-align:right;color:{pc};font-weight:600'>{pnl:+.1f}%</td>"
+            f"<td data-v='{shp:.4f}' style='padding:8px 6px;text-align:right'>{shp:.2f}</td>"
+            f"<td data-v='{bdd:.4f}' style='padding:8px 6px;text-align:right'>{bdd:.1f}%</td>"
+            f"<td data-v='{st}' style='padding:8px 6px;text-align:center;color:{stc};font-size:12px'>{st}"
             f"{'' if armed else ' <span style=color:#ef4444>⨯</span>'}"
             f" <span style='color:#6b7280'>›</span></td>"
             f"</tr>")
+    def _th(label, i, align, num=True):
+        return (f"<th onclick=\"sortFB({i},{'1' if num else '0'})\" "
+                f"style='padding:6px;text-align:{align};cursor:pointer;user-select:none;white-space:nowrap'>"
+                f"{label}<span style='color:#475569'> ⇅</span></th>")
     book_table = (
         "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
-        "<table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;min-width:340px'>"
+        "<table id='fbtbl' style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;min-width:340px'>"
         "<thead><tr style='color:#9aa4b2;font-size:11px;text-align:left'>"
-        "<th style='padding:6px'>Book</th><th style='padding:6px;text-align:right'>Weight</th>"
-        "<th style='padding:6px;text-align:right'>Cum P&amp;L</th><th style='padding:6px;text-align:right'>Sharpe</th>"
-        "<th style='padding:6px;text-align:right'>Book DD</th><th style='padding:6px;text-align:center'>State</th>"
-        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table></div>") if books else ""
+        + _th("Book", 0, "left", num=False) + _th("Weight", 1, "right")
+        + _th("Cum P&amp;L", 2, "right") + _th("Sharpe", 3, "right")
+        + _th("Book DD", 4, "right") + _th("State", 5, "center", num=False)
+        + "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table></div>"
+        "<script>(function(){var dir={};window.sortFB=function(c,num){"
+        "var tb=document.querySelector('#fbtbl tbody');var rs=[].slice.call(tb.rows);"
+        "dir[c]=-(dir[c]||1);var d=dir[c];rs.sort(function(a,b){"
+        "var x=a.cells[c].getAttribute('data-v'),y=b.cells[c].getAttribute('data-v');"
+        "if(num){x=parseFloat(x);y=parseFloat(y);}else{x=(''+x).toLowerCase();y=(''+y).toLowerCase();}"
+        "return x<y?d:x>y?-d:0;});rs.forEach(function(r){tb.appendChild(r);});};})();</script>") if books else ""
+
+    contrib = (f"<h3 style=\"margin:18px 0 2px;font-size:15px\">Who's pulling weight, who's dragging</h3>"
+               f"<div style=\"color:#8b95a5;font-size:12px;margin-bottom:6px\">Each book's standalone cumulative P&amp;L "
+               f"(its own track, best→worst) · the bigger the bar, the bigger the win or loss. Left label shows its current "
+               f"portfolio weight. <span style=\"color:#6b7280\">Standalone result, not paper-period attribution.</span></div>"
+               f"<div style=\"background:#0f141c;border-radius:10px;padding:10px 8px\">{_contrib_chart(books)}</div>"
+               if books else "")
 
     # Specialist bots (Surtr 🔥, and Bull/Calm/Chop in flight) carry no books list —
     # they ARE a single book, with their own event log. Surface switching + events.
@@ -2561,7 +2677,8 @@ def _freyr_detail_page(variant: str) -> str:
   {evhtml}"""
     else:
         book_section = f"""
-  <h3 style="margin:16px 0 2px;font-size:15px">Books ({len(books)}) · tap any row to drill in</h3>
+  {contrib}
+  <h3 style="margin:18px 0 2px;font-size:15px">Books ({len(books)}) · tap a column to sort, a row to drill in</h3>
   <div style="color:#8b95a5;font-size:12px">Each book is one strategy. "State" = active (trading) / dormant (flat, awaiting signal). ⨯ = disarmed by its drawdown trip. Tap a row for its size, P&amp;L, switching cost, rules &amp; falsification status.</div>
   {book_table}
   {_book_modal_html(sorted(books, key=lambda x: x.get('realized_weight', 0), reverse=True), snap.get('date', ''))}"""
@@ -2575,6 +2692,10 @@ def _freyr_detail_page(variant: str) -> str:
   <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{snap.get('label', sub)} · as of {snap.get('date', '')}</div>
   <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{spark}
     <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">model equity, last 60 days (paper live since {p.get('paper_start', '—')})</div>
+    <div style="border-top:1px solid #1c2230;margin:8px 4px 4px"></div>
+    <div style="color:#8b95a5;font-size:10px;text-transform:uppercase;letter-spacing:.3px;margin:2px 0 0 2px">Drawdown (underwater)</div>
+    {dd_spark}
+    <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">how far below its peak, same 60 days</div>
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
   <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
