@@ -2192,12 +2192,15 @@ def _home_page() -> str:
     freyr_n, farm_n = len(FREYR_VARIANTS), len(SURVIVORS)
     board_n = freyr_n + farm_n
 
-    # Client-side tab switching: all three panels are rendered, JS toggles
-    # visibility so swapping is instant (no round-trip). The active tab is kept in
-    # the URL #hash so the 60s soft refresh (location.reload, which preserves the
-    # hash) lands the user back on the tab they were reading.
+    # Leaderboard is now the always-visible HERO at the top of the page (Steven's
+    # call — it's the most important view, so it's no longer hidden behind a tab).
+    # The three detail panels (Freyr / Farm / Mine) are rendered below it and JS
+    # toggles visibility so swapping is instant (no round-trip). The active tab is
+    # kept in the URL #hash so the 60s soft refresh (location.reload, which
+    # preserves the hash) lands the user back on the tab they were reading. A stale
+    # '#leaderboard' hash from an old bookmark harmlessly falls back to 'freyr'.
     tab_js = """<script>
-var TABS=['freyr','farm','leaderboard','portfolio'];
+var TABS=['freyr','farm','portfolio'];
 function showTab(name){
   TABS.forEach(function(t){
     var p=document.getElementById('panel-'+t), b=document.getElementById('tab-'+t);
@@ -2235,10 +2238,21 @@ function pset(bot,action){
   </div>
   {btc_banner}
 
+  <div style="background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:13px 13px 6px;margin-bottom:12px">
+    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px">
+      <span style="font-size:17px;font-weight:800">🏆 Leaderboard</span>
+      <span style="color:#6b7280;font-size:11.5px">{board_n} + yours · annualised pace</span>
+    </div>
+    <div style="color:#8b95a5;font-size:11.5px;margin-bottom:8px">
+      Everyone head-to-head: Freyr ensemble &amp; specialists, farm survivors, and your picks.
+      Freyr = model-track CAGR; survivors = 30-day paper pace. <a href="/leaderboard" style="color:#60a5fa;text-decoration:none">full sortable board ›</a>
+    </div>
+    <div style="max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch">{combined}</div>
+  </div>
+
   <div id="tabbar" style="position:sticky;top:0;z-index:30;background:#0b0e14;display:flex;gap:6px;padding:10px 0;margin-bottom:8px;border-bottom:1px solid #161c27">
     <button id="tab-freyr" onclick="showTab('freyr')" style="{btnbase};background:#2563eb;color:#fff">⚡ Freyr {cnt}· {freyr_n}</span></button>
     <button id="tab-farm" onclick="showTab('farm')" style="{btnbase};background:#1c2230;color:#9aa4b2">🌾 Farm {cnt}· {farm_n}</span></button>
-    <button id="tab-leaderboard" onclick="showTab('leaderboard')" style="{btnbase};background:#1c2230;color:#9aa4b2">🏆 Board {cnt}· {board_n}</span></button>
     <button id="tab-portfolio" onclick="showTab('portfolio')" style="{btnbase};background:#1c2230;color:#9aa4b2">👤 Mine {cnt}· {mine_n}</span></button>
   </div>
 
@@ -2259,13 +2273,6 @@ function pset(bot,action){
       <span style="color:#f59e0b">⚠️ leveraged = paper-only.</span> Green switch cost = cheap-exit (can take narrow edges).
     </div>
     {surv_cards}
-  </div>
-
-  <div id="panel-leaderboard" style="display:none">
-    <div style="color:#8b95a5;font-size:12px;margin:2px 0 6px">
-      Freyr + farm survivors head-to-head by annualised pace. Freyr = model-track CAGR; survivors = 30-day paper pace.
-    </div>
-    {combined}
   </div>
 
   <div id="panel-portfolio" style="display:none">
