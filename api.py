@@ -2902,7 +2902,17 @@ def _testnet_detail_page() -> str:
                 f"font-weight:{700 if bold else 400};white-space:nowrap'>{v}</td>")
 
     def _book(b):
-        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>" if b else "<span style='color:#475569'>—</span>"
+        # Map the book key the poller attributes (e.g. "surtr") to its bracket emoji
+        # + capitalised name in the bracket's accent colour → "🔥 Surtr". Unknown
+        # keys fall back to the raw string; no attribution renders as an em-dash.
+        if not b:
+            return "<span style='color:#475569'>—</span>"
+        meta = FREYR_META.get(b)
+        if meta:
+            emoji, _name, accent, _sub = meta
+            label = f"{emoji} {b[:1].upper()}{b[1:]}"
+            return f"<span style='color:{accent};font-weight:600'>{html_escape(label)}</span>"
+        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>"
 
     # positions
     prows = []
