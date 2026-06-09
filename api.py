@@ -1614,7 +1614,7 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod"]
 FREYR_META = {
     # Seventh specialist-library bot — FIRST member of the new 📊 Options bracket.
     "skadi":  ("📊", "Options specialist", "#8b5cf6", "Skadi · DEPLOYED 12× variance notional (survivable — worst armed day −7.3% = the defined-risk wing cap, never breached) · SELLS defined-risk BTC credit spreads, collects implied-vol premium · FLEES on vol eruption (inverse of Surtr) · deployed +9.6%/yr all-time, +44%/yr active-window, maxDD −17.7% · 500% needs ~136× (ruinous) → honest Sharpe~0.85 carry, not a moonshot · LIBRARY book, deploys on Deribit/Lyra not Hyperliquid"),
@@ -1640,6 +1640,9 @@ FREYR_META = {
     # directional levered short loses in crashes (vol-drag/bounce symmetry); kept as the
     # counter-example proving convexity (Surtr) beats selling the asset. Do NOT deploy.
     "fenrir": ("🔥", "Crash specialist (aggr)", "#dc2626", "Fenrir · gated LEVERED SHORT 2.5–5× · armed on a DOWN crash (5d-vol z>2σ OR VIX>30 OR −10% gap + down trend) · exits on 10% rebound off low · honest finding: −50% CAGR / −99.8% DD, leverage monotonically worsens it — directional short ≠ Surtr's convexity"),
+    # Tenth specialist-library bot — FIRST member of the new 🏃 Cheap-exit bracket, and
+    # Freyr's FIRST market-maker. NOVELTY + SPEED mandate (Steven), not ROI.
+    "hermod": ("🏃", "Cheap-exit", "#10b981", "Hermod · Freyr's FIRST market-maker · passive maker-only quotes BOTH sides of BTC perp top-of-book, inventory-neutral via spread skew · PAID to round-trip: +1.16bps net per round-trip (spread 6bps − 2×1.5bps Hyperliquid maker − 1.84bps adverse) = LOWEST switching cost in the library · always-on in CALM, flat in fast tape (makers get adversely selected) · uncorrelated calm-yield: deployed +3.2%/yr Sharpe 5.8 maxDD −0.2% (full-notional +28%/yr) · daily-bar fill PROXY, calm gate is a microstructure prior pending tick/paper — ROI is NOT the point, the strategy class + switching cost is"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
