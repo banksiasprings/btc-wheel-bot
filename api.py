@@ -1614,8 +1614,10 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki", "aegir", "sif"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn", "loki", "aegir", "sif", "skadi"]
 FREYR_META = {
+    # Seventh specialist-library bot — FIRST member of the new 📊 Options bracket.
+    "skadi":  ("📊", "Options specialist", "#8b5cf6", "Skadi · options VRP harvester · SELLS defined-risk BTC credit spreads · collects implied-vol premium · FLEES on vol eruption (inverse of Surtr) · honest finding: real Sharpe~0.85 carry, 500% needs ~136× (ruinous) → reported actual ~+44% active-window CAGR · LIBRARY book, deploys on Deribit/Lyra not Hyperliquid"),
     #            emoji   profile-name    accent     one-line knob summary
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
     "v0.2":   ("⚖️", "Moderate",     "#3b82f6", "Escape-governed · vol 15% · 2.0× target"),
