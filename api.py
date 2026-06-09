@@ -1763,7 +1763,7 @@ def html_escape(s: str) -> str:
 def _switch_modal_html() -> str:
     return """
 <div id="swmodal" onclick="if(event.target===this)closeSwitch()" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
-  <div style="max-width:480px;margin:24px auto;background:#151a23;border-radius:16px;padding:18px 18px 22px;border:1px solid #232b39">
+  <div style="box-sizing:border-box;width:100%;max-width:480px;margin:24px auto;background:#151a23;border-radius:16px;padding:18px 18px 22px;border:1px solid #232b39">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
       <div style="font-size:18px;font-weight:800">Switching cost <span id="sw-name" style="color:#8b95a5;font-weight:500;font-size:14px"></span></div>
       <button onclick="closeSwitch()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
@@ -2441,7 +2441,7 @@ def _book_modal_html(books: list[dict], snap_date: str) -> str:
     panels = "".join(_book_panel(b, snap_date) for b in books)
     return f"""
 <div id="bookmodal" onclick="if(event.target===this)closeBook()" style="display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
-  <div style="max-width:520px;margin:18px auto;background:#151a23;border-radius:16px;padding:18px;border:1px solid #232b39">{panels}</div>
+  <div style="box-sizing:border-box;width:100%;max-width:520px;margin:18px auto;background:#151a23;border-radius:16px;padding:18px;border:1px solid #232b39">{panels}</div>
 </div>
 <script>
 function openBook(key){{
@@ -2515,12 +2515,13 @@ def _freyr_detail_page(variant: str) -> str:
             f" <span style='color:#6b7280'>›</span></td>"
             f"</tr>")
     book_table = (
-        "<table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px'>"
+        "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;min-width:340px'>"
         "<thead><tr style='color:#9aa4b2;font-size:11px;text-align:left'>"
         "<th style='padding:6px'>Book</th><th style='padding:6px;text-align:right'>Weight</th>"
         "<th style='padding:6px;text-align:right'>Cum P&amp;L</th><th style='padding:6px;text-align:right'>Sharpe</th>"
         "<th style='padding:6px;text-align:right'>Book DD</th><th style='padding:6px;text-align:center'>State</th>"
-        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table>") if books else ""
+        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table></div>") if books else ""
 
     # Specialist bots (Surtr 🔥, and Bull/Calm/Chop in flight) carry no books list —
     # they ARE a single book, with their own event log. Surface switching + events.
