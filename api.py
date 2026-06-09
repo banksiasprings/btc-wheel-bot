@@ -27,6 +27,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
+import steven_portfolio as sp
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 STATUS = BASE_DIR / "grid_farm" / "status.json"
@@ -69,6 +71,13 @@ def farm_status() -> dict:
     data = _load()
     if not data:
         return {"farm_running": False, "btc_price": 0, "bots": []}
+    # Heartbeat: advance Steven's portfolio NAV (idempotent per farm tick). The
+    # widget polls this regularly, so it keeps the tournament curve alive even when
+    # nobody has the dashboard open. Side-effect only — never alters this response.
+    try:
+        _tick_steven()
+    except Exception:
+        pass
     bots = [{
         "id": v["slug"],
         "name": v["name"],
@@ -493,12 +502,36 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
 CRYPTO_ROUND_TRIP_BPS = 6.0
 
 
+def _switch_color(pct: float) -> str:
+    """Green < 0.1% · amber 0.1–0.5% · red > 0.5% of NAV."""
+    return "#22c55e" if pct < 0.1 else ("#f59e0b" if pct <= 0.5 else "#ef4444")
+
+
 def _switch_cost(leverage: float) -> tuple[float, str]:
     """(round-trip switching cost as % of NAV, colour) for a bot's gross leverage.
-    Green < 0.1% · amber 0.1–0.5% · red > 0.5%."""
+    Crypto farm bots: 6.0 bps round trip × gross leverage."""
     pct = CRYPTO_ROUND_TRIP_BPS * max(leverage or 1.0, 0.0) / 100.0
-    col = "#22c55e" if pct < 0.1 else ("#f59e0b" if pct <= 0.5 else "#ef4444")
-    return pct, col
+    return pct, _switch_color(pct)
+
+
+def _switch_breakdown(round_trip_bps: float, gross: float, *, asset: str = "BTC",
+                      last_measured: str = "") -> dict:
+    """Decompose a round-trip switching cost into the parts that produce the chip,
+    so the tap-panel can show its working. The cost model is a single blended
+    per-side cost = fee + slippage (registry crypto-cost-bps = 2bp fee + 1bp
+    slippage; etf-cost-bps = 1bp fee + 0.5bp slippage). Round trip = 2 × per-side;
+    as a % of NAV it scales with the position's gross leverage."""
+    g = max(gross or 1.0, 0.0)
+    per_side = round_trip_bps / 2.0
+    fee = per_side * 2.0 / 3.0       # 2:1 fee:slippage split, matches the registry
+    slip = per_side - fee
+    pct = round_trip_bps * g / 100.0
+    return {
+        "fee_bps": fee, "slip_bps": slip, "per_side_bps": per_side,
+        "round_trip_bps": round_trip_bps, "gross": g, "pct": pct,
+        "color": _switch_color(pct), "asset": asset,
+        "last_measured": last_measured or "",
+    }
 
 
 def _svg_chart(rows: list[tuple[datetime, float]], start: float, up: bool) -> str:
@@ -1543,6 +1576,33 @@ def leaderboard():
     return HTMLResponse(_leaderboard_page())
 
 
+@app.get("/portfolio", include_in_schema=False)
+def portfolio_json():
+    """Steven's portfolio config + live snapshot (no key — paper, read-only)."""
+    universe, _ = _bot_universe()
+    return {"snapshot": _tick_steven(universe) or sp.snapshot(universe=universe),
+            "config": sp.load_config()}
+
+
+@app.post("/portfolio/set", include_in_schema=False)
+def portfolio_set(bot: str, action: str, name: str = ""):
+    """Add/remove a bot or set its ON/OFF/AUTO override. Every call is audit-logged.
+    action ∈ {ADD, REMOVE, ON, OFF, AUTO}. Paper-only, no key needed."""
+    action = (action or "").upper()
+    universe, _ = _bot_universe()
+    if not name:
+        name = (universe.get(bot) or {}).get("name", "")
+    if action == "ADD":
+        sp.add(bot, name)
+    elif action == "REMOVE":
+        sp.remove(bot)
+    elif action in ("ON", "OFF", "AUTO"):
+        sp.set_override(bot, action, name)
+    else:
+        raise HTTPException(status_code=400, detail="bad action")
+    return {"ok": True, "snapshot": _tick_steven(universe) or sp.snapshot(universe=universe)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Freyr ensemble — the PRIMARY section of the dashboard.
 #
@@ -1554,7 +1614,7 @@ def leaderboard():
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "idunn"]
 FREYR_META = {
     #            emoji   profile-name    accent     one-line knob summary
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
@@ -1562,6 +1622,10 @@ FREYR_META = {
     "v0.3":   ("🚀", "Aggressive",   "#a78bfa", "Escape-governed · vol 20% · 3.0× target"),
     # First specialist-library bot — independent paper P&L, 🔥 crash bracket.
     "surtr":  ("🔥", "Crash specialist", "#ef4444", "Surtr · gated long-gamma · flat in calm · armed on BTC 5d-vol z>2σ OR VIX>30"),
+    # Second specialist-library bot — independent paper P&L, 🐂 bull bracket.
+    "vidar":  ("🐂", "Bull specialist", "#f59e0b", "Vidar · gated Kelly-levered long · flat in calm · armed on 50d-mom>0 & >200d-SMA & clean trend, NOT a vol-spike"),
+    # Third specialist-library bot — independent paper P&L, 😴 calm/carry bracket.
+    "idunn":  ("😴", "Calm specialist", "#14b8a6", "Idunn · gated delta-neutral funding harvest · flat outside calm · low vol + paid funding + no trend"),
 }
 FREYR_NOTIONAL = 10_000.0   # show Freyr's unit-equity on the same $10k notional as the farm
 
@@ -1660,14 +1724,90 @@ def _ann_strip(ann: dict, basis: str = "") -> str:
             + "</div>")
 
 
-def _switch_chip(leverage: float) -> str:
-    """A single at-a-glance switching-cost badge (% of NAV to fully exit+re-enter)."""
-    pct, col = _switch_cost(leverage)
-    return (f"<span style='display:inline-flex;align-items:center;gap:6px;background:#0f141c;"
+def _switch_chip(leverage: float | None = None, *, round_trip_bps: float | None = None,
+                 gross: float | None = None, name: str = "this bot", asset: str = "BTC",
+                 last_measured: str = "") -> str:
+    """A tappable switching-cost badge (% of NAV to fully exit+re-enter). Tap opens
+    a panel showing the calc breakdown. Drive it either by `leverage` (farm bots,
+    crypto 6bp round trip) or by an explicit `round_trip_bps` + `gross` (Freyr
+    books, which carry their own per-book round-trip in the snapshot)."""
+    if round_trip_bps is None:
+        round_trip_bps, gross = CRYPTO_ROUND_TRIP_BPS, (leverage if leverage is not None else 1.0)
+    bd = _switch_breakdown(round_trip_bps, gross if gross is not None else 1.0,
+                           asset=asset, last_measured=last_measured)
+    col, pct = bd["color"], bd["pct"]
+    # data-* carry the numbers; onclick (with stopPropagation so it works inside a
+    # card link) hands them to the shared modal.
+    data = (f"data-sw-name=\"{html_escape(name)}\" data-sw-fee=\"{bd['fee_bps']:.2f}\" "
+            f"data-sw-slip=\"{bd['slip_bps']:.2f}\" data-sw-side=\"{bd['per_side_bps']:.2f}\" "
+            f"data-sw-rt=\"{bd['round_trip_bps']:.2f}\" data-sw-gross=\"{bd['gross']:.2f}\" "
+            f"data-sw-pct=\"{pct:.3f}\" data-sw-col=\"{col}\" data-sw-asset=\"{html_escape(asset)}\" "
+            f"data-sw-when=\"{html_escape(bd['last_measured'])}\"")
+    return (f"<span role='button' tabindex='0' onclick='openSwitch(event,this)' {data} "
+            f"style='display:inline-flex;align-items:center;gap:6px;background:#0f141c;cursor:pointer;"
             f"border:1px solid {col}40;border-radius:8px;padding:4px 10px;font-size:11px;white-space:nowrap'>"
             f"<span style='width:7px;height:7px;border-radius:50%;background:{col};display:inline-block'></span>"
             f"<span style='color:#8b95a5'>Switch cost</span>"
-            f"<b style='color:{col}'>{pct:.2f}% of NAV</b></span>")
+            f"<b style='color:{col}'>{pct:.2f}% of NAV</b>"
+            f"<span style='color:#6b7280;font-weight:700'>ⓘ</span></span>")
+
+
+def html_escape(s: str) -> str:
+    return (str(s).replace("&", "&amp;").replace('"', "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
+# Shared full-screen tap-panel for the switching-cost breakdown. Injected once per
+# page that renders a switch chip. Plain-English: this is what it costs (fees +
+# slippage, both ways) to fully get into or out of a position.
+def _switch_modal_html() -> str:
+    return """
+<div id="swmodal" onclick="if(event.target===this)closeSwitch()" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
+  <div style="max-width:480px;margin:24px auto;background:#151a23;border-radius:16px;padding:18px 18px 22px;border:1px solid #232b39">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+      <div style="font-size:18px;font-weight:800">Switching cost <span id="sw-name" style="color:#8b95a5;font-weight:500;font-size:14px"></span></div>
+      <button onclick="closeSwitch()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
+    </div>
+    <div id="sw-head" style="font-size:30px;font-weight:800;margin:2px 0 2px"></div>
+    <div style="color:#8b95a5;font-size:12.5px;margin-bottom:12px">the round-trip cost (enter + exit) to fully get into or out of this position, as a % of the position's value</div>
+
+    <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">How it's calculated</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px" id="sw-rows"></table>
+
+    <div style="background:#0f141c;border-radius:10px;padding:11px 12px;margin-top:12px;color:#cbd5e1;font-size:12.5px;line-height:1.5">
+      <b style="color:#e6e6e6">Why it matters.</b> Cheap-exit bots can chase tiny edges; expensive-exit bots need a fat edge to be worth running. You can't run a 0.1% edge with 0.5% switching cost — the cost eats the trade.
+    </div>
+
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <span style="font-size:11px;color:#8b95a5"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-right:4px"></span>green &lt;0.1%</span>
+      <span style="font-size:11px;color:#8b95a5"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#f59e0b;margin-right:4px"></span>amber 0.1–0.5%</span>
+      <span style="font-size:11px;color:#8b95a5"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#ef4444;margin-right:4px"></span>red &gt;0.5%</span>
+    </div>
+    <div id="sw-when" style="color:#6b7280;font-size:11px;margin-top:10px"></div>
+  </div>
+</div>
+<script>
+function swRow(label,val,strong){return '<tr style="border-top:1px solid #1c2230"><td style="padding:7px 4px;color:#8b95a5">'+label+'</td><td style="padding:7px 4px;text-align:right;font-weight:'+(strong?800:600)+';color:'+(strong?'#e6e6e6':'#cbd5e1')+'">'+val+'</td></tr>';}
+function openSwitch(ev,el){
+  if(ev){ev.preventDefault();ev.stopPropagation();}
+  var d=el.dataset, col=d.swCol;
+  document.getElementById('sw-name').textContent='· '+d.swName;
+  var head=document.getElementById('sw-head');
+  head.textContent=parseFloat(d.swPct).toFixed(2)+'% of NAV'; head.style.color=col;
+  var rows=swRow('Top-of-book spread / slippage',parseFloat(d.swSlip).toFixed(1)+' bps / side')
+    +swRow('Fee (taker-side, blended)',parseFloat(d.swFee).toFixed(1)+' bps / side')
+    +swRow('Market impact at current size','≈0 bps · paper sizes small')
+    +swRow('Per side total',parseFloat(d.swSide).toFixed(1)+' bps')
+    +swRow('Round trip (× 2 — enter + exit)',parseFloat(d.swRt).toFixed(1)+' bps')
+    +swRow('× gross leverage',parseFloat(d.swGross).toFixed(2)+'×')
+    +swRow('= Switching cost',parseFloat(d.swPct).toFixed(2)+'% of NAV',true);
+  document.getElementById('sw-rows').innerHTML=rows;
+  var w=d.swWhen?('Asset class: '+d.swAsset+' · last measured '+d.swWhen):('Asset class: '+d.swAsset);
+  document.getElementById('sw-when').textContent=w;
+  document.getElementById('swmodal').style.display='block';
+}
+function closeSwitch(){document.getElementById('swmodal').style.display='none';}
+</script>"""
 
 
 def _freyr_card(variant: str) -> str:
@@ -1703,7 +1843,7 @@ def _freyr_card(variant: str) -> str:
     mt = [(datetime.fromisoformat(pt["date"]), pt["equity"])
           for pt in (snap.get("model_track") or []) if pt.get("date")]
     fc = _ann_strip(_ann_windows(mt), basis="model track (paper is days old)")
-    sw = _switch_chip(lev)
+    sw = _switch_chip(lev, name=f"Freyr {variant}", last_measured=date)
     sign = "+" if ret >= 0 else ""
     chips = "".join([
         _chip("Drawdown", f"{dd:.1f}%", ddc),
@@ -1758,8 +1898,131 @@ def _survivor_card(v: dict) -> str:
         <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
       </div>
       <div style="margin-top:8px">{_ann_strip(ann, basis="paper track")}</div>
-      <div style="margin-top:8px">{_switch_chip(v.get('leverage', 1.0))}</div>
+      <div style="margin-top:8px">{_switch_chip(v.get('leverage', 1.0), name=v['name'])}</div>
     </div></a>"""
+
+
+# ── Steven's manual portfolio — the human-vs-algo tournament (My Portfolio tab) ──
+# Bracket emoji by family for bots not in the curated BRACKETS map, so the full
+# picker still shows a "which market is this for" lens.
+TAB_EMOJI = {"grid": "⚖️", "funding": "😴", "longvol": "🔥", "premium": "📉",
+             "trend": "🏃", "stack": "🔄", "convex": "🌪"}
+FREYR_BENCH = {"v0.1.1": "freyr_v011", "v0.2": "freyr_v02", "v0.3": "freyr_v03"}
+STEVEN_COL = "#eab308"   # gold — Steven's line on the head-to-head chart
+
+
+def _gate_active_farm(state: str) -> bool:
+    """Best-effort 'is this farm bot deploying capital right now?' from its state
+    string. In cash / trend-stopped = inactive; otherwise it's holding/working."""
+    s = (state or "").lower()
+    return not ("in cash" in s or "trend-stopped" in s)
+
+
+def _bot_universe() -> tuple[dict, list]:
+    """Unified roster across Freyr + farm + specialists for Steven's picker.
+      universe[key] = {equity, active, name}     # drives the NAV sim
+      meta = ordered display dicts {key,name,emoji,bracket,bcol,tab,
+              equity,return_pct,dd,gate_active,leverage}
+    Freyr keys are namespaced 'freyr:<variant>'; farm bots use their slug."""
+    universe, meta = {}, []
+    for variant in FREYR_VARIANTS:
+        snap, _ = _freyr_load(variant)
+        if not snap:
+            continue
+        p = snap.get("portfolio", {})
+        eq = p.get("paper_equity", 1.0) * FREYR_NOTIONAL
+        active = p.get("n_books_active", 0) > 0
+        emoji, pname, accent, _ = FREYR_META[variant]
+        key, name = f"freyr:{variant}", f"Freyr {variant}"
+        universe[key] = {"equity": eq, "active": active, "name": name}
+        meta.append({"key": key, "name": name, "emoji": emoji, "bracket": pname,
+                     "bcol": accent, "tab": "freyr", "equity": eq,
+                     "return_pct": (eq / FREYR_NOTIONAL - 1) * 100,
+                     "dd": p.get("current_dd", 0.0) * 100, "gate_active": active,
+                     "leverage": p.get("leverage", 1.0)})
+    for v in (_load() or {}).get("variants", []):
+        slug, tab = v["slug"], _tab_of(v)
+        active = _gate_active_farm(v.get("state", ""))
+        bem, blab, bcol = BRACKETS.get(slug, ("", "", ""))
+        emoji = bem or TAB_EMOJI.get(tab, "•")
+        bracket = blab or TAB_LABELS.get(tab, tab)
+        col = bcol or TAB_COLORS.get(tab, "#64748b")
+        universe[slug] = {"equity": v["equity"], "active": active, "name": v["name"]}
+        meta.append({"key": slug, "name": v["name"], "emoji": emoji, "bracket": bracket,
+                     "bcol": col, "tab": tab, "equity": v["equity"],
+                     "return_pct": v["return_pct"], "dd": -v.get("max_drawdown_pct", 0.0),
+                     "gate_active": active, "leverage": v.get("leverage", 1.0)})
+    return universe, meta
+
+
+def _tick_steven(universe: dict | None = None):
+    """Advance Steven's paper portfolio one farm tick (idempotent per farm stamp)
+    and return its snapshot. Records the three Freyr variants alongside so the
+    head-to-head chart is aligned from launch. Never raises into a request."""
+    data = _load() or {}
+    if universe is None:
+        universe, _ = _bot_universe()
+    bench = {col: universe[f"freyr:{var}"]["equity"]
+             for var, col in FREYR_BENCH.items() if f"freyr:{var}" in universe}
+    try:
+        return sp.tick(universe, data.get("btc_price", 0.0), data.get("updated", ""), bench)
+    except Exception:
+        try:
+            return sp.snapshot(universe=universe)
+        except Exception:
+            return None
+
+
+def _series_overlay(series: list[tuple[str, str, list]], start: float) -> str:
+    """Generic multi-line account-value chart. series = [(name, colour, rows)],
+    rows = [(datetime, equity)] ascending. Shared time + $ axes."""
+    series = [(n, c, r) for n, c, r in series if len(r) >= 2]
+    if not series:
+        return ("<div style='color:#6b7280;padding:26px 0;text-align:center'>"
+                "Your equity curve fills in from launch — it grows each hour as the "
+                "farm ticks. Check back soon.</div>")
+    all_ts = [t for _, _, rows in series for t, _ in rows]
+    all_eq = [e for _, _, rows in series for _, e in rows] + [start]
+    tmin, tmax = min(all_ts), max(all_ts)
+    emin, emax = min(all_eq), max(all_eq)
+    tspan = (tmax - tmin).total_seconds() or 1.0
+    erng = (emax - emin) or 1.0
+    w, h = 620, 216
+    padL, padR, padT, padB = 52, 12, 18, 34
+    fx = lambda t: padL + (t - tmin).total_seconds() / tspan * (w - padL - padR)
+    fy = lambda e: padT + (h - padT - padB) * (1 - (e - emin) / erng)
+    polys, legend = [], []
+    for name, col, rows in series:
+        pts = " ".join(f"{fx(t):.1f},{fy(e):.1f}" for t, e in rows)
+        wide = "3" if name.startswith("👤") else "2"
+        polys.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="{wide}"/>')
+        legend.append(f"<span style='color:{col};font-size:12px;white-space:nowrap'>● {name}</span>")
+    base_y = fy(start)
+    fmt = "%d %b %H:%M" if tspan < 3 * 86400 else "%d %b %y"
+    svg = (f'<svg viewBox="0 0 {w} {h}" width="100%" style="background:#0f141c;border-radius:10px">'
+           f'<line x1="{padL}" y1="{base_y:.1f}" x2="{w - padR}" y2="{base_y:.1f}" '
+           f'stroke="#3a4253" stroke-dasharray="4 4"/>' + "".join(polys) +
+           f'<text x="{padL - 6}" y="{padT + 4}" fill="#6b7280" font-size="11" text-anchor="end">${emax:,.0f}</text>'
+           f'<text x="{padL - 6}" y="{h - padB + 3:.0f}" fill="#6b7280" font-size="11" text-anchor="end">${emin:,.0f}</text>'
+           f'<text x="{w - padR}" y="{base_y - 4:.1f}" fill="#8b95a5" font-size="10.5" text-anchor="end">start ${start:,.0f}</text>'
+           f'<text x="{padL}" y="{h - 17}" fill="#6b7280" font-size="11">{tmin.strftime(fmt)}</text>'
+           f'<text x="{w - padR}" y="{h - 17}" fill="#6b7280" font-size="11" text-anchor="end">{tmax.strftime(fmt)}</text>'
+           f'<text x="{(padL + w - padR) / 2:.0f}" y="{h - 4}" fill="#8b95a5" font-size="11" '
+           f'text-anchor="middle">You vs Freyr — from launch (paper)</text></svg>')
+    return svg + f"<div style='display:flex;flex-wrap:wrap;gap:10px;margin:6px 0 2px'>{''.join(legend)}</div>"
+
+
+def _portfolio_overlay() -> str:
+    """Steven's NAV vs the three Freyr profiles, aligned from t0 (read off the
+    tournament equity CSV the tick writes)."""
+    bench = sp.benchmark_series()
+    names = {"equity": ("👤 You", STEVEN_COL)}
+    for var, col in FREYR_BENCH.items():
+        emoji, _pn, accent, _ = FREYR_META[var]
+        names[col] = (f"{emoji} Freyr {var}", accent)
+    series = [(names[c][0], names[c][1], rows) for c, rows in bench.items() if c in names]
+    series.sort(key=lambda s: 0 if s[0].startswith("👤") else 1)
+    return _series_overlay(series, sp.INITIAL_NAV)
 
 
 def _combined_leaderboard() -> str:
@@ -1783,6 +2046,17 @@ def _combined_leaderboard() -> str:
         rows.append({"pace": _annualised(slug)["monthly"], "name": v["name"],
                      "ret": v["return_pct"], "dd": -v["max_drawdown_pct"],
                      "accent": TAB_COLORS.get(_tab_of(v), "#64748b"), "href": f"/bot/{v['slug']}"})
+    # Steven's manual portfolio races the algos head-to-head.
+    try:
+        snap = sp.snapshot()
+        if snap["n_bots"] > 0:
+            srows = sp.equity_rows()
+            pace = _ann_windows(srows)["mo"] if len(srows) >= 2 else None
+            rows.append({"pace": pace, "name": "👤 Steven's Portfolio",
+                         "ret": snap["return_pct"], "dd": snap["drawdown_pct"],
+                         "accent": STEVEN_COL, "href": "/#portfolio"})
+    except Exception:
+        pass
     rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
     out = []
     for i, r in enumerate(rows, 1):
@@ -1799,6 +2073,91 @@ def _combined_leaderboard() -> str:
             f"<span style='color:{pacec};font-size:13px;font-weight:700;width:84px;text-align:right'>{pace}</span>"
             f"</a>")
     return "".join(out)
+
+
+def _portfolio_row(m: dict, snap_bot: dict | None) -> str:
+    """One bot row in the picker. snap_bot is non-None when the bot is in Steven's
+    portfolio (carries override + slice value); None means it's still available."""
+    chip = (f"<span style='display:inline-block;background:#0f141c;color:{m['bcol']};font-size:10px;"
+            f"font-weight:700;padding:1px 7px;border-radius:6px;border:1px solid {m['bcol']}33;"
+            f"white-space:nowrap'>{m['emoji']} {m['bracket']}</span>")
+    gate = ("<span style='color:#22c55e'>● firing</span>" if m["gate_active"]
+            else "<span style='color:#6b7280'>○ flat</span>")
+    rc = "#22c55e" if m["return_pct"] >= 0 else "#ef4444"
+    head = (f"<div style='display:flex;justify-content:space-between;align-items:center;gap:8px'>"
+            f"<span style='font-size:14px;font-weight:600'>{m['name']}</span>{chip}</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-top:4px;font-size:11.5px'>"
+            f"<span style='color:#8b95a5'>auto-gate: {gate}</span>"
+            f"<span style='color:{rc};font-weight:600'>{m['return_pct']:+.2f}% · ${m['equity']:,.0f}</span></div>")
+
+    if snap_bot is None:
+        body = (f"<button onclick=\"pset('{m['key']}','ADD')\" style='margin-top:8px;width:100%;padding:7px;"
+                f"border:1px dashed #2d3850;border-radius:8px;background:#10151e;color:#60a5fa;"
+                f"font-size:12px;font-weight:600;font-family:inherit;cursor:pointer'>+ Add to my portfolio</button>")
+        bar = "#1c2230"
+    else:
+        cur = snap_bot["override"]
+        seg = []
+        for opt, col in [("ON", "#22c55e"), ("AUTO", "#3b82f6"), ("OFF", "#ef4444")]:
+            on = cur == opt
+            seg.append(f"<button onclick=\"pset('{m['key']}','{opt}')\" style='flex:1;padding:6px 2px;border:none;"
+                       f"border-radius:7px;background:{col if on else '#1c2230'};color:{'#fff' if on else '#9aa4b2'};"
+                       f"font-size:11px;font-weight:700;font-family:inherit;cursor:pointer'>{opt}</button>")
+        eff = ("<span style='color:#22c55e'>in market</span>" if snap_bot["active"]
+               else "<span style='color:#6b7280'>parked (cash)</span>")
+        body = (f"<div style='display:flex;gap:4px;margin-top:8px'>{''.join(seg)}</div>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:7px;font-size:11.5px'>"
+                f"<span style='color:#8b95a5'>now: {eff} · ${snap_bot['value']:,.0f}</span>"
+                f"<button onclick=\"pset('{m['key']}','REMOVE')\" style='border:none;background:none;color:#ef4444;"
+                f"font-size:11.5px;cursor:pointer;font-family:inherit'>✕ remove</button></div>")
+        bar = STEVEN_COL
+    return (f"<div style='background:#151a23;border-left:3px solid {bar};border-radius:11px;"
+            f"padding:11px 13px;margin:7px 0'>{head}{body}</div>")
+
+
+def _steven_panel(snap: dict, meta: list) -> str:
+    """The 'My Portfolio' tab — Steven hand-picks bots and races the algos."""
+    by_key = {b["key"]: b for b in snap["bots"]}
+    nav, ret, dd = snap["nav"], snap["return_pct"], snap["drawdown_pct"]
+    rc = "#22c55e" if ret >= 0 else "#ef4444"
+    ddc = "#22c55e" if dd > -5 else ("#f59e0b" if dd > -15 else "#ef4444")
+    pace = _ann_strip(_ann_windows(sp.equity_rows()), basis="your live track")
+    summary = (
+        f"<div style='background:#151a23;border-radius:16px;padding:16px;margin:6px 0 12px;border-left:5px solid {STEVEN_COL}'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:flex-start'>"
+        f"<div><div style='font-size:18px;font-weight:800'>👤 Steven's Portfolio</div>"
+        f"<div style='color:#8b95a5;font-size:12px;margin-top:2px'>{snap['n_active']}/{snap['n_bots']} bots in market now · you vs the algos</div></div>"
+        f"<div style='text-align:right'><div style='font-size:24px;font-weight:800;color:{rc}'>{ret:+.2f}%</div>"
+        f"<div style='color:#8b95a5;font-size:12px'>${nav:,.0f} on $10k</div></div></div>"
+        f"<div style='display:flex;gap:6px;margin-top:10px'>"
+        + _chip("Drawdown", f"{dd:.1f}%", ddc) + _chip("In market", f"{snap['n_active']}/{snap['n_bots']}")
+        + _chip("Peak", f"${snap['peak']:,.0f}") + "</div>"
+        f"<div style='margin-top:9px'>{pace}</div></div>")
+
+    chart = _portfolio_overlay()
+    included = [m for m in meta if m["key"] in by_key]
+    available = [m for m in meta if m["key"] not in by_key]
+    inc_html = "".join(_portfolio_row(m, by_key[m["key"]]) for m in included)
+    avail_html = "".join(_portfolio_row(m, None) for m in available)
+    if not included:
+        inc_html = ("<div style='color:#6b7280;font-size:12.5px;padding:10px 2px'>"
+                    "No bots yet — add some below, then set each to <b style='color:#22c55e'>ON</b> "
+                    "(force trade), <b style='color:#ef4444'>OFF</b> (park in cash) or "
+                    "<b style='color:#3b82f6'>AUTO</b> (follow the bot's own gate).</div>")
+
+    return f"""
+    <div style="color:#8b95a5;font-size:12px;margin:2px 0 4px">
+      Your hand-picked book vs the Freyr auto-portfolios. Pick bots, then call each one:
+      <b style="color:#22c55e">ON</b> = force it to trade, <b style="color:#ef4444">OFF</b> = park it in cash,
+      <b style="color:#3b82f6">AUTO</b> = defer to the bot's own gate. Every flip is logged. Starts at $10k, like the farm.
+    </div>
+    {summary}
+    <div style="margin:6px 0 10px">{chart}</div>
+    <div style="font-size:13px;font-weight:700;color:#e6e6e6;margin:14px 0 2px">Your portfolio · {snap['n_bots']} picked</div>
+    {inc_html}
+    <div style="font-size:13px;font-weight:700;color:#e6e6e6;margin:16px 0 2px">Add bots · {len(available)} available</div>
+    <div style="color:#6b7280;font-size:11px;margin-bottom:2px">All bots across Freyr + farm + specialists.</div>
+    {avail_html}"""
 
 
 def _home_page() -> str:
@@ -1824,6 +2183,10 @@ def _home_page() -> str:
     freyr_cards = "".join(_freyr_card(v) for v in FREYR_VARIANTS)
     surv_cards = "".join(_survivor_card(v) for v in (_variant_by_slug(s) for s in SURVIVORS) if v)
     combined = _combined_leaderboard()
+    universe, meta = _bot_universe()
+    snap = _tick_steven(universe) or sp.snapshot(universe=universe)
+    portfolio_html = _steven_panel(snap, meta)
+    mine_n = snap["n_bots"]
     freyr_n, farm_n = len(FREYR_VARIANTS), len(SURVIVORS)
     board_n = freyr_n + farm_n
 
@@ -1832,8 +2195,9 @@ def _home_page() -> str:
     # the URL #hash so the 60s soft refresh (location.reload, which preserves the
     # hash) lands the user back on the tab they were reading.
     tab_js = """<script>
+var TABS=['freyr','farm','leaderboard','portfolio'];
 function showTab(name){
-  ['freyr','farm','leaderboard'].forEach(function(t){
+  TABS.forEach(function(t){
     var p=document.getElementById('panel-'+t), b=document.getElementById('tab-'+t);
     if(!p||!b)return;
     p.style.display=(t===name)?'block':'none';
@@ -1842,16 +2206,21 @@ function showTab(name){
   });
   if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
 }
+function pset(bot,action){
+  fetch('/portfolio/set?bot='+encodeURIComponent(bot)+'&action='+action,{method:'POST'})
+   .then(function(){location.reload();})
+   .catch(function(){location.reload();});
+}
 (function(){
   var h=(location.hash||'').replace('#','');
-  if(['freyr','farm','leaderboard'].indexOf(h)<0)h='freyr';
+  if(TABS.indexOf(h)<0)h='freyr';
   showTab(h);
   setTimeout(function(){location.reload();},60000);
 })();
 </script>"""
 
-    btnbase = ("flex:1 1 0;padding:13px 4px;border:none;border-radius:11px;font-family:inherit;"
-               "font-size:14px;font-weight:700;cursor:pointer")
+    btnbase = ("flex:1 1 0;min-width:0;padding:12px 2px;border:none;border-radius:11px;font-family:inherit;"
+               "font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap")
     cnt = "<span style='opacity:.65;font-weight:600'>"
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
@@ -1868,6 +2237,7 @@ function showTab(name){
     <button id="tab-freyr" onclick="showTab('freyr')" style="{btnbase};background:#2563eb;color:#fff">⚡ Freyr {cnt}· {freyr_n}</span></button>
     <button id="tab-farm" onclick="showTab('farm')" style="{btnbase};background:#1c2230;color:#9aa4b2">🌾 Farm {cnt}· {farm_n}</span></button>
     <button id="tab-leaderboard" onclick="showTab('leaderboard')" style="{btnbase};background:#1c2230;color:#9aa4b2">🏆 Board {cnt}· {board_n}</span></button>
+    <button id="tab-portfolio" onclick="showTab('portfolio')" style="{btnbase};background:#1c2230;color:#9aa4b2">👤 Mine {cnt}· {mine_n}</span></button>
   </div>
 
   <div id="panel-freyr">
@@ -1896,10 +2266,192 @@ function showTab(name){
     {combined}
   </div>
 
+  <div id="panel-portfolio" style="display:none">
+    {portfolio_html}
+  </div>
+
   <p style="color:#6b7280;font-size:12px;margin-top:18px">
     Everything here is paper (pretend money). Updated {updated} UTC · refreshes each minute.</p>
+  {_switch_modal_html()}
   {tab_js}
 </body></html>"""
+
+
+# One-line plain-English purpose for each Freyr book (keyed by snapshot book key).
+FREYR_BOOK_DESC = {
+    "ts_momentum_qqq": "Rides Nasdaq (QQQ) momentum — long while it trends up, flat when it rolls over.",
+    "atr_breakout_qqq": "Buys Nasdaq breakouts past a volatility band; rides the move, stops out on reversal.",
+    "ts_momentum_btc": "Rides Bitcoin momentum — directional trend-follow on BTC.",
+    "atr_breakout_btc": "Buys Bitcoin breakouts past a volatility band; trend-capture with a vol stop.",
+    "breakout_specialist": "Dedicated breakout-capture — only fires on a confirmed range break.",
+    "dxy_momentum": "Trades the US-dollar index trend (DXY) as a macro diversifier.",
+    "basket_rs": "Relative-strength rotation — holds the strongest names, drops the weak.",
+    "funding_carry": "Market-neutral carry — collects perp funding with no directional bet. The safe floor.",
+    "tail_hedge": "Crash insurance — bleeds a little in calm, pays off big in a crash. The portfolio airbag.",
+    "crash_short": "Short-side crash play — profits when the market falls hard.",
+    "infinity_grid": "Buy-low/sell-high grid that harvests sideways chop.",
+    "panic_fade": "Mean-reversion — fades panic spikes, betting overreactions snap back.",
+}
+
+
+def _freyr_events(bot: str, n: int = 5) -> list[dict]:
+    """Last n events for a standalone specialist bot, newest first. Events live in
+    ~/freyr/paper/events/<bot>/<date>.jsonl (one file per simulated date)."""
+    base = Path(f"/Users/openclaw/Documents/freyr/paper/events/{bot}")
+    try:
+        files = sorted(base.glob("*.jsonl"))
+    except Exception:
+        return []
+    evs: list[dict] = []
+    for f in reversed(files):
+        try:
+            lines = [ln for ln in f.read_text().splitlines() if ln.strip()]
+        except Exception:
+            continue
+        for ln in reversed(lines):
+            try:
+                evs.append(json.loads(ln))
+            except Exception:
+                continue
+            if len(evs) >= n:
+                return evs
+    return evs
+
+
+def _events_html(events: list[dict]) -> str:
+    """Compact last-N event list (newest first) for a specialist bot."""
+    if not events:
+        return ("<div style='color:#6b7280;font-size:12px;padding:6px 2px'>No events logged yet — "
+                "this book writes one each time it arms, sizes, or escapes.</div>")
+    rows = []
+    for e in events:
+        when = e.get("date", e.get("ts", "")[:10])
+        ev = (e.get("event") or "event").replace("_", " ")
+        why = (e.get("gate", {}) or {}).get("why", "") or (e.get("escape", {}) or {}).get("policy", "")
+        sz = e.get("size", {}) or {}
+        before, after = sz.get("before"), sz.get("after")
+        szc = ""
+        if before is not None and after is not None:
+            arr = "▲" if after > before else ("▼" if after < before else "→")
+            szc = f" · size {before:.3f}{arr}{after:.3f}"
+        rows.append(
+            f"<div style='border-top:1px solid #1c2230;padding:7px 2px'>"
+            f"<div style='font-size:12.5px'><b>{when}</b> · <span style='color:#a78bfa'>{ev}</span>{szc}</div>"
+            f"<div style='color:#8b95a5;font-size:11.5px;margin-top:1px'>{html_escape(why)}</div></div>")
+    return "".join(rows)
+
+
+def _book_falsification(b: dict) -> tuple[str, str, str]:
+    """Three-state falsification status from the book's backtest 95% CI vs today's
+    realised P&L: untested / validated / flagged. (label, colour, plain explanation)."""
+    ci = b.get("backtest_ci95")
+    if not ci:
+        return ("active · not yet tested", "#6b7280",
+                "No falsification band computed for this book yet — it runs, but live hasn't been "
+                "scored against backtest.")
+    band = f"{ci[0] * 100:+.2f}%…{ci[1] * 100:+.2f}%"
+    if b.get("pnl_day_in_ci", True):
+        return ("active · validated", "#22c55e",
+                f"Today's P&amp;L sits inside its backtest 95% band ({band}) — behaving as modelled.")
+    return ("flagged for revision", "#f59e0b",
+            f"Today's P&amp;L fell OUTSIDE its backtest 95% band ({band}) — live is diverging from backtest.")
+
+
+def _book_panel(b: dict, snap_date: str) -> str:
+    """Hidden detail panel for one Freyr portfolio book — shown by openBook()."""
+    key = b.get("key", "?")
+    pretty = key.replace("_", " ").title()
+    cat = b.get("category", "")
+    tier = b.get("tier", "?")
+    desc = FREYR_BOOK_DESC.get(key, f"A {cat} book.")
+    st = b.get("activation_state", "—")
+    stc = "#22c55e" if st == "active" else ("#6b7280" if st == "dormant" else "#f59e0b")
+    armed = b.get("armed", True)
+    weight = b.get("realized_weight", 0) * 100
+    pnl = b.get("pnl_cum", 0) * 100
+    pday = b.get("pnl_day", 0) * 100
+    pc = "#22c55e" if pnl >= 0 else "#ef4444"
+    sharpe = b.get("standalone_sharpe", 0)
+    bdd = b.get("book_dd", 0) * 100
+
+    state_chips = "".join([
+        _chip("State", f"{st}{'' if armed else ' ⨯'}", stc),
+        _chip("Size (of portfolio)", f"{weight:.1f}%"),
+        _chip("P&amp;L contribution", f"{pnl:+.1f}%", pc),
+        _chip("Standalone Sharpe", f"{sharpe:.2f}"),
+        _chip("Book drawdown", f"{bdd:.1f}%"),
+        _chip("Today", f"{pday:+.2f}%", "#22c55e" if pday >= 0 else "#ef4444"),
+    ])
+
+    # Switching — drive the shared switch modal off this book's own round-trip cost.
+    sw = b.get("switching", {}) or {}
+    rt = sw.get("round_trip_cost_bps", 3.0)
+    is_btc = "btc" in key
+    sw_chip = _switch_chip(round_trip_bps=rt, gross=b.get("own_gross", 1.0),
+                           name=pretty, asset="BTC" if is_btc else "ETF / equity",
+                           last_measured=b.get("vol_last_updated", snap_date))
+
+    # Rules — the book's per-book switching/hysteresis registry params (the actual
+    # rules that govern it, per the rule-registry principle: per-book, not global).
+    exitr = sw.get("exit_strategy", "hard_close").replace("_", " ")
+    dwell = sw.get("min_dwell_bars", 0)
+    cool = sw.get("cool_down_bars", 0)
+    rules_html = (
+        "<div style='color:#cbd5e1;font-size:12.5px;line-height:1.6'>"
+        f"<b>Round-trip cost</b> {rt:.1f} bps · <b>min dwell</b> {dwell} bars · "
+        f"<b>cool-down</b> {cool} bars · <b>exit</b> {exitr}"
+        "<div style='color:#6b7280;font-size:11px;margin-top:4px'>Per-book registry overrides "
+        "(rules.registry) — not a global law. Dwell/cool-down stop a one-bar regime flicker "
+        "whipping the book on and off.</div></div>")
+
+    flabel, fcol, fwhy = _book_falsification(b)
+
+    return f"""<div id="book-{key}" class="bookpanel" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:4px">
+        <div><div style="font-size:18px;font-weight:800">{pretty}</div>
+          <div style="color:#8b95a5;font-size:12px">{cat} · tier {tier}</div></div>
+        <button onclick="closeBook()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
+      </div>
+      <div style="color:#cbd5e1;font-size:13px;margin-bottom:12px">{desc}</div>
+
+      <div style="display:flex;flex-wrap:wrap;gap:6px">{state_chips}</div>
+
+      <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Annualised pace</div>
+      <div style="color:#8b95a5;font-size:12.5px">Cumulative since paper start <b style="color:{pc}">{pnl:+.1f}%</b> · today {pday:+.2f}%. <span style="color:#6b7280">Windowed 1w/1mo/1y pace isn't tracked per-book yet — the snapshot carries cumulative P&amp;L + Sharpe only.</span></div>
+
+      <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Switching cost</div>
+      <div>{sw_chip}</div>
+
+      <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Recent events</div>
+      <div style="color:#6b7280;font-size:12px">No per-book event log yet — the portfolio writes fills at the ensemble level. Standalone specialist bots (Surtr 🔥, Bull, Calm, Chop) carry their own event log.</div>
+
+      <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Rules</div>
+      {rules_html}
+
+      <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Falsification status</div>
+      <div style="display:inline-flex;align-items:center;gap:7px;background:#0f141c;border:1px solid {fcol}40;border-radius:8px;padding:5px 11px">
+        <span style="width:8px;height:8px;border-radius:50%;background:{fcol}"></span>
+        <b style="color:{fcol};font-size:12.5px">{flabel}</b></div>
+      <div style="color:#8b95a5;font-size:12px;margin-top:6px;line-height:1.5">{fwhy}</div>
+    </div>"""
+
+
+def _book_modal_html(books: list[dict], snap_date: str) -> str:
+    """Overlay holding every book's hidden panel; openBook(key) reveals one."""
+    panels = "".join(_book_panel(b, snap_date) for b in books)
+    return f"""
+<div id="bookmodal" onclick="if(event.target===this)closeBook()" style="display:none;position:fixed;inset:0;z-index:150;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
+  <div style="max-width:520px;margin:18px auto;background:#151a23;border-radius:16px;padding:18px;border:1px solid #232b39">{panels}</div>
+</div>
+<script>
+function openBook(key){{
+  document.querySelectorAll('.bookpanel').forEach(function(p){{p.style.display='none';}});
+  var el=document.getElementById('book-'+key); if(!el)return;
+  el.style.display='block';
+  document.getElementById('bookmodal').style.display='block';
+}}
+function closeBook(){{document.getElementById('bookmodal').style.display='none';}}
+</script>"""
 
 
 def _freyr_detail_page(variant: str) -> str:
@@ -1951,7 +2503,7 @@ def _freyr_detail_page(variant: str) -> str:
         armed = b.get("armed", True)
         armc = "#22c55e" if armed else "#ef4444"
         book_rows.append(
-            f"<tr style='border-top:1px solid #1c2230'>"
+            f"<tr onclick=\"openBook('{b.get('key', '')}')\" style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td style='padding:8px 6px;font-weight:600'>{b.get('key', '?')}"
             f"<div style='color:#6b7280;font-size:11px'>{b.get('category', '')} · tier {b.get('tier', '?')}</div></td>"
             f"<td style='padding:8px 6px;text-align:right'>{b.get('realized_weight', 0) * 100:.1f}%</td>"
@@ -1959,7 +2511,8 @@ def _freyr_detail_page(variant: str) -> str:
             f"<td style='padding:8px 6px;text-align:right'>{b.get('standalone_sharpe', 0):.2f}</td>"
             f"<td style='padding:8px 6px;text-align:right'>{bdd:.1f}%</td>"
             f"<td style='padding:8px 6px;text-align:center;color:{stc};font-size:12px'>{st}"
-            f"{'' if armed else ' <span style=color:#ef4444>⨯</span>'}</td>"
+            f"{'' if armed else ' <span style=color:#ef4444>⨯</span>'}"
+            f" <span style='color:#6b7280'>›</span></td>"
             f"</tr>")
     book_table = (
         "<table style='width:100%;border-collapse:collapse;font-size:13px;margin-top:8px'>"
@@ -1967,7 +2520,26 @@ def _freyr_detail_page(variant: str) -> str:
         "<th style='padding:6px'>Book</th><th style='padding:6px;text-align:right'>Weight</th>"
         "<th style='padding:6px;text-align:right'>Cum P&amp;L</th><th style='padding:6px;text-align:right'>Sharpe</th>"
         "<th style='padding:6px;text-align:right'>Book DD</th><th style='padding:6px;text-align:center'>State</th>"
-        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table>")
+        "</tr></thead><tbody>" + "".join(book_rows) + "</tbody></table>") if books else ""
+
+    # Specialist bots (Surtr 🔥, and Bull/Calm/Chop in flight) carry no books list —
+    # they ARE a single book, with their own event log. Surface switching + events.
+    if not books:
+        evhtml = _events_html(_freyr_events(variant))
+        spec_sw = _switch_chip(p.get("leverage", 1.0), name=f"Freyr {variant}",
+                               last_measured=snap.get("date", ""))
+        book_section = f"""
+  <h3 style="margin:16px 0 2px;font-size:15px">Switching cost</h3>
+  <div style="margin:4px 0 8px">{spec_sw}</div>
+  <h3 style="margin:18px 0 2px;font-size:15px">Recent events</h3>
+  <div style="color:#8b95a5;font-size:12px;margin-bottom:2px">Last 5 — when this book armed, resized, or escaped.</div>
+  {evhtml}"""
+    else:
+        book_section = f"""
+  <h3 style="margin:16px 0 2px;font-size:15px">Books ({len(books)}) · tap any row to drill in</h3>
+  <div style="color:#8b95a5;font-size:12px">Each book is one strategy. "State" = active (trading) / dormant (flat, awaiting signal). ⨯ = disarmed by its drawdown trip. Tap a row for its size, P&amp;L, switching cost, rules &amp; falsification status.</div>
+  {book_table}
+  {_book_modal_html(sorted(books, key=lambda x: x.get('realized_weight', 0), reverse=True), snap.get('date', ''))}"""
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -1981,8 +2553,7 @@ def _freyr_detail_page(variant: str) -> str:
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
   <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
-  <h3 style="margin:16px 0 2px;font-size:15px">Books ({len(books)})</h3>
-  <div style="color:#8b95a5;font-size:12px">Each book is one strategy. "State" = active (trading) / dormant (flat, awaiting signal). ⨯ = disarmed by its drawdown trip.</div>
-  {book_table}
+  {book_section}
   <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
+  {_switch_modal_html()}
 </body></html>"""

@@ -69,3 +69,8 @@ rl_agent/checkpoints/
 rl_agent/*.log
 rl_agent/*.zip
 rl_agent/run-1-*/
+
+# Steven's manual-portfolio runtime: config, sim state, NAV history, and the
+# override audit log. Live data on the server (same Mac), written by api.py — never
+# source. The audit jsonl is the evaluation dataset; it lives here on the box.
+paper/
