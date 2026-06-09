@@ -1634,8 +1634,12 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir"]
 FREYR_META = {
+    # Eleventh specialist-library bot — FIRST member of the new 🦉 Contrarian bracket,
+    # and the FIRST DATA-DISCOVERED specialist (born from Phase 2's correlation sweep,
+    # not a prior). Card framing: the inverted posture + the honest modest edge.
+    "mimir":  ("🦉", "Contrarian", "#d97706", "Mímir · Freyr's FIRST data-discovered specialist (Phase 2 Finding C) · LONG ETH into elevated equity fear (VIX>25) — the INVERSE of every VIX-as-risk-off gate (Surtr arms a crash structure on high VIX; Mímir buys the recovery that follows) · the buy-the-fear edge is REAL but MODEST (ρ≈0.22): held days earn +0.40%/day vs +0.13% baseline, fwd-1m ETH +7.65% vs +2.77% (2.8×) · NEVER long into a crypto crash spike (eth-vol kill airtight, 0/130) · sized as a TILT not a bet — 4–10% ETH sleeve, NO leverage · deployed +1.5%/yr Sharpe 0.58 maxDD −6.6%, in-elevated-VIX +8.0%/yr (full-notional +21.6%/yr, in-window +173%/yr = the signal) · switching cost +0.11bps/round-trip · deploys on Hyperliquid (ETH perp)"),
     # Seventh specialist-library bot — FIRST member of the new 📊 Options bracket.
     "skadi":  ("📊", "Options specialist", "#8b5cf6", "Skadi · DEPLOYED 12× variance notional (survivable — worst armed day −7.3% = the defined-risk wing cap, never breached) · SELLS defined-risk BTC credit spreads, collects implied-vol premium · FLEES on vol eruption (inverse of Surtr) · deployed +9.6%/yr all-time, +44%/yr active-window, maxDD −17.7% · 500% needs ~136× (ruinous) → honest Sharpe~0.85 carry, not a moonshot · LIBRARY book, deploys on Deribit/Lyra not Hyperliquid"),
     #            emoji   profile-name    accent     one-line knob summary
