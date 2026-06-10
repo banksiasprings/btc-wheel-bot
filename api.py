@@ -2752,7 +2752,8 @@ def _md_to_html(md: str) -> str:
     """Minimal markdown→HTML for the weekly review (headings, bold, inline code,
     bullet lists, horizontal rules, paragraphs). Escapes first, so input is safe."""
     esc = html_escape(md)
-    esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
+    esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)                       # bold (before italic)
+    esc = re.sub(r"\*([^*\n]+?)\*", r"<i style='color:#94a3b8'>\1</i>", esc)  # italic (single *)
     esc = re.sub(r"`([^`]+?)`", r"<code style='background:#0f141c;padding:1px 5px;border-radius:5px;font-size:12.5px'>\1</code>", esc)
     html, in_ul = [], False
 
