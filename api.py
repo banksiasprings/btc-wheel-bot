@@ -1634,8 +1634,12 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir", "vali"]
 FREYR_META = {
+    # Twelfth specialist-library bot — FIRST member of the new 🌐 Cross-asset-lead bracket,
+    # and the SECOND DATA-DISCOVERED specialist (Phase 2 Finding B). Card framing: the
+    # major-leads-the-alt lead, the NON-bull regime correction, and the self-retiring decay.
+    "vali":   ("🌐", "Cross-asset lead", "#0ea5e9", "Váli · Freyr's SECOND data-discovered specialist (Phase 2 Finding B) · LONG SOL on month-old BTC cross-venue funding dislocation — positioning stress in the major LEADS the high-beta alt by ~1 month (ρ+0.28, lag-30; lag-0 is ~zero) · CORRECTED gate: the brief's 'bull-gated' shorthand was BACKWARDS — the signal works in chop/bear/crash (ρ+0.30/+0.30/+0.35) and INVERTS in bull (ρ−0.18, bull backtests −14%) → arms NON-bull, hard bull lockout · ships a LIVE DECAY DETECTOR (Finding B decays 0.30→0.09): auto-retires when 90d ρ<0.10 for 30d — already standing down ~16% of recent days · NEVER long into a SOL crash spike (vol kill 0/81) · sized as a TILT — 3–8% SOL sleeve, NO leverage · standalone (full-notional) +5.4%/yr Sharpe 0.43 maxDD −27% (in-window +7.4%/yr deployed) · a harvest-while-it-lasts book, built to retire itself · deploys on Hyperliquid (SOL perp)"),
     # Eleventh specialist-library bot — FIRST member of the new 🦉 Contrarian bracket,
     # and the FIRST DATA-DISCOVERED specialist (born from Phase 2's correlation sweep,
     # not a prior). Card framing: the inverted posture + the honest modest edge.
