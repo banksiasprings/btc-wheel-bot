@@ -19,6 +19,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -2411,6 +2412,404 @@ def _steven_panel(snap: dict, meta: list) -> str:
     {avail_html}"""
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Bottom-tab app — six tab panels rendered into one `/` document, switched
+# client-side (JS toggles section visibility, scroll position preserved per tab).
+# Same URL, same dark theme, same tap-to-drill detail routes. See the 2026-06-10
+# app-consolidation migration note. Each builder below returns ONE panel's inner
+# HTML; `_home_page()` assembles them under a fixed bottom nav.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# The 11 standalone specialists (FREYR_VARIANTS minus the 3 ensemble portfolios) —
+# these live on the 🤖 Books tab; the ensembles (v0.1.1/v0.2/v0.3) live on 🛡️ Portfolios.
+FREYR_ENSEMBLES = ["v0.1.1", "v0.2", "v0.3"]
+FREYR_SPECIALISTS = [v for v in FREYR_VARIANTS if v not in FREYR_ENSEMBLES]
+
+# Canonical bracket order for the Books tab (emoji, label, accent). Books are bucketed
+# by their bracket emoji (specialists from FREYR_META, survivors from BRACKETS), so the
+# two systems group into the same shelves. Empty brackets are skipped at render time.
+BRACKET_ORDER = [
+    ("🔥", "Crash", "#ef4444"),
+    ("🐂", "Bull", "#f59e0b"),
+    ("🌪", "Chop", "#06b6d4"),
+    ("😴", "Calm", "#14b8a6"),
+    ("📉", "Crisis-alpha", "#a78bfa"),
+    ("🏃", "Cheap-exit", "#10b981"),
+    ("🦉", "Contrarian", "#d97706"),
+    ("🌐", "Cross-asset-lead", "#0ea5e9"),
+    ("📊", "Options", "#8b5cf6"),
+    ("•", "Unclassified", "#64748b"),
+]
+_EMOJI_TO_BRACKET = {e: lbl for e, lbl, _ in BRACKET_ORDER}
+
+
+def _sharpe_from_rows(rows: list[tuple[datetime, float]]) -> float | None:
+    """Rough annualised Sharpe from an equity curve [(dt, equity)] ascending. Uses
+    per-step simple returns, annualised by the median sampling interval. Returns None
+    when there isn't enough history (short windows are pure noise). Survivor/Mine rows
+    are hourly paper curves; Freyr carries a model-track Sharpe in its snapshot instead."""
+    if len(rows) < 4:
+        return None
+    rets, spacings = [], []
+    for (t0, e0), (t1, e1) in zip(rows, rows[1:]):
+        if e0 > 0:
+            rets.append(e1 / e0 - 1)
+        dt = (t1 - t0).total_seconds()
+        if dt > 0:
+            spacings.append(dt)
+    if len(rets) < 3 or not spacings:
+        return None
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    sd = var ** 0.5
+    if sd == 0:
+        return None
+    med = sorted(spacings)[len(spacings) // 2]
+    per_year = (365.0 * 86400.0) / med
+    return (mean / sd) * (per_year ** 0.5)
+
+
+def _leaderboard_tab() -> str:
+    """🏆 Leaderboard — EVERYTHING head-to-head in one sortable table: the 3 Freyr
+    ensembles, every specialist, the farm survivors, and Steven's own portfolio.
+    Sortable by return / annualised pace / Sharpe / max drawdown / switching cost
+    (tap a column header). Default sort = annualised pace, highest first."""
+    rows = []
+    for variant in FREYR_VARIANTS:
+        snap, _ = _freyr_load(variant)
+        if not snap:
+            continue
+        p = snap.get("portfolio", {})
+        emoji, _pn, accent, _ = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
+        rows.append({
+            "name": f"{emoji} Freyr {variant}", "accent": accent,
+            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "pace": p.get("cagr", 0.0) * 100,
+            "sharpe": p.get("sharpe"), "dd": p.get("current_dd", 0.0) * 100,
+            "sw": _switch_cost(p.get("leverage", 1.0))[0],
+            "href": f"/freyr/{variant}", "onclick": None})
+    for slug in SURVIVORS:
+        v = _variant_by_slug(slug)
+        if not v:
+            continue
+        bem, _bl, bcol = BRACKETS.get(slug, ("", "", "#64748b"))
+        rows.append({
+            "name": f"{bem} {v['name']}".strip(), "accent": bcol,
+            "ret": v["return_pct"], "pace": _annualised(slug)["monthly"],
+            "sharpe": _sharpe_from_rows(_equity_rows(slug)), "dd": -v["max_drawdown_pct"],
+            "sw": _switch_cost(v.get("leverage", 1.0))[0],
+            "href": f"/bot/{v['slug']}", "onclick": None})
+    try:
+        snap = sp.snapshot()
+        if snap["n_bots"] > 0:
+            er = sp.equity_rows()
+            rows.append({
+                "name": "👤 Steven's Portfolio", "accent": STEVEN_COL,
+                "ret": snap["return_pct"], "pace": _ann_windows(er)["mo"] if len(er) >= 2 else None,
+                "sharpe": _sharpe_from_rows(er), "dd": snap["drawdown_pct"],
+                "sw": None, "href": None, "onclick": "showTab('mine')"})
+    except Exception:
+        pass
+    rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
+
+    def _dv(v):  # numeric data-v (empty string sorts last in both directions)
+        return "" if v is None else f"{v:.4f}"
+
+    trs = []
+    for i, r in enumerate(rows, 1):
+        rc = "#22c55e" if r["ret"] >= 0 else "#ef4444"
+        pacev = r["pace"]
+        pacec = "#6b7280" if pacev is None else ("#22c55e" if pacev >= 0 else "#ef4444")
+        pace_txt = "—" if pacev is None else f"{pacev:+,.0f}%/yr"
+        sh = r["sharpe"]
+        sh_txt = "—" if sh is None else f"{sh:.2f}"
+        sw = r["sw"]
+        sw_txt = "—" if sw is None else f"{sw:.2f}%"
+        swc = "#6b7280" if sw is None else _switch_color(sw)
+        nav = (f"onclick=\"location.href='{r['href']}'\"" if r["href"]
+               else (f"onclick=\"{r['onclick']}\"" if r["onclick"] else ""))
+        trs.append(
+            f"<tr {nav} style='border-top:1px solid #1c2230;cursor:pointer'>"
+            f"<td style='padding:9px 5px;width:20px;color:#6b7280;font-weight:700'><span class='rk'>{i}</span></td>"
+            f"<td data-v=\"{html_escape(r['name'])}\" style='padding:9px 7px;border-left:3px solid {r['accent']}'>"
+            f"<span style='font-weight:600;font-size:13px'>{r['name']}</span></td>"
+            f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%</td>"
+            f"<td data-v='{_dv(pacev)}' style='padding:9px 5px;text-align:right;color:{pacec};font-weight:700'>{pace_txt}</td>"
+            f"<td data-v='{_dv(sh)}' style='padding:9px 5px;text-align:right'>{sh_txt}</td>"
+            f"<td data-v='{r['dd']:.4f}' style='padding:9px 5px;text-align:right'>{r['dd']:.1f}%</td>"
+            f"<td data-v='{_dv(sw)}' style='padding:9px 5px;text-align:right;color:{swc}'>{sw_txt}</td>"
+            f"</tr>")
+
+    def _th(label, i, align="right", num=True):
+        return (f"<th onclick='sortLB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
+                f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
+                f"{label}<span style='color:#475569'> ⇅</span></th>")
+    head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+            + _th("Name", 1, "left", False) + _th("Return", 2) + _th("Pace", 3)
+            + _th("Sharpe", 4) + _th("Max DD", 5) + _th("Switch", 6) + "</tr>")
+    n = len(rows)
+    return (
+        "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
+        f"Everyone head-to-head — {n} contenders: Freyr ensembles &amp; specialists, farm survivors, and your picks. "
+        "Tap a column to sort, a row to drill in. "
+        "<span style='color:#6b7280'>Pace mixes bases: Freyr = model-track CAGR, survivors = 30-day paper pace.</span></div>"
+        "<div style='background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:6px 8px 8px'>"
+        "<div style='max-height:none;overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+        "<table id='lbtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:330px'>"
+        f"<thead>{head}</thead><tbody>{''.join(trs)}</tbody></table></div></div>"
+        "<script>(function(){var dir={};window.sortLB=function(c,num){"
+        "var tb=document.querySelector('#lbtbl tbody');var rs=[].slice.call(tb.rows);"
+        "dir[c]=-(dir[c]||1);var d=dir[c];rs.sort(function(a,b){"
+        "var xa=a.cells[c].getAttribute('data-v'),xb=b.cells[c].getAttribute('data-v');"
+        "var ea=(xa===''||xa==null),eb=(xb===''||xb==null);"
+        "if(ea&&eb)return 0;if(ea)return 1;if(eb)return -1;var x=xa,y=xb;"
+        "if(num){x=parseFloat(xa);y=parseFloat(xb);}else{x=(''+xa).toLowerCase();y=(''+xb).toLowerCase();}"
+        "return x<y?d:x>y?-d:0;});rs.forEach(function(r,i){tb.appendChild(r);"
+        "var rk=r.cells[0].querySelector('.rk');if(rk)rk.textContent=(i+1);});};})();</script>")
+
+
+def _testnet_tab() -> str:
+    """🔌 Testnet panel — the authoritative live Hyperliquid testnet view: equity
+    chart, stat grid, open positions / orders / recent fills (with per-book
+    attribution), today's P&L, leverage, margin. Shared by the bottom-tab panel and
+    the standalone /testnet page."""
+    snap = _testnet_load()
+    semoji, slabel, scol = _testnet_status(snap)
+    if not snap:
+        return ("<div style='color:#8b95a5;font-size:13px;margin-bottom:10px'>Real orders, fake money — "
+                "Freyr's actual Hyperliquid testnet account.</div>"
+                "<div style='background:#10151e;border:1px solid #1c2230;border-radius:12px;padding:18px;color:#8b95a5;font-size:13px'>"
+                f"{semoji} {slabel} — no snapshot on disk yet. The minute poller writes one once it reaches the testnet API.</div>")
+
+    pv = snap.get("portfolio_value", 0.0)
+    pnl_abs, pnl_pct = snap.get("pnl_24h_abs"), snap.get("pnl_24h_pct")
+    fdate = snap.get("fetched_at", "")[:16].replace("T", " ")
+
+    def stat(label, value, c="#e6e6e6"):
+        return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
+                f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
+                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div></div>")
+
+    if pnl_abs is None:
+        pnl_v, pnl_c = "TBD", "#6b7280"
+    else:
+        pnl_c = "#22c55e" if pnl_abs >= 0 else "#ef4444"
+        pnl_v = f"{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)"
+    stats = "".join([
+        stat("Portfolio (USDC)", f"${pv:,.2f}"),
+        stat("24h P&L", pnl_v, pnl_c),
+        stat("Spot USDC", f"${snap.get('spot_usdc', 0):,.2f}"),
+        stat("Perp value", f"${snap.get('perp_account_value', 0):,.2f}"),
+        stat("Notional", f"${snap.get('total_notional', 0):,.0f}"),
+        stat("Leverage", f"{snap.get('leverage', 0):.2f}×"),
+        stat("Margin used", f"${snap.get('margin_used', 0):,.2f}"),
+        stat("Status", f"{semoji} {slabel}", scol),
+    ])
+
+    series = [v for _, v in (snap.get("equity_series") or [])]
+    if len(series) >= 2:
+        chart = _mini_spark(series, series[-1] >= series[0], w=660, h=120)
+        chart_note = "portfolio value · last 7 days (intraday, grows over time)"
+    else:
+        chart = "<div style='color:#6b7280;font-size:12px;padding:18px;text-align:center'>Equity chart builds as the minute poller accumulates snapshots.</div>"
+        chart_note = ""
+
+    def _table(title, head, trows, empty):
+        body = ("".join(trows) if trows
+                else f"<tr><td colspan='{len(head)}' style='padding:14px 6px;color:#6b7280;text-align:center'>{empty}</td></tr>")
+        ths = "".join(f"<th style='padding:6px;text-align:left;white-space:nowrap'>{h}</th>" for h in head)
+        return (f"<h3 style='margin:18px 0 4px;font-size:15px'>{title}</h3>"
+                "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+                "<table style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
+                f"<thead><tr style='color:#9aa4b2;font-size:11px'>{ths}</tr></thead>"
+                f"<tbody>{body}</tbody></table></div>")
+
+    def _scol(side):
+        return "#22c55e" if side in ("buy", "long") else "#ef4444"
+
+    def _td(v, c="#e6e6e6", align="left", bold=False):
+        return (f"<td style='padding:7px 6px;text-align:{align};color:{c};"
+                f"font-weight:{700 if bold else 400};white-space:nowrap'>{v}</td>")
+
+    def _book(b):
+        if not b:
+            return "<span style='color:#475569'>—</span>"
+        meta = FREYR_META.get(b)
+        if meta:
+            emoji, _name, accent, _sub = meta
+            label = f"{emoji} {b[:1].upper()}{b[1:]}"
+            return f"<span style='color:{accent};font-weight:600'>{html_escape(label)}</span>"
+        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>"
+
+    prows = []
+    for pp in snap.get("positions", []):
+        upnl = pp.get("unrealized_pnl", 0)
+        prows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(pp.get("coin"), bold=True) + _td(pp.get("side"), _scol(pp.get("side")))
+                     + _td(f"{pp.get('size', 0):g}", align="right")
+                     + _td(f"${pp.get('entry_px', 0):,.1f}", align="right")
+                     + _td(f"${pp.get('mark_px', 0):,.1f}", align="right")
+                     + _td(f"{upnl:+,.2f}", "#22c55e" if upnl >= 0 else "#ef4444", "right", True)
+                     + _td(_book(pp.get("book"))) + "</tr>")
+    pos_table = _table(f"Open positions ({snap.get('n_positions', 0)})",
+                       ["Symbol", "Side", "Size", "Entry", "Mark", "uP&L", "Book"],
+                       prows, "No open positions.")
+
+    orows = []
+    for o in snap.get("orders", []):
+        orows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(o.get("coin"), bold=True) + _td(o.get("side"), _scol(o.get("side")))
+                     + _td(f"{o.get('size', 0):g}", align="right")
+                     + _td(f"${o.get('limit_px', 0):,.1f}", align="right")
+                     + _td(o.get("age_str", "—"), "#8b95a5", "right")
+                     + _td(_book(o.get("book"))) + "</tr>")
+    ord_table = _table(f"Open orders ({snap.get('n_orders', 0)})",
+                       ["Symbol", "Side", "Size", "Limit", "Age", "Book"],
+                       orows, "No open orders.")
+
+    frows = []
+    for f in snap.get("recent_fills", []):
+        cp = f.get("closed_pnl", 0)
+        cpc = "#6b7280" if cp == 0 else ("#22c55e" if cp > 0 else "#ef4444")
+        frows.append("<tr style='border-top:1px solid #1c2230'>"
+                     + _td(f.get("coin"), bold=True) + _td(f.get("side"), _scol(f.get("side")))
+                     + _td(f"{f.get('size', 0):g}", align="right")
+                     + _td(f"${f.get('px', 0):,.1f}", align="right")
+                     + _td(f.get("time_str", "—"), "#8b95a5")
+                     + _td(f"{cp:+,.2f}" if cp else "—", cpc, "right")
+                     + _td(_book(f.get("book"))) + "</tr>")
+    ft = snap.get("fills_today", {}) or {}
+    fills_caption = (f"None today · {snap.get('n_fills_total', 0)} all-time" if ft.get("count", 0) == 0
+                     else f"{ft['count']} today ({ft.get('realized_pnl', 0):+,.2f}) · last 20 shown")
+    fill_table = _table(f"Recent fills · {fills_caption}",
+                        ["Symbol", "Side", "Size", "Price", "Time", "P&L", "Book"],
+                        frows, "No fills yet — the account is funded but hasn't traded.")
+
+    return f"""<div style="color:#8b95a5;font-size:13px;margin-bottom:10px">Real orders, fake money — Freyr's actual Hyperliquid testnet account · as of {fdate} UTC · the authoritative live view.</div>
+  <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{chart}
+    <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">{chart_note}</div>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
+  {pos_table}
+  {ord_table}
+  {fill_table}
+  <div style="background:#11203a;border:1px solid #1d3a66;border-radius:12px;padding:13px 14px;margin-top:18px;color:#cbd5e1;font-size:12.5px;line-height:1.5">
+    <b style="color:#e6e6e6">What "testnet" means.</b> This is the real Hyperliquid exchange's test network — live order matching, real market data, but the money is fake faucet USDC. It's the dress rehearsal before any real capital: we prove the plumbing (orders, fills, reconciliation) works against a live venue with nothing at stake.
+    <div style="margin-top:8px">Authoritative source: <a href="{TESTNET_UI_URL}" style="color:#60a5fa">{TESTNET_UI_URL}</a> ›</div>
+  </div>
+  <p style="color:#6b7280;font-size:12px;margin-top:14px">Read-only view · polled every minute · this dashboard never places or cancels orders.</p>"""
+
+
+def _books_tab() -> str:
+    """🤖 Books — every standalone specialist + farm survivor, grouped into expandable
+    bracket shelves (Crash / Bull / Chop / Calm / Cheap-exit / Contrarian /
+    Cross-asset-lead / Options / Unclassified). Tap a bracket to expand; each book card
+    taps through to its full dossier (/freyr/<specialist> or /bot/<survivor>)."""
+    buckets: dict[str, list[str]] = {lbl: [] for _e, lbl, _c in BRACKET_ORDER}
+    for v in FREYR_SPECIALISTS:
+        snap, _ = _freyr_load(v)
+        if not snap:
+            continue
+        emoji = FREYR_META.get(v, ("•",))[0]
+        buckets[_EMOJI_TO_BRACKET.get(emoji, "Unclassified")].append(_freyr_card(v))
+    for slug in SURVIVORS:
+        vv = _variant_by_slug(slug)
+        if not vv:
+            continue
+        bem = BRACKETS.get(slug, ("•",))[0]
+        buckets[_EMOJI_TO_BRACKET.get(bem, "Unclassified")].append(_survivor_card(vv))
+
+    out, first = [], True
+    for emoji, label, accent in BRACKET_ORDER:
+        members = buckets.get(label, [])
+        if not members:
+            continue
+        openh = "open" if first else ""
+        first = False
+        out.append(
+            f"<details data-br='{html_escape(label)}' {openh} ontoggle='brToggle(this)' "
+            f"style='background:#10151e;border:1px solid #1c2230;border-left:4px solid {accent};border-radius:12px;margin:10px 0;overflow:hidden'>"
+            f"<summary style='list-style:none;cursor:pointer;padding:13px 14px;display:flex;align-items:center;justify-content:space-between'>"
+            f"<span style='font-size:15px;font-weight:700'>{emoji} {label}</span>"
+            f"<span style='color:#6b7280;font-size:12px'>{len(members)} book{'s' if len(members) != 1 else ''} <span style='color:#475569'>▾</span></span>"
+            f"</summary><div style='padding:0 12px 8px'>{''.join(members)}</div></details>")
+
+    intro = ("<div style='color:#8b95a5;font-size:12px;margin:2px 0 4px'>"
+             "Every specialist + farm survivor, grouped by the market it's built for. "
+             "Tap a bracket to expand, then a book for its full dossier. "
+             "<span style='color:#f59e0b'>⚠️ leveraged = paper-only.</span></div>")
+    js = ("<script>function brToggle(d){try{var k='bsBr_'+d.getAttribute('data-br');"
+          "d.open?sessionStorage.setItem(k,'1'):sessionStorage.removeItem(k);}catch(e){}}"
+          "(function(){try{document.querySelectorAll('details[data-br]').forEach(function(d){"
+          "var k='bsBr_'+d.getAttribute('data-br');if(sessionStorage.getItem(k)==='1')d.open=true;});}catch(e){}})();</script>")
+    return intro + "".join(out) + js
+
+
+# ── Review tab — renders the auto-generated weekly markdown review off disk ────────
+REVIEWS_DIR = Path("/Users/openclaw/Documents/freyr/reviews")
+
+
+def _md_to_html(md: str) -> str:
+    """Minimal markdown→HTML for the weekly review (headings, bold, inline code,
+    bullet lists, horizontal rules, paragraphs). Escapes first, so input is safe."""
+    esc = html_escape(md)
+    esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
+    esc = re.sub(r"`([^`]+?)`", r"<code style='background:#0f141c;padding:1px 5px;border-radius:5px;font-size:12.5px'>\1</code>", esc)
+    html, in_ul = [], False
+
+    def close_ul():
+        nonlocal in_ul
+        if in_ul:
+            html.append("</ul>")
+            in_ul = False
+
+    for raw in esc.split("\n"):
+        s = raw.rstrip()
+        if not s.strip():
+            close_ul()
+            continue
+        if s.startswith("### "):
+            close_ul(); html.append(f"<h4 style='margin:15px 0 4px;font-size:14px;color:#e6e6e6'>{s[4:].strip()}</h4>")
+        elif s.startswith("## "):
+            close_ul(); html.append(f"<h3 style='margin:18px 0 5px;font-size:16px;color:#e6e6e6'>{s[3:].strip()}</h3>")
+        elif s.startswith("# "):
+            close_ul(); html.append(f"<h2 style='margin:6px 0 8px;font-size:18px;color:#e6e6e6'>{s[2:].strip()}</h2>")
+        elif s.strip() in ("---", "***", "___"):
+            close_ul(); html.append("<div style='border-top:1px solid #1c2230;margin:12px 0'></div>")
+        elif s.lstrip().startswith(("- ", "* ")):
+            if not in_ul:
+                html.append("<ul style='margin:4px 0;padding-left:20px;color:#cbd5e1'>")
+                in_ul = True
+            html.append(f"<li style='margin:3px 0;font-size:13px;line-height:1.5'>{s.lstrip()[2:].strip()}</li>")
+        else:
+            close_ul(); html.append(f"<p style='margin:6px 0;font-size:13px;line-height:1.55;color:#cbd5e1'>{s.strip()}</p>")
+    close_ul()
+    return "".join(html)
+
+
+def _review_tab() -> str:
+    """📊 Review — the latest auto-generated weekly system review, rendered from
+    ~/Documents/freyr/reviews/YYYY-MM-DD.md (written Sundays 5 AM AEST by the
+    com.wheelbot.freyrreview scheduled task)."""
+    try:
+        files = sorted(REVIEWS_DIR.glob("*.md"))
+    except Exception:
+        files = []
+    if not files:
+        return ("<div style='color:#8b95a5;font-size:13px;margin:2px 0 8px'>The weekly system review — how the bot farm works, updated automatically.</div>"
+                "<div style='background:#10151e;border:1px solid #1c2230;border-radius:14px;padding:18px;color:#8b95a5;font-size:13px;line-height:1.6'>"
+                "No review yet. The first auto-review generates <b style='color:#cbd5e1'>this Sunday, 5 AM AEST</b> — "
+                "what's running, what's working, what's not, what changed, what the system thinks, and what's next. "
+                "It'll appear here and a Telegram ping will let you know.</div>")
+    latest = files[-1]
+    try:
+        md = latest.read_text()
+    except Exception:
+        md = ""
+    return (f"<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>Auto-generated weekly review · latest <b style='color:#cbd5e1'>{latest.stem}</b> · regenerates Sunday 5 AM AEST</div>"
+            f"<div style='background:#10151e;border:1px solid #1c2230;border-radius:14px;padding:16px 16px 18px'>{_md_to_html(md)}</div>"
+            f"<p style='color:#6b7280;font-size:11.5px;margin-top:10px'>Permanent record at ~/Documents/freyr/reviews/{latest.name}</p>")
+
+
 def _home_page() -> str:
     data = _load() or {}
     btc = data.get("btc_price", 0)
@@ -2431,105 +2830,130 @@ def _home_page() -> str:
         "<span style='font-size:13px;color:#60a5fa;font-weight:600'>1W·1M·1Y·5Y ›</span></div>"
         f"</div>{spark}</a>")
 
-    freyr_cards = _testnet_card() + "".join(_freyr_card(v) for v in FREYR_VARIANTS)
-    surv_cards = "".join(_survivor_card(v) for v in (_variant_by_slug(s) for s in SURVIVORS) if v)
-    combined = _combined_leaderboard()
+    board_html = _leaderboard_tab()
+    testnet_html = _testnet_tab()
+    folio_cards = "".join(_freyr_card(v) for v in FREYR_ENSEMBLES)
+    books_html = _books_tab()
+    review_html = _review_tab()
     universe, meta = _bot_universe()
     snap = _tick_steven(universe) or sp.snapshot(universe=universe)
-    portfolio_html = _steven_panel(snap, meta)
-    mine_n = snap["n_bots"]
-    freyr_n, farm_n = len(FREYR_VARIANTS), len(SURVIVORS)
-    board_n = freyr_n + farm_n
+    mine_html = _steven_panel(snap, meta)
+    semoji, _slabel, _scol = _testnet_status(_testnet_load())
 
-    # Leaderboard is now the always-visible HERO at the top of the page (Steven's
-    # call — it's the most important view, so it's no longer hidden behind a tab).
-    # The three detail panels (Freyr / Farm / Mine) are rendered below it and JS
-    # toggles visibility so swapping is instant (no round-trip). The active tab is
-    # kept in the URL #hash so the 60s soft refresh (location.reload, which
-    # preserves the hash) lands the user back on the tab they were reading. A stale
-    # '#leaderboard' hash from an old bookmark harmlessly falls back to 'freyr'.
+    # Six tab panels rendered into one document; a fixed bottom nav toggles section
+    # visibility client-side (instant, no round-trip). Scroll position is preserved
+    # per-tab, and stashed across the 60s soft-refresh so the reload is seamless and
+    # lands the user back exactly where they were. The active tab lives in the URL
+    # #hash; legacy hashes from the old top-tab app are remapped. Same URL, same
+    # detail routes (/freyr/*, /bot/*, /testnet) — every card still taps through.
     tab_js = """<script>
-var TABS=['freyr','farm','portfolio'];
+var TABS=['board','testnet','folios','books','review','mine'];
+var SCROLL={}, CURRENT=null;
 function showTab(name){
+  if(TABS.indexOf(name)<0)name='board';
+  if(CURRENT)SCROLL[CURRENT]=window.scrollY;
   TABS.forEach(function(t){
-    var p=document.getElementById('panel-'+t), b=document.getElementById('tab-'+t);
-    if(!p||!b)return;
-    p.style.display=(t===name)?'block':'none';
-    b.style.background=(t===name)?'#2563eb':'#1c2230';
-    b.style.color=(t===name)?'#fff':'#9aa4b2';
+    var s=document.getElementById('sec-'+t), b=document.getElementById('nav-'+t);
+    if(s)s.hidden=(t!==name);
+    if(b){b.style.color=(t===name)?'#e6e6e6':'#6b7280';
+          b.style.borderTopColor=(t===name)?'#3b82f6':'transparent';}
   });
+  CURRENT=name;
   if(location.hash!=='#'+name)history.replaceState(null,'','#'+name);
+  window.scrollTo(0,(name in SCROLL)?SCROLL[name]:0);
 }
 function pset(bot,action){
+  try{sessionStorage.setItem('bsTab','mine');sessionStorage.setItem('bsScroll',window.scrollY);}catch(e){}
   fetch('/portfolio/set?bot='+encodeURIComponent(bot)+'&action='+action,{method:'POST'})
-   .then(function(){location.reload();})
-   .catch(function(){location.reload();});
+   .then(function(){location.reload();}).catch(function(){location.reload();});
 }
 (function(){
   var h=(location.hash||'').replace('#','');
-  if(TABS.indexOf(h)<0)h='freyr';
+  var legacy={freyr:'folios',farm:'books',portfolio:'mine',leaderboard:'board'};
+  if(legacy[h])h=legacy[h];
+  var restore=null;
+  try{
+    var st=sessionStorage.getItem('bsTab');
+    if(st){ if(!h)h=st; if(st===h)restore=parseFloat(sessionStorage.getItem('bsScroll')||'0');
+            sessionStorage.removeItem('bsTab'); sessionStorage.removeItem('bsScroll'); }
+  }catch(e){}
+  if(TABS.indexOf(h)<0)h='board';
   showTab(h);
-  setTimeout(function(){location.reload();},60000);
+  if(restore!=null&&!isNaN(restore))window.scrollTo(0,restore);
+  setTimeout(function(){
+    try{sessionStorage.setItem('bsTab',CURRENT);sessionStorage.setItem('bsScroll',window.scrollY);}catch(e){}
+    location.reload();
+  },60000);
 })();
 </script>"""
 
-    btnbase = ("flex:1 1 0;min-width:0;padding:12px 2px;border:none;border-radius:11px;font-family:inherit;"
-               "font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap")
-    cnt = "<span style='opacity:.65;font-weight:600'>"
+    nav_items = [("board", "🏆", "Board"), ("testnet", f"{semoji}", "Testnet"),
+                 ("folios", "🛡️", "Portfolios"), ("books", "🤖", "Books"),
+                 ("review", "📊", "Review"), ("mine", "👤", "Mine")]
+    nav_btns = ""
+    for key, emoji, label in nav_items:
+        active = key == "board"
+        col = "#e6e6e6" if active else "#6b7280"
+        bt = "#3b82f6" if active else "transparent"
+        nav_btns += (
+            f"<button id='nav-{key}' onclick=\"showTab('{key}')\" "
+            f"style='flex:1 1 0;min-width:0;background:none;border:none;border-top:2px solid {bt};"
+            f"padding:7px 1px 8px;cursor:pointer;font-family:inherit;color:{col};display:flex;"
+            f"flex-direction:column;align-items:center;gap:2px'>"
+            f"<span style='font-size:19px;line-height:1'>{emoji}</span>"
+            f"<span style='font-size:9.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap;"
+            f"overflow:hidden;text-overflow:ellipsis;max-width:100%'>{label}</span></button>")
+    nav = (f"<nav style='position:fixed;left:0;right:0;bottom:0;z-index:50;background:rgba(11,14,20,.94);"
+           f"backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-top:1px solid #1c2230;"
+           f"padding-bottom:env(safe-area-inset-bottom)'>"
+           f"<div style='max-width:680px;margin:auto;display:flex'>{nav_btns}</div></nav>")
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Banksia Springs — Live Bots</title></head>
-<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:680px;margin:auto">
-  <h2 style="margin:0 0 2px">🌱 Banksia Springs — Live Bots</h2>
-  <div style="color:#8b95a5;font-size:13.5px;margin-bottom:12px">
-    Freyr ensemble (live paper track to the 2026-06-30 deployment) + BTC farm survivors · all pretend money
-  </div>
-  {btc_banner}
-
-  <div style="background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:13px 13px 6px;margin-bottom:12px">
-    <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:2px">
-      <span style="font-size:17px;font-weight:800">🏆 Leaderboard</span>
-      <span style="color:#6b7280;font-size:11.5px">{board_n} + yours · annualised pace</span>
+<title>Banksia Springs — Live Bots</title>
+<style>
+  *{{box-sizing:border-box}}
+  body{{background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0}}
+  summary::-webkit-details-marker{{display:none}}
+  #app{{max-width:680px;margin:auto;padding:16px 16px calc(80px + env(safe-area-inset-bottom))}}
+</style></head>
+<body>
+  <div id="app">
+    <h2 style="margin:0 0 2px;font-size:21px">🌱 Banksia Springs — Live Bots</h2>
+    <div style="color:#8b95a5;font-size:12px;margin-bottom:12px">
+      Freyr ensemble + specialists + BTC farm · all paper (pretend money) · updated {updated} UTC · refreshes each minute
     </div>
-    <div style="color:#8b95a5;font-size:11.5px;margin-bottom:8px">
-      Everyone head-to-head: Freyr ensemble &amp; specialists, farm survivors, and your picks.
-      Freyr = model-track CAGR; survivors = 30-day paper pace. <a href="/leaderboard" style="color:#60a5fa;text-decoration:none">full sortable board ›</a>
-    </div>
-    <div style="max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch">{combined}</div>
-  </div>
 
-  <div id="tabbar" style="position:sticky;top:0;z-index:30;background:#0b0e14;display:flex;gap:6px;padding:10px 0;margin-bottom:8px;border-bottom:1px solid #161c27">
-    <button id="tab-freyr" onclick="showTab('freyr')" style="{btnbase};background:#2563eb;color:#fff">⚡ Freyr {cnt}· {freyr_n}</span></button>
-    <button id="tab-farm" onclick="showTab('farm')" style="{btnbase};background:#1c2230;color:#9aa4b2">🌾 Farm {cnt}· {farm_n}</span></button>
-    <button id="tab-portfolio" onclick="showTab('portfolio')" style="{btnbase};background:#1c2230;color:#9aa4b2">👤 Mine {cnt}· {mine_n}</span></button>
-  </div>
+    <section id="sec-board">
+      {btc_banner}
+      {board_html}
+    </section>
 
-  <div id="panel-freyr">
-    <div style="color:#8b95a5;font-size:12px;margin:2px 0 2px">
-      Multi-book system with an escape-tier risk governor &amp; portfolio kill-switch · 3 risk profiles, 12 books each.
-      Each card carries its annualised pace and switching cost. Tap for the per-book breakdown.
-    </div>
-    {freyr_cards}
-  </div>
+    <section id="sec-testnet" hidden>
+      {testnet_html}
+    </section>
 
-  <div id="panel-farm" style="display:none">
-    <div style="display:flex;align-items:baseline;justify-content:space-between;margin:2px 0 2px">
-      <span style="color:#8b95a5;font-size:12px">{farm_n} survivors by <b>specialist bracket</b> — which bot for which market.</span>
-      <a href="/farm" style="color:#60a5fa;text-decoration:none;font-size:12.5px">all {n_all} ›</a>
-    </div>
-    <div style="color:#6b7280;font-size:11.5px;margin-bottom:4px">
-      <span style="color:#f59e0b">⚠️ leveraged = paper-only.</span> Green switch cost = cheap-exit (can take narrow edges).
-    </div>
-    {surv_cards}
-  </div>
+    <section id="sec-folios" hidden>
+      <div style="color:#8b95a5;font-size:12px;margin:2px 0 4px">
+        The Freyr ensemble — three risk profiles, each a multi-book system with an escape-tier
+        risk governor &amp; portfolio kill-switch. Tap a card for its per-book breakdown.
+      </div>
+      {folio_cards}
+    </section>
 
-  <div id="panel-portfolio" style="display:none">
-    {portfolio_html}
-  </div>
+    <section id="sec-books" hidden>
+      {books_html}
+    </section>
 
-  <p style="color:#6b7280;font-size:12px;margin-top:18px">
-    Everything here is paper (pretend money). Updated {updated} UTC · refreshes each minute.</p>
+    <section id="sec-review" hidden>
+      {review_html}
+    </section>
+
+    <section id="sec-mine" hidden>
+      {mine_html}
+    </section>
+  </div>
+  {nav}
   {_switch_modal_html()}
   {tab_js}
 </body></html>"""
@@ -2585,8 +3009,12 @@ def _events_html(events: list[dict]) -> str:
     for e in events:
         when = e.get("date", e.get("ts", "")[:10])
         ev = (e.get("event") or "event").replace("_", " ")
-        why = (e.get("gate", {}) or {}).get("why", "") or (e.get("escape", {}) or {}).get("policy", "")
-        sz = e.get("size", {}) or {}
+        # Be defensive: some books log `size`/`gate`/`escape` as scalars, not dicts.
+        gate, esc = e.get("gate"), e.get("escape")
+        why = ((gate.get("why", "") if isinstance(gate, dict) else "")
+               or (esc.get("policy", "") if isinstance(esc, dict) else ""))
+        sz = e.get("size")
+        sz = sz if isinstance(sz, dict) else {}
         before, after = sz.get("before"), sz.get("after")
         szc = ""
         if before is not None and after is not None:
@@ -2844,145 +3272,18 @@ def _freyr_detail_page(variant: str) -> str:
 
 
 def _testnet_detail_page() -> str:
+    """Standalone /testnet page — a thin wrapper around the shared _testnet_tab()
+    content (also rendered on the home Testnet tab). Kept as its own route so direct
+    links and the back button still resolve."""
     snap = _testnet_load()
-    semoji, slabel, scol = _testnet_status(snap)
-    back = "<a href='/' style='color:#60a5fa;text-decoration:none;font-size:14px'>← Home</a>"
-    if not snap:
-        return ("<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'>"
-                "<body style='background:#0b0e14;color:#e6e6e6;font-family:system-ui;padding:24px'>"
-                f"{back}<h2>🔌 Live Testnet</h2>"
-                f"<p style='color:#8b95a5'>{semoji} {slabel} — no snapshot on disk yet. The minute "
-                "poller writes one once it reaches the testnet API.</p></body>")
-
-    pv = snap.get("portfolio_value", 0.0)
-    pnl_abs, pnl_pct = snap.get("pnl_24h_abs"), snap.get("pnl_24h_pct")
-    fdate = snap.get("fetched_at", "")[:16].replace("T", " ")
-
-    def stat(label, value, c="#e6e6e6"):
-        return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
-                f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
-                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div></div>")
-
-    if pnl_abs is None:
-        pnl_v, pnl_c = "TBD", "#6b7280"
-    else:
-        pnl_c = "#22c55e" if pnl_abs >= 0 else "#ef4444"
-        pnl_v = f"{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)"
-    stats = "".join([
-        stat("Portfolio (USDC)", f"${pv:,.2f}"),
-        stat("24h P&L", pnl_v, pnl_c),
-        stat("Spot USDC", f"${snap.get('spot_usdc', 0):,.2f}"),
-        stat("Perp value", f"${snap.get('perp_account_value', 0):,.2f}"),
-        stat("Notional", f"${snap.get('total_notional', 0):,.0f}"),
-        stat("Leverage", f"{snap.get('leverage', 0):.2f}×"),
-        stat("Margin used", f"${snap.get('margin_used', 0):,.2f}"),
-        stat("Status", f"{semoji} {slabel}", scol),
-    ])
-
-    # live equity chart (7d, intraday granularity)
-    series = [v for _, v in (snap.get("equity_series") or [])]
-    if len(series) >= 2:
-        chart = _mini_spark(series, series[-1] >= series[0], w=660, h=120)
-        chart_note = "portfolio value · last 7 days (intraday, grows over time)"
-    else:
-        chart = "<div style='color:#6b7280;font-size:12px;padding:18px;text-align:center'>Equity chart builds as the minute poller accumulates snapshots.</div>"
-        chart_note = ""
-
-    def _table(title, head, rows, empty):
-        body = ("".join(rows) if rows
-                else f"<tr><td colspan='{len(head)}' style='padding:14px 6px;color:#6b7280;text-align:center'>{empty}</td></tr>")
-        ths = "".join(f"<th style='padding:6px;text-align:left;white-space:nowrap'>{h}</th>" for h in head)
-        return (f"<h3 style='margin:18px 0 4px;font-size:15px'>{title}</h3>"
-                "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
-                "<table style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
-                f"<thead><tr style='color:#9aa4b2;font-size:11px'>{ths}</tr></thead>"
-                f"<tbody>{body}</tbody></table></div>")
-
-    def _sc(side):  # side colour
-        return "#22c55e" if side in ("buy", "long") else "#ef4444"
-
-    def _td(v, c="#e6e6e6", align="left", bold=False):
-        return (f"<td style='padding:7px 6px;text-align:{align};color:{c};"
-                f"font-weight:{700 if bold else 400};white-space:nowrap'>{v}</td>")
-
-    def _book(b):
-        # Map the book key the poller attributes (e.g. "surtr") to its bracket emoji
-        # + capitalised name in the bracket's accent colour → "🔥 Surtr". Unknown
-        # keys fall back to the raw string; no attribution renders as an em-dash.
-        if not b:
-            return "<span style='color:#475569'>—</span>"
-        meta = FREYR_META.get(b)
-        if meta:
-            emoji, _name, accent, _sub = meta
-            label = f"{emoji} {b[:1].upper()}{b[1:]}"
-            return f"<span style='color:{accent};font-weight:600'>{html_escape(label)}</span>"
-        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>"
-
-    # positions
-    prows = []
-    for p in snap.get("positions", []):
-        upnl = p.get("unrealized_pnl", 0)
-        prows.append("<tr style='border-top:1px solid #1c2230'>"
-                     + _td(p.get("coin"), bold=True) + _td(p.get("side"), _sc(p.get("side")))
-                     + _td(f"{p.get('size', 0):g}", align="right")
-                     + _td(f"${p.get('entry_px', 0):,.1f}", align="right")
-                     + _td(f"${p.get('mark_px', 0):,.1f}", align="right")
-                     + _td(f"{upnl:+,.2f}", "#22c55e" if upnl >= 0 else "#ef4444", "right", True)
-                     + _td(_book(p.get("book"))) + "</tr>")
-    pos_table = _table(f"Open positions ({snap.get('n_positions', 0)})",
-                       ["Symbol", "Side", "Size", "Entry", "Mark", "uP&L", "Book"],
-                       prows, "No open positions.")
-
-    # orders
-    orows = []
-    for o in snap.get("orders", []):
-        orows.append("<tr style='border-top:1px solid #1c2230'>"
-                     + _td(o.get("coin"), bold=True) + _td(o.get("side"), _sc(o.get("side")))
-                     + _td(f"{o.get('size', 0):g}", align="right")
-                     + _td(f"${o.get('limit_px', 0):,.1f}", align="right")
-                     + _td(o.get("age_str", "—"), "#8b95a5", "right")
-                     + _td(_book(o.get("book"))) + "</tr>")
-    ord_table = _table(f"Open orders ({snap.get('n_orders', 0)})",
-                       ["Symbol", "Side", "Size", "Limit", "Age", "Book"],
-                       orows, "No open orders.")
-
-    # fills
-    frows = []
-    for f in snap.get("recent_fills", []):
-        cp = f.get("closed_pnl", 0)
-        cpc = "#6b7280" if cp == 0 else ("#22c55e" if cp > 0 else "#ef4444")
-        frows.append("<tr style='border-top:1px solid #1c2230'>"
-                     + _td(f.get("coin"), bold=True) + _td(f.get("side"), _sc(f.get("side")))
-                     + _td(f"{f.get('size', 0):g}", align="right")
-                     + _td(f"${f.get('px', 0):,.1f}", align="right")
-                     + _td(f.get("time_str", "—"), "#8b95a5")
-                     + _td(f"{cp:+,.2f}" if cp else "—", cpc, "right")
-                     + _td(_book(f.get("book"))) + "</tr>")
-    ft = snap.get("fills_today", {}) or {}
-    fills_caption = (f"None today · {snap.get('n_fills_total', 0)} all-time" if ft.get("count", 0) == 0
-                     else f"{ft['count']} today ({ft.get('realized_pnl', 0):+,.2f}) · last 20 shown")
-    fill_table = _table(f"Recent fills · {fills_caption}",
-                        ["Symbol", "Side", "Size", "Price", "Time", "P&L", "Book"],
-                        frows, "No fills yet — the account is funded but hasn't traded.")
-
+    semoji, slabel, _scol = _testnet_status(snap)
+    back = "<a href='/#testnet' style='color:#60a5fa;text-decoration:none;font-size:14px'>← Home</a>"
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Live Testnet</title></head>
 <body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px;max-width:720px;margin:auto">
   {back}
-  <h2 style="margin:8px 0 2px">🔌 Live Testnet <span style="font-size:14px;color:#8b95a5;font-weight:500">· {semoji} {slabel}</span></h2>
-  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">Real orders, fake money — Freyr's actual Hyperliquid testnet account · as of {fdate} UTC</div>
-  <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{chart}
-    <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">{chart_note}</div>
-  </div>
-  <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
-  {pos_table}
-  {ord_table}
-  {fill_table}
-  <div style="background:#11203a;border:1px solid #1d3a66;border-radius:12px;padding:13px 14px;margin-top:18px;color:#cbd5e1;font-size:12.5px;line-height:1.5">
-    <b style="color:#e6e6e6">What "testnet" means.</b> This is the real Hyperliquid exchange's test network — live order matching, real market data, but the money is fake faucet USDC. It's the dress rehearsal before any real capital: we prove the plumbing (orders, fills, reconciliation) works against a live venue with nothing at stake.
-    <div style="margin-top:8px">Authoritative source: <a href="{TESTNET_UI_URL}" style="color:#60a5fa">{TESTNET_UI_URL}</a> ›</div>
-  </div>
-  <p style="color:#6b7280;font-size:12px;margin-top:14px">Read-only view · polled every minute · this dashboard never places or cancels orders.</p>
+  <h2 style="margin:8px 0 8px">🔌 Live Testnet <span style="font-size:14px;color:#8b95a5;font-weight:500">· {semoji} {slabel}</span></h2>
+  {_testnet_tab()}
   {_switch_modal_html()}
 </body></html>"""
