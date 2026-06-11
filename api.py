@@ -1806,14 +1806,25 @@ BRACKETS = {
 }
 
 
+_FREYR_CACHE: dict[str, tuple] = {}   # variant -> (snap_mtime, snap, summ)
+
+
 def _freyr_load(variant: str):
-    """(snapshot dict, index-summary dict) for a variant's latest day, or (None, None)."""
+    """(snapshot dict, index-summary dict) for a variant's latest day, or (None, None).
+    Mtime-cached: the daily snapshots are large (per-book standalone tracks) and read
+    many times per request, so we re-parse only when the cron writes a new file."""
     base = FREYR_SNAP / variant
     try:
         idx = json.loads((base / "index.json").read_text())
         latest = idx["latest"]
-        snap = json.loads((base / f"{latest}.json").read_text())
+        snap_path = base / f"{latest}.json"
+        mtime = snap_path.stat().st_mtime
+        cached = _FREYR_CACHE.get(variant)
+        if cached and cached[0] == mtime:
+            return cached[1], cached[2]
+        snap = json.loads(snap_path.read_text())
         summ = next((s for s in idx.get("summary", []) if s.get("date") == latest), {})
+        _FREYR_CACHE[variant] = (mtime, snap, summ)
         return snap, summ
     except Exception:
         return None, None
@@ -2290,7 +2301,27 @@ def _bot_universe() -> tuple[dict, list]:
                      "bcol": col, "tab": tab, "equity": v["equity"],
                      "return_pct": v["return_pct"], "dd": -v.get("max_drawdown_pct", 0.0),
                      "gate_active": active, "leverage": v.get("leverage", 1.0)})
+    # Embedded ensemble books as standalone bots (BOOKS_FULL_UNION) — pickable in
+    # Mine with their own live standalone equity (advances as freyr ticks daily),
+    # so an "Add to Mine" slice is a real independent allocation even though the
+    # same book also runs weighted inside a Freyr ensemble. Keyed 'book:<key>'.
+    for b in _embedded_books():
+        active = b["state"] == "active"
+        universe[b["ukey"]] = {"equity": b["equity"], "active": active, "name": b["name"]}
+        meta.append({"key": b["ukey"], "name": b["name"], "emoji": b["emoji"],
+                     "bracket": b["role"], "bcol": b["rcol"], "tab": "book",
+                     "equity": b["equity"], "return_pct": b["ret"],
+                     "dd": -abs(b["book_dd"]), "gate_active": active, "leverage": 1.0})
     return universe, meta
+
+
+def _picked_book_keys() -> set:
+    """Keys currently in Steven's portfolio config — lets the Books-tab toggle show
+    '✓ In' vs '+ Mine'. Cheap config read; never raises into a request."""
+    try:
+        return set(sp.load_config().get("bots", {}).keys())
+    except Exception:
+        return set()
 
 
 def _tick_steven(universe: dict | None = None):
@@ -2505,7 +2536,7 @@ def _steven_panel(snap: dict, meta: list) -> str:
     <div style="font-size:13px;font-weight:700;color:#e6e6e6;margin:14px 0 2px">Your portfolio · {snap['n_bots']} picked</div>
     {inc_html}
     <div style="font-size:13px;font-weight:700;color:#e6e6e6;margin:16px 0 2px">Add bots · {len(available)} available</div>
-    <div style="color:#6b7280;font-size:11px;margin-bottom:2px">All bots across Freyr + farm + specialists.</div>
+    <div style="color:#6b7280;font-size:11px;margin-bottom:2px">All bots across Freyr + farm + specialists + ensemble books.</div>
     {avail_html}"""
 
 
@@ -3106,9 +3137,10 @@ def _books_tab() -> str:
     shelves = intro + "".join(out) + js
 
     # Full-union headline: the embedded ensemble books as standalone bots, on top;
-    # the specialist + survivor bracket shelves below (unchanged). The Add-to-Mine
-    # toggle is wired in the Mine chunk (show_toggle there).
-    eb = _embedded_books_table(show_toggle=False)
+    # the specialist + survivor bracket shelves below (unchanged). Each row carries
+    # an Add-to-Mine toggle (bookMine → /portfolio/set), so Steven can compose his
+    # Mine portfolio straight from the Books tab.
+    eb = _embedded_books_table(show_toggle=True, picked=_picked_book_keys())
     if not eb:
         return shelves
     return (
@@ -3240,6 +3272,11 @@ function showTab(name){
 function pset(bot,action){
   try{sessionStorage.setItem('bsTab','mine');sessionStorage.setItem('bsScroll',window.scrollY);}catch(e){}
   fetch('/portfolio/set?bot='+encodeURIComponent(bot)+'&action='+action,{method:'POST'})
+   .then(function(){location.reload();}).catch(function(){location.reload();});
+}
+function bookMine(bot,name,on){
+  try{sessionStorage.setItem('bsTab','books');sessionStorage.setItem('bsScroll',window.scrollY);}catch(e){}
+  fetch('/portfolio/set?bot='+encodeURIComponent(bot)+'&action='+(on?'REMOVE':'ADD')+'&name='+encodeURIComponent(name),{method:'POST'})
    .then(function(){location.reload();}).catch(function(){location.reload();});
 }
 (function(){
