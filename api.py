@@ -2538,38 +2538,76 @@ def _leaderboard_tab() -> str:
             continue
         p = snap.get("portfolio", {})
         emoji, _pn, accent, _ = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
+        # Freyr: return is the PAPER track (days old); pace is the MODEL CAGR; max-DD
+        # is the true running-peak dip on the model track (not today's current_dd).
+        prow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+                for pt in (snap.get("paper_track") or []) if pt.get("date")]
+        mrow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+                for pt in (snap.get("model_track") or []) if pt.get("date")]
+        age = _track_age_days(prow)
+        if age is None and p.get("paper_start") and snap.get("date"):
+            try:
+                age = (datetime.fromisoformat(snap["date"])
+                       - datetime.fromisoformat(p["paper_start"])).total_seconds() / 86400.0
+            except Exception:
+                age = None
+        pace, pbasis = _honest_pace(p.get("cagr", 0.0) * 100, None)
         rows.append({
             "name": f"{emoji} Freyr {variant}", "accent": accent,
-            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "pace": p.get("cagr", 0.0) * 100,
-            "sharpe": p.get("sharpe"), "dd": p.get("current_dd", 0.0) * 100,
+            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ret_age": age, "ret_basis": "paper",
+            "pace": pace, "pbasis": pbasis,
+            "sharpe": p.get("sharpe"),
+            "dd": (_max_dd_pct(mrow) if PNL_NORMALISED and mrow else p.get("current_dd", 0.0) * 100),
             "sw": _switch_cost(p.get("leverage", 1.0))[0],
-            "href": f"/freyr/{variant}", "onclick": None})
+            "href": f"/freyr/{variant}", "onclick": None,
+            # legacy (flag-off) values:
+            "_pace_legacy": p.get("cagr", 0.0) * 100, "_dd_legacy": p.get("current_dd", 0.0) * 100})
     for slug in SURVIVORS:
         v = _variant_by_slug(slug)
         if not v:
             continue
         bem, _bl, bcol = BRACKETS.get(slug, ("", "", "#64748b"))
+        er = _equity_rows(slug)
+        pace, pbasis = _honest_pace(None, er)
         rows.append({
             "name": f"{bem} {v['name']}".strip(), "accent": bcol,
-            "ret": v["return_pct"], "pace": _annualised(slug)["monthly"],
-            "sharpe": _sharpe_from_rows(_equity_rows(slug)), "dd": -v["max_drawdown_pct"],
+            "ret": v["return_pct"], "ret_age": _track_age_days(er), "ret_basis": "paper",
+            "pace": pace, "pbasis": pbasis,
+            "sharpe": _sharpe_from_rows(er), "dd": -v["max_drawdown_pct"],
             "sw": _switch_cost(v.get("leverage", 1.0))[0],
-            "href": f"/bot/{v['slug']}", "onclick": None})
+            "href": f"/bot/{v['slug']}", "onclick": None,
+            "_pace_legacy": _annualised(slug)["monthly"], "_dd_legacy": -v["max_drawdown_pct"]})
     try:
         snap = sp.snapshot()
         if snap["n_bots"] > 0:
             er = sp.equity_rows()
+            pace, pbasis = _honest_pace(None, er)
             rows.append({
                 "name": "👤 Steven's Portfolio", "accent": STEVEN_COL,
-                "ret": snap["return_pct"], "pace": _ann_windows(er)["mo"] if len(er) >= 2 else None,
-                "sharpe": _sharpe_from_rows(er), "dd": snap["drawdown_pct"],
-                "sw": None, "href": None, "onclick": "showTab('mine')"})
+                "ret": snap["return_pct"], "ret_age": _track_age_days(er), "ret_basis": "paper",
+                "pace": pace, "pbasis": pbasis,
+                "sharpe": _sharpe_from_rows(er),
+                "dd": (_max_dd_pct(er) if PNL_NORMALISED and len(er) >= 2 else snap["drawdown_pct"]),
+                "sw": None, "href": None, "onclick": "showTab('mine')",
+                "_pace_legacy": _ann_windows(er)["mo"] if len(er) >= 2 else None,
+                "_dd_legacy": snap["drawdown_pct"]})
     except Exception:
         pass
-    rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
+
+    # Normalised: sort by RETURN (an honest same-basis column) so a few days of
+    # linear-annualised noise can't top the board. Legacy: the old pace sort.
+    if PNL_NORMALISED:
+        rows.sort(key=lambda r: -r["ret"])
+    else:
+        for r in rows:
+            r["pace"], r["dd"] = r["_pace_legacy"], r["_dd_legacy"]
+        rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
 
     def _dv(v):  # numeric data-v (empty string sorts last in both directions)
         return "" if v is None else f"{v:.4f}"
+
+    def _sub(txt):  # small grey sub-line under a cell value
+        return f"<div style='color:#6b7280;font-size:9.5px;font-weight:400;margin-top:1px'>{txt}</div>"
 
     trs = []
     for i, r in enumerate(rows, 1):
@@ -2584,15 +2622,17 @@ def _leaderboard_tab() -> str:
         swc = "#6b7280" if sw is None else _switch_color(sw)
         nav = (f"onclick=\"location.href='{r['href']}'\"" if r["href"]
                else (f"onclick=\"{r['onclick']}\"" if r["onclick"] else ""))
+        ret_sub = (_sub(f"{_age_str(r.get('ret_age'))} {r.get('ret_basis','')}") if PNL_NORMALISED else "")
+        pace_sub = (_sub(r.get("pbasis", "")) if PNL_NORMALISED and r.get("pbasis") else "")
         trs.append(
             f"<tr {nav} style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td style='padding:9px 5px;width:20px;color:#6b7280;font-weight:700'><span class='rk'>{i}</span></td>"
             f"<td data-v=\"{html_escape(r['name'])}\" style='padding:9px 7px;border-left:3px solid {r['accent']}'>"
             f"<span style='font-weight:600;font-size:13px'>{r['name']}</span></td>"
-            f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%</td>"
-            f"<td data-v='{_dv(pacev)}' style='padding:9px 5px;text-align:right;color:{pacec};font-weight:700'>{pace_txt}</td>"
+            f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%{ret_sub}</td>"
+            f"<td data-v='{_dv(pacev)}' style='padding:9px 5px;text-align:right;color:{pacec};font-weight:700'>{pace_txt}{pace_sub}</td>"
             f"<td data-v='{_dv(sh)}' style='padding:9px 5px;text-align:right'>{sh_txt}</td>"
-            f"<td data-v='{r['dd']:.4f}' style='padding:9px 5px;text-align:right'>{r['dd']:.1f}%</td>"
+            f"<td data-v='{_dv(r['dd'])}' style='padding:9px 5px;text-align:right'>{r['dd']:.1f}%</td>"
             f"<td data-v='{_dv(sw)}' style='padding:9px 5px;text-align:right;color:{swc}'>{sw_txt}</td>"
             f"</tr>")
 
@@ -2604,11 +2644,18 @@ def _leaderboard_tab() -> str:
             + _th("Name", 1, "left", False) + _th("Return", 2) + _th("Pace", 3)
             + _th("Sharpe", 4) + _th("Max DD", 5) + _th("Switch", 6) + "</tr>")
     n = len(rows)
+    legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees). "
+              "The small line under each return is its <b>track age + basis</b> — a 2-day paper number "
+              "isn't comparable to a months-old one. <b>Pace</b> = model CAGR where a backtest exists, "
+              "else a geometric paper CAGR once a track clears 21 days (younger = <i>building</i>, never "
+              "a few days blown up to a year). Max DD = worst peak-to-trough.</span>"
+              if PNL_NORMALISED else
+              "<span style='color:#6b7280'>Pace mixes bases: Freyr = model-track CAGR, survivors = 30-day paper pace.</span>")
     return (
         "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
         f"Everyone head-to-head — {n} contenders: Freyr ensembles &amp; specialists, farm survivors, and your picks. "
         "Tap a column to sort, a row to drill in. "
-        "<span style='color:#6b7280'>Pace mixes bases: Freyr = model-track CAGR, survivors = 30-day paper pace.</span></div>"
+        f"{legend}</div>"
         "<div style='background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:6px 8px 8px'>"
         "<div style='max-height:none;overflow-x:auto;-webkit-overflow-scrolling:touch'>"
         "<table id='lbtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:330px'>"
