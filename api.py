@@ -454,26 +454,22 @@ def _ann_span(v) -> str:
 
 
 def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
-    """Annualised pace — the realised trailing return scaled to a full year, the
-    same formula the rest of the widget uses. rows = [(datetime, equity)] ascending.
+    """LINEAR annualised pace over the trailing 1w / 1mo / 1y of an ascending
+    [(datetime, equity)] curve: realised window-return × (365 / elapsed_days),
+    i.e. 1w ≈ ×52, 1mo ≈ ×12, 1y ≈ ×1.
 
-    Not a forecast: each window is just realised_return × (365 / elapsed_days),
-    i.e. 1w ≈ ×52, 1mo ≈ ×12, 1y ≈ ×1. The 1y figure is None ('TBD') until the
-    track spans a full year — then it is simply the actual 365-day return (×1).
-    YTD is the realised return since 1 Jan of the latest point's year (= total
-    return for a bot that launched this year)."""
+    Deliberately shown even on a 1–2 day track (where it reads wildly hot) —
+    Steven's call (2026-06-11, reversing the earlier suppression): he wants the
+    cross-window SHAPE of the noise visible as a dispatch input, not a sanitised
+    single number. A window with less history than its span scales up what exists
+    (so on a 2-day track 1w≈1mo≈1y; they fan out as the track ages). 'ytd' is the
+    realised return since 1 Jan — a real return, NOT annualised."""
     out = {"w": None, "mo": None, "y": None, "ytd": None}
     if len(rows) < 2:
         return out
     now_t, now_e = rows[-1]
 
-    span_days = (now_t - rows[0][0]).total_seconds() / 86400.0
-
-    def ann(window_days: float, min_hours: float, min_span: float = 0.0):
-        # Normalised: don't annualise a window the track doesn't actually span — a 2-day
-        # track must not fill the "from 1mo" cell by scaling its 2 days up. Show TBD instead.
-        if PNL_NORMALISED and span_days < min_span:
-            return None
+    def ann(window_days: float, min_hours: float = 1.0):
         cutoff = now_t - timedelta(days=window_days)
         base = None
         for t, e in rows:
@@ -489,9 +485,9 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
             return None
         return (now_e / be - 1) * (365.0 / elapsed) * 100
 
-    out["w"] = ann(7, 12, min_span=5)
-    out["mo"] = ann(30, 36, min_span=21)
-    out["y"] = ann(365, 12) if span_days >= 365 else None   # else TBD — not 12 months yet
+    out["w"] = ann(7)
+    out["mo"] = ann(30)
+    out["y"] = ann(365)         # whole-track ×365/elapsed until a full year exists
     jan1 = datetime(now_t.year, 1, 1, tzinfo=now_t.tzinfo)
     ybase = next(((t, e) for t, e in rows if t >= jan1), rows[-1])
     out["ytd"] = (now_e / ybase[1] - 1) * 100 if ybase[1] > 0 else None
@@ -1954,27 +1950,29 @@ def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
             f"<div style='font-size:14px;font-weight:700;color:{col};margin-top:2px'>{value}</div></div>")
 
 
-def _ann_strip(ann: dict, basis: str = "") -> str:
-    """Four mini-cells pinned to a card: annualised pace from the trailing
-    1w / 1mo / 1y (realised return × periods/yr — not a forecast), plus realised
-    YTD as context. Lets Steven spot at a glance when the short-term pace is
-    running hot or cold versus the longer trend."""
-    def cell(label, v, is_ytd=False):
+def _ann_strip(ann: dict, basis: str = "", model_cagr: float | None = None) -> str:
+    """Four mini-cells: the LINEAR annualised pace from the trailing 1w / 1mo / 1y
+    (realised × 365/elapsed — tap any cell for the calc + noise caveat), plus the
+    Model CAGR (backtest) as a separate, clearly-labelled lens. All lenses visible
+    on purpose, including the inflated short-window numbers (Steven's call)."""
+    def cell(label, v, ann_cell=True):
         if v is None:
-            val = "<span style='color:#6b7280;font-weight:700'>TBD</span>"
+            inner = "<span style='color:#6b7280;font-weight:700'>—</span>"
         else:
             c = "#22c55e" if v >= 0 else "#ef4444"
-            suf = "" if is_ytd else "/yr"
-            val = f"<span style='color:{c};font-weight:700'>{v:+,.0f}%{suf}</span>"
-        return (f"<div style='flex:1 1 0;min-width:58px;background:#0f141c;border-radius:8px;"
-                f"padding:6px 5px;text-align:center'>"
-                f"<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>{label}</div>"
-                f"<div style='font-size:12px;margin-top:2px'>{val}</div></div>")
-    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Annualised pace · realised × periods/yr · {basis}</div>"
+            inner = f"<span style='color:{c};font-weight:700'>{v:+,.0f}%/yr</span>"
+        tap = " onclick='openAnn(event)'" if ann_cell else ""
+        cur = "cursor:pointer;" if ann_cell else ""
+        info = " <span style='color:#475569;font-weight:700'>ⓘ</span>" if ann_cell else ""
+        return (f"<div{tap} style='flex:1 1 0;min-width:54px;background:#0f141c;border-radius:8px;"
+                f"padding:6px 5px;text-align:center;{cur}'>"
+                f"<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>{label}{info}</div>"
+                f"<div style='font-size:12px;margin-top:2px'>{inner}</div></div>")
+    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Linear annualised · realised × 365/elapsed · {basis}</div>"
             if basis else "")
     return (note + "<div style='display:flex;gap:5px'>"
-            + cell("from 1w", ann["w"]) + cell("from 1mo", ann["mo"])
-            + cell("from 1y", ann["y"]) + cell("YTD real", ann["ytd"], is_ytd=True)
+            + cell("1w·ann", ann["w"]) + cell("1mo·ann", ann["mo"])
+            + cell("1y·ann", ann["y"]) + cell("Model CAGR", model_cagr, ann_cell=False)
             + "</div>")
 
 
@@ -2061,6 +2059,35 @@ function openSwitch(ev,el){
   document.getElementById('swmodal').style.display='block';
 }
 function closeSwitch(){document.getElementById('swmodal').style.display='none';}
+</script>"""
+
+
+def _ann_modal_html() -> str:
+    """Shared explainer for any annualised cell — tap an annualised number to open it.
+    Spells out the linear calc and the noise caveat so the inflated short-window
+    figures are read as a ranking input, not a forecast (Steven, 2026-06-11)."""
+    return """
+<div id="annmodal" onclick="if(event.target===this)closeAnn()" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
+  <div style="box-sizing:border-box;width:100%;max-width:480px;margin:24px auto;background:#151a23;border-radius:16px;padding:18px 18px 22px;border:1px solid #232b39">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+      <div style="font-size:18px;font-weight:800">Annualised pace</div>
+      <button onclick="closeAnn()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
+    </div>
+    <div style="background:#0f141c;border-radius:10px;padding:12px 13px;margin:6px 0 12px;font-family:ui-monospace,monospace;font-size:13px;color:#e6e6e6">
+      pace = return × (365 / days_active)
+      <div style="color:#8b95a5;font-size:11.5px;font-family:system-ui;margin-top:5px">1 week ≈ ×52 · 1 month ≈ ×12 · 1 year ≈ ×1. Each column uses that window's realised return; a track younger than the window scales up what it has.</div>
+    </div>
+    <div style="background:#2a1f12;border:1px solid #6b4f1f;border-radius:10px;padding:11px 12px;margin-bottom:12px;color:#fcd9a8;font-size:12.5px;line-height:1.55">
+      ⚠️ <b>Amplifies noise on short windows.</b> A +1% tick over 2 days reads as <b>+180%/yr</b>. Use it as a <b>relative ranking input</b> across bots and across windows — <b>not a forecast</b>. The shape across 1w / 1mo / 1y tells you whether a bot is running hot or cold versus its own longer trend.
+    </div>
+    <div style="color:#cbd5e1;font-size:12.5px;line-height:1.55">
+      <b style="color:#e6e6e6">Why paper, not backtest.</b> Freyr is a dispatcher — books switch on/off by regime gate, so they're not always-on. A backtest CAGR assumes always-on, so it's <i>one lens, not the answer</i>. These columns annualise the <b>real paper deployment</b> period. The separate <b>Model CAGR</b> column is the backtest lens, kept beside it.
+    </div>
+  </div>
+</div>
+<script>
+function openAnn(ev){if(ev){ev.preventDefault();ev.stopPropagation();}document.getElementById('annmodal').style.display='block';}
+function closeAnn(){document.getElementById('annmodal').style.display='none';}
 </script>"""
 
 
@@ -3367,6 +3394,7 @@ function bookMine(bot,name,on){
   </div>
   {nav}
   {_switch_modal_html()}
+  {_ann_modal_html()}
   {tab_js}
 </body></html>"""
 
@@ -3728,6 +3756,7 @@ def _freyr_detail_page(variant: str) -> str:
   {_freyr_fills_section(snap)}
   <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
   {_switch_modal_html()}
+  {_ann_modal_html()}
 </body></html>"""
 
 
@@ -3746,4 +3775,5 @@ def _testnet_detail_page() -> str:
   <h2 style="margin:8px 0 8px">🔌 Live Testnet <span style="font-size:14px;color:#8b95a5;font-weight:500">· {semoji} {slabel}</span></h2>
   {_testnet_tab()}
   {_switch_modal_html()}
+  {_ann_modal_html()}
 </body></html>"""
