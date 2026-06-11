@@ -467,7 +467,13 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
         return out
     now_t, now_e = rows[-1]
 
-    def ann(window_days: float, min_hours: float):
+    span_days = (now_t - rows[0][0]).total_seconds() / 86400.0
+
+    def ann(window_days: float, min_hours: float, min_span: float = 0.0):
+        # Normalised: don't annualise a window the track doesn't actually span — a 2-day
+        # track must not fill the "from 1mo" cell by scaling its 2 days up. Show TBD instead.
+        if PNL_NORMALISED and span_days < min_span:
+            return None
         cutoff = now_t - timedelta(days=window_days)
         base = None
         for t, e in rows:
@@ -483,9 +489,8 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
             return None
         return (now_e / be - 1) * (365.0 / elapsed) * 100
 
-    span_days = (now_t - rows[0][0]).total_seconds() / 86400.0
-    out["w"] = ann(7, 12)
-    out["mo"] = ann(30, 36)
+    out["w"] = ann(7, 12, min_span=5)
+    out["mo"] = ann(30, 36, min_span=21)
     out["y"] = ann(365, 12) if span_days >= 365 else None   # else TBD — not 12 months yet
     jan1 = datetime(now_t.year, 1, 1, tzinfo=now_t.tzinfo)
     ybase = next(((t, e) for t, e in rows if t >= jan1), rows[-1])
@@ -2075,6 +2080,18 @@ def _freyr_card(variant: str) -> str:
     fc = _ann_strip(_ann_windows(mt), basis="model track (paper is days old)")
     sw = _switch_chip(lev, name=f"Freyr {variant}", last_measured=date)
     sign = "+" if ret >= 0 else ""
+    # The big % is the PAPER track (days old). Show its age + the model CAGR so a flat
+    # young paper number isn't misread as "Freyr is flat". (M3 in the PnL audit.)
+    pstart = p.get("paper_start")
+    p_age = None
+    if pstart and date:
+        try:
+            p_age = (datetime.fromisoformat(date) - datetime.fromisoformat(pstart)).total_seconds() / 86400.0
+        except Exception:
+            p_age = None
+    paper_ctx = (f"<div style='color:#6b7280;font-size:10.5px;margin-top:1px'>"
+                 f"{_age_str(p_age)} paper · model {p.get('cagr', 0.0) * 100:+,.0f}%/yr</div>"
+                 if PNL_NORMALISED else "")
     chips = "".join([
         _chip("Drawdown", f"{dd:.1f}%", ddc),
         _chip("Leverage", f"{lev:.2f}×"),
@@ -2095,6 +2112,7 @@ def _freyr_card(variant: str) -> str:
         <div style="text-align:right">
           <div style="font-size:26px;font-weight:800;color:{rc}">{sign}{ret:.2f}%</div>
           <div style="color:#8b95a5;font-size:12px">${eq * FREYR_NOTIONAL:,.0f} on $10k</div>
+          {paper_ctx}
         </div>
       </div>
       <div style="margin:12px 0 4px">{spark}</div>
@@ -2188,7 +2206,10 @@ def _survivor_card(v: dict) -> str:
     up = v["profit"] >= 0
     col = "#22c55e" if up else "#ef4444"
     sign = "+" if up else ""
-    ann = _ann_windows(_equity_rows(v["slug"]))
+    srows = _equity_rows(v["slug"])
+    ann = _ann_windows(srows)
+    age_tag = (f" <span style='color:#6b7280;font-weight:400'>· {_age_str(_track_age_days(srows))} paper</span>"
+               if PNL_NORMALISED else "")
     tabc = TAB_COLORS.get(_tab_of(v), "#64748b")
     bemoji, blabel, bcol = BRACKETS.get(v["slug"], ("", "", "#64748b"))
     chip = (f"<span style='display:inline-block;background:#0f141c;color:{bcol};font-size:10.5px;"
@@ -2203,7 +2224,7 @@ def _survivor_card(v: dict) -> str:
         {chip}
       </div>
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
-        <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%</span>
+        <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%{age_tag}</span>
         <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
       </div>
       <div style="margin-top:8px">{_ann_strip(ann, basis="paper track")}</div>
@@ -2430,14 +2451,17 @@ def _steven_panel(snap: dict, meta: list) -> str:
     nav, ret, dd = snap["nav"], snap["return_pct"], snap["drawdown_pct"]
     rc = "#22c55e" if ret >= 0 else "#ef4444"
     ddc = "#22c55e" if dd > -5 else ("#f59e0b" if dd > -15 else "#ef4444")
-    pace = _ann_strip(_ann_windows(sp.equity_rows()), basis="your live track")
+    srows = sp.equity_rows()
+    pace = _ann_strip(_ann_windows(srows), basis="your live track")
+    age_tag = (f"<div style='color:#6b7280;font-size:10.5px;margin-top:1px'>{_age_str(_track_age_days(srows))} paper</div>"
+               if PNL_NORMALISED else "")
     summary = (
         f"<div style='background:#151a23;border-radius:16px;padding:16px;margin:6px 0 12px;border-left:5px solid {STEVEN_COL}'>"
         f"<div style='display:flex;justify-content:space-between;align-items:flex-start'>"
         f"<div><div style='font-size:18px;font-weight:800'>👤 Steven's Portfolio</div>"
         f"<div style='color:#8b95a5;font-size:12px;margin-top:2px'>{snap['n_active']}/{snap['n_bots']} bots in market now · you vs the algos</div></div>"
         f"<div style='text-align:right'><div style='font-size:24px;font-weight:800;color:{rc}'>{ret:+.2f}%</div>"
-        f"<div style='color:#8b95a5;font-size:12px'>${nav:,.0f} on $10k</div></div></div>"
+        f"<div style='color:#8b95a5;font-size:12px'>${nav:,.0f} on $10k</div>{age_tag}</div></div>"
         f"<div style='display:flex;gap:6px;margin-top:10px'>"
         + _chip("Drawdown", f"{dd:.1f}%", ddc) + _chip("In market", f"{snap['n_active']}/{snap['n_bots']}")
         + _chip("Peak", f"${snap['peak']:,.0f}") + "</div>"
@@ -2454,12 +2478,20 @@ def _steven_panel(snap: dict, meta: list) -> str:
                     "(force trade), <b style='color:#ef4444'>OFF</b> (park in cash) or "
                     "<b style='color:#3b82f6'>AUTO</b> (follow the bot's own gate).</div>")
 
+    shared_note = ("<div style='background:#151a23;border:1px solid #2a3344;border-radius:10px;"
+                   "padding:9px 11px;margin:6px 0 2px;color:#8b95a5;font-size:11.5px;line-height:1.5'>"
+                   "<b style='color:#cbd5e1'>Reading this fairly:</b> your return is mark-to-market, "
+                   "measured <b>since you added each bot</b> — a shorter, more recent window than the "
+                   "lifetime numbers those same bots show on the Board. This races <i>your gating</i> of "
+                   "bots you also hold elsewhere (including Freyr v0.3 itself), so it isn't human-vs-Freyr "
+                   "so much as your on/off calls on a shared roster.</div>") if PNL_NORMALISED else ""
     return f"""
     <div style="color:#8b95a5;font-size:12px;margin:2px 0 4px">
       Your hand-picked book vs the Freyr auto-portfolios. Pick bots, then call each one:
       <b style="color:#22c55e">ON</b> = force it to trade, <b style="color:#ef4444">OFF</b> = park it in cash,
       <b style="color:#3b82f6">AUTO</b> = defer to the bot's own gate. Every flip is logged. Starts at $10k, like the farm.
     </div>
+    {shared_note}
     {summary}
     <div style="margin:6px 0 10px">{chart}</div>
     <div style="font-size:13px;font-weight:700;color:#e6e6e6;margin:14px 0 2px">Your portfolio · {snap['n_bots']} picked</div>
