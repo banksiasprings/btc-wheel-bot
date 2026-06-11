@@ -1806,6 +1806,59 @@ def _freyr_load(variant: str):
         return None, None
 
 
+# ── Freyr per-book multi-timeframe performance profiles (Phase 1 dispatcher feed) ──
+# The Freyr engine rewrites this file each production tick (paper/book_perf.py). The
+# headline `return` per (book, mode, timeframe) is intended-gross-normalised — the
+# book at its OWN sizing, BEFORE the portfolio vol-target / allocator throttle (BSF
+# Solar-Dispatch principle P1: realised in-pool contribution LIES when the regulator
+# is clamping the book). `realised_return` + `throttle` sit alongside so the
+# suppression is visible, never read as edge decay.
+FREYR_BOOK_PERF = FREYR_SNAP.parent / "book_performance_profiles.json"
+_BOOK_PERF_CACHE: dict = {}
+
+
+def _book_perf_load():
+    try:
+        mtime = FREYR_BOOK_PERF.stat().st_mtime
+    except OSError:
+        return None
+    cached = _BOOK_PERF_CACHE.get("p")
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        prof = json.loads(FREYR_BOOK_PERF.read_text())
+    except Exception:
+        return None
+    _BOOK_PERF_CACHE["p"] = (mtime, prof)
+    return prof
+
+
+@app.get("/api/book_perf", include_in_schema=False)
+def book_perf(book: str = "", mode: str = "", tf: str = ""):
+    """Freyr's multi-timeframe per-book performance profiles.
+
+    Whole doc by default; narrow with ?book=funding_carry&mode=active_only&tf=1m.
+    `mode` ∈ {whole_clock, active_only}; `tf` ∈ {1h(unavailable),1d,3d,1w,1m,6m,1y}.
+    """
+    prof = _book_perf_load()
+    if prof is None:
+        return {"available": False,
+                "reason": "no profiles yet — the Freyr engine has not ticked"}
+    if not book:
+        return prof
+    b = prof.get("books", {}).get(book)
+    if b is None:
+        raise HTTPException(status_code=404, detail=f"unknown book '{book}'")
+    out = {k: v for k, v in b.items() if k != "profile"}
+    p = b.get("profile", {})
+    if mode:
+        p = {mode: p.get(mode, {})}
+    if tf:
+        p = {m: {tf: tfd.get(tf)} for m, tfd in p.items()}
+    out["profile"] = p
+    return {"available": True, "as_of": prof.get("as_of"), "book": out}
+
+
 def _variant_by_slug(slug: str) -> dict | None:
     for v in (_load() or {}).get("variants", []):
         if v.get("slug") == slug:
@@ -1928,6 +1981,60 @@ def _chip(label: str, value: str, col: str = "#e6e6e6") -> str:
     return (f"<div style='background:#0f141c;border-radius:9px;padding:7px 9px;flex:1 1 auto;min-width:80px'>"
             f"<div style='color:#6b7280;font-size:10px;text-transform:uppercase;letter-spacing:.4px'>{label}</div>"
             f"<div style='font-size:14px;font-weight:700;color:{col};margin-top:2px'>{value}</div></div>")
+
+
+# ── per-book "reason" badge (Freyr observability fix, dispatcher audit 2026-06-12) ──
+# Freyr stamps a reason dict {code,label,tone,detail,text} on every book each tick
+# (freyr/paper/book_reason.py). We render it so a flat book reads as resting /
+# not-selected / disarmed / cool-down — not an undifferentiated "flat". `tone` is the
+# cross-repo colour contract, so we never re-derive Freyr's semantics here.
+_REASON_TONE = {
+    "good":  "#22c55e",   # armed & holding
+    "ready": "#3b82f6",   # armed-flat / resting (correctly off, gate closed)
+    "idle":  "#6b7280",   # dispatcher benched it
+    "warn":  "#f59e0b",   # cool-down / risk-flagged
+    "bad":   "#ef4444",   # disarmed (kill / DD breaker)
+}
+
+
+def _reason_of(snap_or_book: dict | None) -> dict | None:
+    """Pull a usable reason dict from a Freyr snapshot or a per-book dict. Prefers the
+    stamped `reason`; falls back to legacy armed/activation fields so an un-re-ticked
+    snapshot still shows a sensible badge instead of nothing."""
+    if not isinstance(snap_or_book, dict):
+        return None
+    r = snap_or_book.get("reason")
+    if isinstance(r, dict) and r.get("code"):
+        return r
+    # fallback from legacy fields (old snapshots / pre-reason books or specialists)
+    p = snap_or_book.get("portfolio", {}) if "portfolio" in snap_or_book else snap_or_book
+    g = snap_or_book.get("gate", {}) if "gate" in snap_or_book else {}
+    armed = g.get("armed", p.get("armed", snap_or_book.get("armed", True)))
+    st = snap_or_book.get("activation_state")
+    why = (g.get("why") or "").strip()
+    if armed is False:
+        return {"code": "disarmed", "label": "Disarmed", "tone": "bad",
+                "detail": "drawdown / kill stop", "text": "disarmed: drawdown / kill stop"}
+    if st == "active" or (p.get("leverage", 0) or 0) > 1e-4:
+        return {"code": "armed_active", "label": "Armed", "tone": "good",
+                "detail": why or "holding", "text": (f"armed: {why}" if why else "armed · holding")}
+    if st == "dormant" or armed:
+        d = why or "own signal flat"
+        return {"code": "resting", "label": "Resting", "tone": "ready",
+                "detail": d, "text": f"resting: {d}"}
+    return None
+
+
+def _reason_badge(reason: dict | None) -> str:
+    """Small inline pill: coloured by tone, labelled by the state. Empty string when
+    there's no reason (farm bots, ensembles) so callers can concatenate unconditionally."""
+    if not reason:
+        return ""
+    col = _REASON_TONE.get(reason.get("tone", "idle"), "#6b7280")
+    label = html_escape(str(reason.get("label") or reason.get("code", "")))
+    return (f"<span style='display:inline-block;background:{col}1a;color:{col};"
+            f"border:1px solid {col}59;border-radius:6px;padding:0 5px;font-size:9px;"
+            f"font-weight:800;letter-spacing:.2px;vertical-align:middle;white-space:nowrap'>{label}</span>")
 
 
 def _ann_strip(ann: dict, basis: str = "", model_cagr: float | None = None) -> str:
@@ -2086,6 +2193,7 @@ def _freyr_card(variant: str) -> str:
     lev = p.get("leverage", 1.0)
     regime = (p.get("regime") or "—")
     nb_a, nb = p.get("n_books_active", 0), p.get("n_books", 0)
+    drat = p.get("dispatch_rationale", "")   # dispatcher's choice rationale (observability fix)
     esc = snap.get("escape", {})
     tier, tname = esc.get("tier", 0), esc.get("tier_name", "observe")
     ereason = esc.get("reason", "")
@@ -2148,6 +2256,7 @@ def _freyr_card(variant: str) -> str:
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">{chips}</div>
       {fc}
       <div style="margin-top:8px">{sw}</div>
+      {(f'<div style="background:#0f141c;border:1px solid #1d3a66;border-radius:9px;padding:7px 10px;margin-top:9px"><span style="color:#9aa4b2;font-weight:800;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px">Dispatcher</span> <span style="color:#cbd5e1;font-size:11.5px">{html_escape(drat)}</span></div>') if drat else ''}
       <div style="color:#6b7280;font-size:11.5px;margin-top:9px">{ereason} · as of {date} · tap for per-book ›</div>
     </div></a>"""
 
@@ -2639,6 +2748,7 @@ def _embedded_books() -> list[dict]:
             "armed": bool(b.get("armed", True)),
             "book_dd": (b.get("book_dd") or 0.0) * 100.0,
             "refs": refs.get(key, []),
+            "reason": _reason_of(b),       # why-flat badge (observability fix)
         })
     return out
 
@@ -2991,6 +3101,9 @@ def _all_entities() -> list[dict]:
             "sub": "portfolio of 12 books" if ens else "standalone specialist",
             "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ann": _ann_windows(prow),
             "mcagr": p.get("cagr", 0.0) * 100, "age": _track_age_days(prow),
+            # specialists ARE a single gated book → carry their reason badge; ensembles
+            # are portfolios (their dispatch rationale lives on the Portfolios card).
+            "reason": None if ens else _reason_of(snap),
             "href": f"/freyr/{v}", "onclick": None})
     for b in _embedded_books():                    # 12 internal ensemble books
         refs = " ".join(e for _vv, e, _w in b["refs"])
@@ -3000,6 +3113,7 @@ def _all_entities() -> list[dict]:
             "sub": (f"ensemble book · in {refs}" if refs else "ensemble book"),
             "ret": b["paper_ret"], "ann": _ann_windows(b["paper_rows"]),
             "mcagr": b["mcagr"], "age": _track_age_days(b["paper_rows"]),
+            "reason": b.get("reason"),     # why-flat badge (observability fix)
             "href": None, "onclick": f"openBook('{b['key']}')"})
     for v in (_load() or {}).get("variants", []):  # every farm bot
         slug, tab = v["slug"], _tab_of(v)
@@ -3052,7 +3166,7 @@ def _union_table() -> str:
             f"<td style='padding:8px 5px;width:18px;color:#6b7280;font-weight:700'><span class='ubrk'>{i}</span></td>"
             f"<td data-v=\"{html_escape(e['name'])}\" style='padding:8px 6px'>"
             f"<span style='font-weight:600;font-size:13px'>{html_escape(e['name'])}</span>"
-            f"{_sub(e['sub'])}</td>"
+            f"{_sub((_reason_badge(e.get('reason')) + ' ' if e.get('reason') else '') + e['sub'])}</td>"
             f"<td data-v=\"{html_escape(e['type'])}\" style='padding:8px 6px;white-space:nowrap'>"
             f"<span style='color:{e['tcol']};font-size:12.5px'>{e['emoji']} {html_escape(e['type'])}</span></td>"
             f"<td data-v='{e['ret']:.4f}' style='padding:8px 5px;text-align:right;color:{rc};font-weight:700'>{e['ret']:+,.2f}%"
@@ -3475,7 +3589,18 @@ def _book_panel(b: dict, snap_date: str) -> str:
     sharpe = b.get("standalone_sharpe", 0)
     bdd = b.get("book_dd", 0) * 100
 
+    # why-flat reason (observability fix) — full raw-value explanation + chip
+    reason = _reason_of(b)
+    rcol = _REASON_TONE.get((reason or {}).get("tone", "idle"), "#6b7280")
+    reason_callout = ("" if not reason else
+        f"<div style='background:{rcol}12;border:1px solid {rcol}45;border-radius:10px;"
+        f"padding:9px 11px;margin-bottom:12px'>"
+        f"<span style='color:{rcol};font-weight:800;font-size:11px;text-transform:uppercase;"
+        f"letter-spacing:.4px'>{html_escape(reason['label'])}</span>"
+        f"<div style='color:#cbd5e1;font-size:12.5px;margin-top:3px'>{html_escape(reason.get('detail') or reason.get('text',''))}</div></div>")
+
     state_chips = "".join([
+        _chip("Reason", reason["label"], rcol) if reason else "",
         _chip("State", f"{st}{'' if armed else ' ⨯'}", stc),
         _chip("Size (of portfolio)", f"{weight:.1f}%"),
         _chip("P&amp;L contribution", f"{pnl:+.1f}%", pc),
@@ -3514,7 +3639,7 @@ def _book_panel(b: dict, snap_date: str) -> str:
         <button onclick="closeBook()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
       </div>
       <div style="color:#cbd5e1;font-size:13px;margin-bottom:12px">{desc}</div>
-
+      {reason_callout}
       <div style="display:flex;flex-wrap:wrap;gap:6px">{state_chips}</div>
 
       <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Annualised pace</div>
@@ -3606,10 +3731,11 @@ def _freyr_detail_page(variant: str) -> str:
         armc = "#22c55e" if armed else "#ef4444"
         wgt = b.get("realized_weight", 0) * 100
         shp = b.get("standalone_sharpe", 0)
+        rbadge = _reason_badge(_reason_of(b))
         book_rows.append(
             f"<tr onclick=\"openBook('{b.get('key', '')}')\" style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td data-v='{html_escape(b.get('key','?'))}' style='padding:8px 6px;font-weight:600'>{b.get('key', '?')}"
-            f"<div style='color:#6b7280;font-size:11px'>{b.get('category', '')} · tier {b.get('tier', '?')}</div></td>"
+            f"<div style='color:#6b7280;font-size:11px;margin-top:2px'>{(rbadge + ' ') if rbadge else ''}{b.get('category', '')} · tier {b.get('tier', '?')}</div></td>"
             f"<td data-v='{wgt:.4f}' style='padding:8px 6px;text-align:right'>{wgt:.1f}%</td>"
             f"<td data-v='{pnl:.4f}' style='padding:8px 6px;text-align:right;color:{pc};font-weight:600'>{pnl:+.1f}%</td>"
             f"<td data-v='{shp:.4f}' style='padding:8px 6px;text-align:right'>{shp:.2f}</td>"
@@ -3664,6 +3790,27 @@ def _freyr_detail_page(variant: str) -> str:
   {book_table}
   {_book_modal_html(sorted(books, key=lambda x: x.get('realized_weight', 0), reverse=True), snap.get('date', ''))}"""
 
+    # Reason / dispatcher callout (observability fix): a specialist shows its own
+    # gate reason; an ensemble shows the dispatcher's choice rationale.
+    if books:
+        dr = snap.get("portfolio", {}).get("dispatch_rationale", "")
+        page_reason_html = ("" if not dr else
+            "<div style='background:#0f141c;border:1px solid #1d3a66;border-radius:10px;"
+            "padding:9px 12px;margin:12px 0 2px'>"
+            "<span style='color:#9aa4b2;font-weight:800;font-size:10px;text-transform:uppercase;"
+            f"letter-spacing:.4px'>Dispatcher</span><span style='color:#cbd5e1;font-size:12.5px;"
+            f"margin-left:8px'>{html_escape(dr)}</span></div>")
+    else:
+        pr = _reason_of(snap)
+        prcol = _REASON_TONE.get((pr or {}).get("tone", "idle"), "#6b7280")
+        page_reason_html = ("" if not pr else
+            f"<div style='background:{prcol}12;border:1px solid {prcol}45;border-radius:10px;"
+            "padding:9px 12px;margin:12px 0 2px'>"
+            f"<span style='color:{prcol};font-weight:800;font-size:11px;text-transform:uppercase;"
+            f"letter-spacing:.4px'>{html_escape(pr['label'])}</span>"
+            f"<span style='color:#cbd5e1;font-size:12.5px;margin-left:8px'>"
+            f"{html_escape(pr.get('detail') or pr.get('text',''))}</span></div>")
+
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>Freyr {variant}</title></head>
@@ -3679,6 +3826,7 @@ def _freyr_detail_page(variant: str) -> str:
     <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">how far below its peak, same 60 days</div>
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
+  {page_reason_html}
   <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
   {book_section}
   {_freyr_fills_section(snap)}
