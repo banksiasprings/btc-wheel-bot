@@ -493,6 +493,63 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
     return out
 
 
+# ── Canonical PnL normalisation (2026-06-11) ──────────────────────────────────
+# One definition of return / pace / window / max-DD for every contender so the
+# Board and cards stop mixing 180-day model-CAGR (Freyr) against a linear ×365/elapsed
+# blow-up of a few days of paper (Mine, survivors). Full rationale + per-surface deltas:
+# ~/Documents/freyr/dossiers/pnl_semantics_audit_2026-06-11.md.
+#   PNL_NORMALISED=0 restores the exact prior rendering (the live-testnet safety valve).
+PNL_NORMALISED = os.getenv("PNL_NORMALISED", "1") != "0"
+PACE_MIN_DAYS = 21          # a paper track younger than this shows "building", never ×52/×365
+
+
+def _track_age_days(rows: list[tuple[datetime, float]]) -> float | None:
+    """Calendar span of an ascending [(dt, equity)] curve, in days (None if < 2 points)."""
+    if len(rows) < 2:
+        return None
+    return (rows[-1][0] - rows[0][0]).total_seconds() / 86400.0
+
+
+def _max_dd_pct(rows: list[tuple[datetime, float]]) -> float | None:
+    """TRUE max drawdown (most-negative running-peak dip) over an equity curve, in %.
+    Replaces the Board's mislabelled use of Freyr's *current* DD under a 'Max DD' header."""
+    if len(rows) < 2:
+        return None
+    peak, worst = rows[0][1], 0.0
+    for _, e in rows:
+        if e > peak:
+            peak = e
+        if peak > 0:
+            worst = min(worst, e / peak - 1)
+    return worst * 100
+
+
+def _honest_pace(model_cagr_pct: float | None,
+                 paper_rows: list[tuple[datetime, float]] | None) -> tuple[float | None, str]:
+    """(pace_pct | None, basis_label) — the canonical annualised pace.
+
+    Model CAGR where a model/backtest track exists (Freyr). For a pure paper track,
+    a GEOMETRIC annualisation, and ONLY once the track spans PACE_MIN_DAYS — never the
+    old linear `ret × 365/elapsed`, which turned a 2-day +0.7% into +121%/yr. Younger
+    than that → (None, 'building'), so a few days of noise can't out-rank a real CAGR."""
+    if model_cagr_pct is not None:
+        return model_cagr_pct, "model CAGR"
+    age = _track_age_days(paper_rows or [])
+    if age is None or age < PACE_MIN_DAYS:
+        return None, "building"
+    r = paper_rows[-1][1] / paper_rows[0][1]
+    if r <= 0:
+        return None, "building"
+    return (r ** (365.0 / age) - 1) * 100, f"{age:.0f}d paper CAGR"
+
+
+def _age_str(days: float | None) -> str:
+    """Compact track-age label: '3d', '18h', or '—'."""
+    if days is None:
+        return "—"
+    return f"{days:.0f}d" if days >= 1 else f"{days * 24:.0f}h"
+
+
 # Switching cost — reuses Freyr's crypto cost model (rules/registry.yaml:
 # crypto-cost-bps = 3.0 bps/side = 2 bps fee + 1 bp slippage on Hyperliquid/Binance
 # majors). A round trip (fully exit + re-enter a sleeve) is 2 sides = 6.0 bps of the
