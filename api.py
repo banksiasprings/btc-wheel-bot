@@ -2228,36 +2228,6 @@ def _testnet_card() -> str:
     </div></a>"""
 
 
-def _survivor_card(v: dict) -> str:
-    up = v["profit"] >= 0
-    col = "#22c55e" if up else "#ef4444"
-    sign = "+" if up else ""
-    srows = _equity_rows(v["slug"])
-    ann = _ann_windows(srows)
-    age_tag = (f" <span style='color:#6b7280;font-weight:400'>· {_age_str(_track_age_days(srows))} paper</span>"
-               if PNL_NORMALISED else "")
-    tabc = TAB_COLORS.get(_tab_of(v), "#64748b")
-    bemoji, blabel, bcol = BRACKETS.get(v["slug"], ("", "", "#64748b"))
-    chip = (f"<span style='display:inline-block;background:#0f141c;color:{bcol};font-size:10.5px;"
-            f"font-weight:700;padding:2px 8px;border-radius:7px;border:1px solid {bcol}33;"
-            f"white-space:nowrap'>{bemoji} {blabel}</span>") if blabel else ""
-    return f"""
-    <a href="/bot/{v['slug']}" style="text-decoration:none;color:inherit;display:block">
-    <div style="background:#151a23;border-radius:12px;padding:12px 14px;margin:8px 0;border-left:3px solid {bcol}">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-        <span style="font-size:15px;font-weight:600">{v['name']}
-          <span style="font-size:11px;color:{tabc}">· {TAB_LABELS.get(_tab_of(v), '')}</span></span>
-        {chip}
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px">
-        <span style="color:{col};font-weight:600;font-size:13px">{sign}{v['return_pct']:.2f}% · worst dip −{v['max_drawdown_pct']:.2f}%{age_tag}</span>
-        <span style="font-size:15px;font-weight:700">${v['equity']:,.0f}</span>
-      </div>
-      <div style="margin-top:8px">{_ann_strip(ann, basis="paper track")}</div>
-      <div style="margin-top:8px">{_switch_chip(v.get('leverage', 1.0), name=v['name'])}</div>
-    </div></a>"""
-
-
 # ── Steven's manual portfolio — the human-vs-algo tournament (My Portfolio tab) ──
 # Bracket emoji by family for bots not in the curated BRACKETS map, so the full
 # picker still shows a "which market is this for" lens.
@@ -2555,27 +2525,10 @@ def _steven_panel(snap: dict, meta: list) -> str:
 # HTML; `_home_page()` assembles them under a fixed bottom nav.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# The 11 standalone specialists (FREYR_VARIANTS minus the 3 ensemble portfolios) —
-# these live on the 🤖 Books tab; the ensembles (v0.1.1/v0.2/v0.3) live on 🛡️ Portfolios.
+# The 3 Freyr ensemble portfolios (v0.1.1/v0.2/v0.3) — surfaced on 🛡️ Portfolios and,
+# with every other entity, on the 🤖 Books full-union table. The other FREYR_VARIANTS
+# are standalone specialists.
 FREYR_ENSEMBLES = ["v0.1.1", "v0.2", "v0.3"]
-FREYR_SPECIALISTS = [v for v in FREYR_VARIANTS if v not in FREYR_ENSEMBLES]
-
-# Canonical bracket order for the Books tab (emoji, label, accent). Books are bucketed
-# by their bracket emoji (specialists from FREYR_META, survivors from BRACKETS), so the
-# two systems group into the same shelves. Empty brackets are skipped at render time.
-BRACKET_ORDER = [
-    ("🔥", "Crash", "#ef4444"),
-    ("🐂", "Bull", "#f59e0b"),
-    ("🌪", "Chop", "#06b6d4"),
-    ("😴", "Calm", "#14b8a6"),
-    ("📉", "Crisis-alpha", "#a78bfa"),
-    ("🏃", "Cheap-exit", "#10b981"),
-    ("🦉", "Contrarian", "#d97706"),
-    ("🌐", "Cross-asset-lead", "#0ea5e9"),
-    ("📊", "Options", "#8b5cf6"),
-    ("•", "Unclassified", "#64748b"),
-]
-_EMOJI_TO_BRACKET = {e: lbl for e, lbl, _ in BRACKET_ORDER}
 
 
 # ── Embedded ensemble books — the FULL union (BOOKS_FULL_UNION) ────────────────
@@ -2652,6 +2605,20 @@ def _embedded_books() -> list[dict]:
             sret = b.get("pnl_cum", 0.0)
         track = [(datetime.fromisoformat(pt["date"]), pt["equity"])
                  for pt in (b.get("standalone_track") or []) if pt.get("date")]
+        # live forward PAPER track (rebased to 1.0 at launch) — the deployment basis
+        # for linear annualisation, distinct from the full-history backtest above.
+        paper_rows = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+                      for pt in (b.get("paper_track") or []) if pt.get("date")]
+        # Model CAGR (backtest lens) — the standalone full-history return compounded
+        # to a yearly rate, kept SEPARATE from the paper-period annualisation.
+        mcagr = None
+        try:
+            d0, d1 = b.get("standalone_start"), b.get("standalone_end")
+            days = (datetime.fromisoformat(d1) - datetime.fromisoformat(d0)).days if d0 and d1 else 0
+            if days > 0 and (1.0 + sret) > 0:
+                mcagr = ((1.0 + sret) ** (365.0 / days) - 1) * 100.0
+        except Exception:
+            mcagr = None
         out.append({
             "key": key, "ukey": f"{BOOK_PREFIX}{key}",
             "name": BOOK_NAMES.get(key, key.replace("_", " ").title()),
@@ -2662,6 +2629,9 @@ def _embedded_books() -> list[dict]:
             "start": b.get("standalone_start"), "end": b.get("standalone_end"),
             "sharpe": b.get("standalone_sharpe"),
             "track": track,
+            "paper_rows": paper_rows,
+            "paper_ret": (b.get("paper_return") or 0.0) * 100.0,
+            "mcagr": mcagr,
             "state": b.get("activation_state", "—"),
             "armed": bool(b.get("armed", True)),
             "book_dd": (b.get("book_dd") or 0.0) * 100.0,
@@ -2996,169 +2966,140 @@ def _testnet_tab() -> str:
   <p style="color:#6b7280;font-size:12px;margin-top:14px">Read-only view · polled every minute · this dashboard never places or cancels orders.</p>"""
 
 
-def _book_window(start: str | None, end: str | None) -> tuple[str, str, float]:
-    """(window label, 'since YYYY-..' sub, days) for a book's standalone track."""
-    try:
-        d0 = datetime.fromisoformat(start)
-        d1 = datetime.fromisoformat(end) if end else datetime.utcnow()
-        days = max((d1 - d0).days, 0)
-        yrs = days / 365.25
-        lbl = f"{yrs:.1f}y" if yrs >= 1 else f"{days}d"
-        return lbl, f"since {start}", float(days)
-    except Exception:
-        return "—", "", 0.0
+def _all_entities() -> list[dict]:
+    """The FULL union — every book/bot as one first-class, Mine-composable entity:
+    the 3 Freyr ensembles, 11 specialists, 12 internal ensemble books, and EVERY
+    farm bot. Each carries its paper return + PAPER-track linear annualisation
+    (1w/1mo/1y) + a Model CAGR (backtest) lens + its Mine key + a click-through —
+    so Steven can compose any portfolio from any combination (his call, 2026-06-11)."""
+    ents = []
+    for v in FREYR_VARIANTS:                       # 3 ensembles + 11 specialists
+        snap, _ = _freyr_load(v)
+        if not snap:
+            continue
+        p = snap.get("portfolio", {})
+        emoji, pname, accent, _ = FREYR_META.get(v, ("•", v, "#3b82f6", ""))
+        prow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+                for pt in (snap.get("paper_track") or []) if pt.get("date")]
+        ens = v in FREYR_ENSEMBLES
+        ents.append({
+            "ukey": f"freyr:{v}", "name": f"Freyr {v}", "emoji": emoji,
+            "type": pname, "tcol": accent, "group": "Ensemble" if ens else "Specialist",
+            "sub": "portfolio of 12 books" if ens else "standalone specialist",
+            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ann": _ann_windows(prow),
+            "mcagr": p.get("cagr", 0.0) * 100, "age": _track_age_days(prow),
+            "href": f"/freyr/{v}", "onclick": None})
+    for b in _embedded_books():                    # 12 internal ensemble books
+        refs = " ".join(e for _vv, e, _w in b["refs"])
+        ents.append({
+            "ukey": b["ukey"], "name": b["name"], "emoji": b["emoji"],
+            "type": b["role"], "tcol": b["rcol"], "group": "Book",
+            "sub": (f"ensemble book · in {refs}" if refs else "ensemble book"),
+            "ret": b["paper_ret"], "ann": _ann_windows(b["paper_rows"]),
+            "mcagr": b["mcagr"], "age": _track_age_days(b["paper_rows"]),
+            "href": None, "onclick": f"openBook('{b['key']}')"})
+    for v in (_load() or {}).get("variants", []):  # every farm bot
+        slug, tab = v["slug"], _tab_of(v)
+        er = _equity_rows(slug)
+        bem, blab, bcol = BRACKETS.get(slug, ("", "", ""))
+        ents.append({
+            "ukey": slug, "name": v["name"], "emoji": bem or TAB_EMOJI.get(tab, "•"),
+            "type": blab or TAB_LABELS.get(tab, tab), "tcol": bcol or TAB_COLORS.get(tab, "#64748b"),
+            "group": "Farm", "sub": "farm bot",
+            "ret": v.get("return_pct", 0.0), "ann": _ann_windows(er),
+            "mcagr": None, "age": _track_age_days(er),
+            "href": f"/bot/{slug}", "onclick": None})
+    return ents
 
 
-def _embedded_books_table(show_toggle: bool = False,
-                          picked: set | None = None) -> str:
-    """Sortable union table of the 12 embedded ensemble books as standalone bots —
-    name, role tag, standalone return, since-inception window, which portfolios hold
-    it (+ weight). Sorts like the Board (tap a header). Each row taps through to the
-    existing per-book dossier (openBook → _book_panel). Returns '' when the flag is
-    off / no snapshot. `show_toggle` adds the Add-to-Mine control (wired in Mine)."""
-    books = _embedded_books()
-    if not books:
-        return ""
-    picked = picked or set()
-    canon, _ = _freyr_load(BOOK_CANON)
-    raw = (canon or {}).get("books", [])
-    snap_date = (canon or {}).get("date", "")
+def _union_table() -> str:
+    """ONE sortable union table of every entity (ensembles + specialists + internal
+    books + every farm bot) as a first-class row: paper return, 1w/1mo/1y linear
+    annualised (paper, tap a cell for the calc), Model CAGR (backtest, separate), an
+    Add-to-Mine toggle, and a tap-through to its detail. Sort any column."""
+    ents = _all_entities()
+    if not ents:
+        return "<div style='color:#6b7280;font-size:13px;padding:14px'>No entities loaded.</div>"
+    picked = _picked_book_keys()
+    ents.sort(key=lambda e: -e["ret"])
+    groups = {}
+    for e in ents:
+        groups[e["group"]] = groups.get(e["group"], 0) + 1
 
     def _sub(txt):
         return f"<div style='color:#6b7280;font-size:9.5px;font-weight:400;margin-top:1px'>{txt}</div>"
 
     trs = []
-    for i, b in enumerate(sorted(books, key=lambda x: -x["ret"]), 1):
-        rc = "#22c55e" if b["ret"] >= 0 else "#ef4444"
-        sh = b["sharpe"]
-        sh_txt = "—" if sh is None else f"{sh:.2f}"
-        win, since, days = _book_window(b["start"], b["end"])
-        refs = b["refs"]
-        maxwt = max((w for _v, _e, w in refs), default=0.0)
-        ref_emojis = " ".join(e for _v, e, _w in refs) or "—"
-        stc = "#22c55e" if b["state"] == "active" else "#6b7280"
-        dis = "" if b["armed"] else " <span style='color:#ef4444'>⨯</span>"
-        state_sub = f"<span style='color:{stc}'>● {b['state']}</span>{dis} · tier {b['tier']}"
-        toggle = ""
-        if show_toggle:
-            on = b["ukey"] in picked
-            toggle = (
-                f"<td style='padding:8px 5px;text-align:center'>"
-                f"<button onclick=\"event.stopPropagation();bookMine('{html_escape(b['ukey'])}','{html_escape(b['name'])}',{'1' if on else '0'})\" "
-                f"style='background:{'#1c2230' if on else STEVEN_COL};color:{'#9aa4b2' if on else '#0b0e14'};"
-                f"border:none;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:700;"
-                f"font-family:inherit;cursor:pointer;white-space:nowrap'>{'✓ In' if on else '+ Mine'}</button></td>")
+    for i, e in enumerate(ents, 1):
+        rc = "#22c55e" if e["ret"] >= 0 else "#ef4444"
+        a = e["ann"]
+        mc = e["mcagr"]
+        mc_txt = "—" if mc is None else f"{mc:+,.0f}%/yr"
+        mcc = "#6b7280" if mc is None else ("#22c55e" if mc >= 0 else "#ef4444")
+        on = e["ukey"] in picked
+        nav = (f"location.href='{e['href']}'" if e["href"] else (e["onclick"] or ""))
+        toggle = (
+            f"<td style='padding:8px 5px;text-align:center'>"
+            f"<button onclick=\"event.stopPropagation();bookMine('{html_escape(e['ukey'])}','{html_escape(e['name'])}',{'1' if on else '0'})\" "
+            f"style='background:{'#1c2230' if on else STEVEN_COL};color:{'#9aa4b2' if on else '#0b0e14'};"
+            f"border:none;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:700;"
+            f"font-family:inherit;cursor:pointer;white-space:nowrap'>{'✓ In' if on else '+ Mine'}</button></td>")
         trs.append(
-            f"<tr onclick=\"openBook('{html_escape(b['key'])}')\" style='border-top:1px solid #1c2230;cursor:pointer'>"
-            f"<td style='padding:8px 5px;width:18px;color:#6b7280;font-weight:700'><span class='ebrk'>{i}</span></td>"
-            f"<td data-v=\"{html_escape(b['name'])}\" style='padding:8px 6px'>"
-            f"<span style='font-weight:600;font-size:13px'>{html_escape(b['name'])}</span>"
-            f"{_sub(state_sub)}</td>"
-            f"<td data-v=\"{html_escape(b['role'])}\" style='padding:8px 6px;white-space:nowrap'>"
-            f"<span style='color:{b['rcol']};font-size:12.5px'>{b['emoji']} {html_escape(b['role'])}</span></td>"
-            f"<td data-v='{b['ret']:.4f}' style='padding:8px 5px;text-align:right;color:{rc};font-weight:700'>{b['ret']:+,.1f}%"
-            f"{_sub(f'Sharpe {sh_txt}')}</td>"
-            f"<td data-v='{days:.0f}' style='padding:8px 5px;text-align:right'>{win}{_sub(since)}</td>"
-            f"<td data-v='{maxwt:.4f}' style='padding:8px 5px;text-align:right'>{ref_emojis}"
-            f"{_sub(f'wt ≤{maxwt:.0f}%')} <span style='color:#6b7280'>›</span></td>"
+            f"<tr onclick=\"{nav}\" style='border-top:1px solid #1c2230;cursor:pointer'>"
+            f"<td style='padding:8px 5px;width:18px;color:#6b7280;font-weight:700'><span class='ubrk'>{i}</span></td>"
+            f"<td data-v=\"{html_escape(e['name'])}\" style='padding:8px 6px'>"
+            f"<span style='font-weight:600;font-size:13px'>{html_escape(e['name'])}</span>"
+            f"{_sub(e['sub'])}</td>"
+            f"<td data-v=\"{html_escape(e['type'])}\" style='padding:8px 6px;white-space:nowrap'>"
+            f"<span style='color:{e['tcol']};font-size:12.5px'>{e['emoji']} {html_escape(e['type'])}</span></td>"
+            f"<td data-v='{e['ret']:.4f}' style='padding:8px 5px;text-align:right;color:{rc};font-weight:700'>{e['ret']:+,.2f}%"
+            f"{_sub(_age_str(e.get('age')) + ' paper')}</td>"
+            + _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
+            + f"<td data-v='{_dv(mc)}' style='padding:8px 5px;text-align:right;color:{mcc}'>{mc_txt}</td>"
             f"{toggle}</tr>")
 
     def _th(label, i, align="right", num=True):
-        return (f"<th onclick='sortEB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
+        return (f"<th onclick='sortUB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
                 f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
                 f"{label}<span style='color:#475569'> ⇅</span></th>")
-    toggle_th = ("<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
-                 if show_toggle else "")
     head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
-            + _th("Book", 1, "left", False) + _th("Role", 2, "left", False)
-            + _th("Standalone", 3) + _th("Since", 4) + _th("In portfolios", 5)
-            + toggle_th + "</tr>")
-
+            + _th("Name", 1, "left", False) + _th("Type", 2, "left", False)
+            + _th("Return", 3) + _th("1w·ann", 4) + _th("1mo·ann", 5) + _th("1y·ann", 6)
+            + _th("Model CAGR", 7)
+            + "<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th></tr>")
+    canon, _ = _freyr_load(BOOK_CANON)
+    raw = (canon or {}).get("books", [])
+    modal = _book_modal_html(sorted(raw, key=lambda x: x.get("realized_weight", 0), reverse=True),
+                             (canon or {}).get("date", "")) if raw else ""
+    gline = " · ".join(f"{n} {g.lower()}{'s' if n != 1 else ''}" for g, n in groups.items())
     intro = (
         "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
-        f"The <b>{len(books)} internal books</b> that compose the Freyr ensembles (🛡️ v0.1.1 / ⚖️ v0.2 / 🚀 v0.3), "
-        "each tested here as a <b>standalone bot</b> on its own $10k. "
-        "<span style='color:#6b7280'>This is a different test from the same book <i>inside</i> an ensemble, "
-        "where it's a weighted slice of one shared pool — the “In portfolios” column shows who holds it and at "
-        "what weight. Standalone returns use the v0.1.1 (survival-first) sizing. Tap a column to sort, a row to "
-        "drill in.</span></div>")
+        f"<b>{len(ents)} books &amp; bots</b>, every one a first-class entity you can drop into <b>Mine</b> in any "
+        f"combination ({gline}). "
+        "<span style='color:#6b7280'>Return + 1w/1mo/1y are the <b>paper deployment</b> (tap an annualised cell for the "
+        "calc — they run hot on young tracks on purpose). <b>Model CAGR</b> is the backtest lens, separate. "
+        "Tap a column to sort, a row to drill in, <b style='color:#eab308'>+ Mine</b> to add it to your portfolio.</span></div>")
     table = (
         "<div style='background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:6px 8px 8px'>"
         "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
-        "<table id='ebtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:340px'>"
+        "<table id='ubtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
         f"<thead>{head}</thead><tbody>{''.join(trs)}</tbody></table></div></div>"
-        "<script>(function(){var dir={};window.sortEB=function(c,num){"
-        "var tb=document.querySelector('#ebtbl tbody');var rs=[].slice.call(tb.rows);"
+        "<script>(function(){var dir={};window.sortUB=function(c,num){"
+        "var tb=document.querySelector('#ubtbl tbody');var rs=[].slice.call(tb.rows);"
         "dir[c]=-(dir[c]||1);var d=dir[c];rs.sort(function(a,b){"
         "var xa=a.cells[c].getAttribute('data-v'),xb=b.cells[c].getAttribute('data-v');"
         "var ea=(xa===''||xa==null),eb=(xb===''||xb==null);if(ea&&eb)return 0;if(ea)return 1;if(eb)return -1;"
         "var x=xa,y=xb;if(num){x=parseFloat(xa);y=parseFloat(xb);}else{x=(''+xa).toLowerCase();y=(''+xb).toLowerCase();}"
         "return x<y?d:x>y?-d:0;});rs.forEach(function(r,i){tb.appendChild(r);"
-        "var rk=r.cells[0].querySelector('.ebrk');if(rk)rk.textContent=(i+1);});};})();</script>")
-    # reuse the existing per-book dossier modal (openBook → _book_panel)
-    modal = _book_modal_html(sorted(raw, key=lambda x: x.get("realized_weight", 0), reverse=True),
-                             snap_date) if raw else ""
+        "var rk=r.cells[0].querySelector('.ubrk');if(rk)rk.textContent=(i+1);});};})();</script>")
     return intro + table + modal
 
 
 def _books_tab() -> str:
-    """🤖 Books — the FULL union. Top: the 12 embedded ensemble books as standalone
-    bots in one sortable table (BOOKS_FULL_UNION). Below: every standalone specialist
-    + farm survivor, grouped into expandable bracket shelves (Crash / Bull / Chop /
-    Calm / Cheap-exit / Contrarian / Cross-asset-lead / Options / Unclassified). Tap a
-    bracket to expand; each card taps through to its dossier (/freyr/<specialist> or
-    /bot/<survivor>); each embedded-book row opens its per-book dossier (openBook)."""
-    buckets: dict[str, list[str]] = {lbl: [] for _e, lbl, _c in BRACKET_ORDER}
-    for v in FREYR_SPECIALISTS:
-        snap, _ = _freyr_load(v)
-        if not snap:
-            continue
-        emoji = FREYR_META.get(v, ("•",))[0]
-        buckets[_EMOJI_TO_BRACKET.get(emoji, "Unclassified")].append(_freyr_card(v))
-    for slug in SURVIVORS:
-        vv = _variant_by_slug(slug)
-        if not vv:
-            continue
-        bem = BRACKETS.get(slug, ("•",))[0]
-        buckets[_EMOJI_TO_BRACKET.get(bem, "Unclassified")].append(_survivor_card(vv))
-
-    out, first = [], True
-    for emoji, label, accent in BRACKET_ORDER:
-        members = buckets.get(label, [])
-        if not members:
-            continue
-        openh = "open" if first else ""
-        first = False
-        out.append(
-            f"<details data-br='{html_escape(label)}' {openh} ontoggle='brToggle(this)' "
-            f"style='background:#10151e;border:1px solid #1c2230;border-left:4px solid {accent};border-radius:12px;margin:10px 0;overflow:hidden'>"
-            f"<summary style='list-style:none;cursor:pointer;padding:13px 14px;display:flex;align-items:center;justify-content:space-between'>"
-            f"<span style='font-size:15px;font-weight:700'>{emoji} {label}</span>"
-            f"<span style='color:#6b7280;font-size:12px'>{len(members)} book{'s' if len(members) != 1 else ''} <span style='color:#475569'>▾</span></span>"
-            f"</summary><div style='padding:0 12px 8px'>{''.join(members)}</div></details>")
-
-    intro = ("<div style='color:#8b95a5;font-size:12px;margin:2px 0 4px'>"
-             "Every specialist + farm survivor, grouped by the market it's built for. "
-             "Tap a bracket to expand, then a book for its full dossier. "
-             "<span style='color:#f59e0b'>⚠️ leveraged = paper-only.</span></div>")
-    js = ("<script>function brToggle(d){try{var k='bsBr_'+d.getAttribute('data-br');"
-          "d.open?sessionStorage.setItem(k,'1'):sessionStorage.removeItem(k);}catch(e){}}"
-          "(function(){try{document.querySelectorAll('details[data-br]').forEach(function(d){"
-          "var k='bsBr_'+d.getAttribute('data-br');if(sessionStorage.getItem(k)==='1')d.open=true;});}catch(e){}})();</script>")
-    shelves = intro + "".join(out) + js
-
-    # Full-union headline: the embedded ensemble books as standalone bots, on top;
-    # the specialist + survivor bracket shelves below (unchanged). Each row carries
-    # an Add-to-Mine toggle (bookMine → /portfolio/set), so Steven can compose his
-    # Mine portfolio straight from the Books tab.
-    eb = _embedded_books_table(show_toggle=True, picked=_picked_book_keys())
-    if not eb:
-        return shelves
-    return (
-        "<div style='font-size:15px;font-weight:800;margin:4px 0 2px'>📚 Ensemble books</div>"
-        + eb
-        + "<div style='font-size:15px;font-weight:800;margin:20px 0 2px'>🛡️ Specialists &amp; survivors</div>"
-        + shelves)
+    """\U0001f916 Books — the FULL union: every book/bot in the system as a first-class,
+    sortable, Mine-composable row (3 ensembles + 11 specialists + 12 internal books +
+    every farm bot). One table, one toggle per row, tap-through to detail."""
+    return _union_table()
 
 
 # ── Review tab — renders the auto-generated weekly markdown review off disk ────────
