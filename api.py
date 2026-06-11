@@ -2101,9 +2101,12 @@ def _freyr_card(variant: str) -> str:
 
     track = [pt["equity"] for pt in (snap.get("model_track") or [])]
     spark = _spark_pair(track, days=30)
-    mt = [(datetime.fromisoformat(pt["date"]), pt["equity"])
-          for pt in (snap.get("model_track") or []) if pt.get("date")]
-    fc = _ann_strip(_ann_windows(mt), basis="model track (paper is days old)")
+    # Annualise the PAPER deployment track (un-suppressed linear) and show Model CAGR
+    # as a separate lens — the dispatcher-vs-always-on pair (Steven, 2026-06-11).
+    prow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+            for pt in (snap.get("paper_track") or []) if pt.get("date")]
+    fc = _ann_strip(_ann_windows(prow), basis="paper deployment",
+                    model_cagr=p.get("cagr", 0.0) * 100)
     sw = _switch_chip(lev, name=f"Freyr {variant}", last_measured=date)
     sign = "+" if ret >= 0 else ""
     # The big % is the PAPER track (days old). Show its age + the model CAGR so a flat
