@@ -2820,11 +2820,30 @@ def _testnet_tab() -> str:
                         ["Symbol", "Side", "Size", "Price", "Time", "P&L", "Book"],
                         frows, "No fills yet — the account is funded but hasn't traded.")
 
+    # Realised/unrealised reconciliation — testnet is the ONLY surface that tracks both
+    # separately. Make the relationship explicit so the MTM headline, the open-position
+    # uP&L, and today's realised flow can't be confused (M5 in the PnL audit). Also tag
+    # the ~$1k faucet denominator (the books are on $10k). Purely additive + flag-gated.
+    upnl_open = sum(pp.get("unrealized_pnl", 0) or 0 for pp in snap.get("positions", []))
+    realized_today = ft.get("realized_pnl", 0.0) or 0.0
+    spot_v, perp_v = snap.get("spot_usdc", 0.0), snap.get("perp_account_value", 0.0)
+    uc = "#22c55e" if upnl_open >= 0 else "#ef4444"
+    rtc = "#6b7280" if realized_today == 0 else ("#22c55e" if realized_today > 0 else "#ef4444")
+    recon = ("" if not PNL_NORMALISED else
+             f"""<div style="background:#0f141c;border:1px solid #1c2230;border-radius:10px;padding:11px 13px;margin-top:12px;font-size:12px;line-height:1.6;color:#cbd5e1">
+    <b style="color:#e6e6e6">How this adds up.</b> <b>Portfolio ${pv:,.2f}</b> is total account value, marked to market
+    = spot ${spot_v:,.2f} + perp ${perp_v:,.2f} <span style="color:#8b95a5">(perp already includes open-position unrealised
+    <b style="color:{uc}">{upnl_open:+,.2f}</b>)</span>. <b style="color:{rtc}">Realised today {realized_today:+,.2f}</b>
+    is today's booked flow — a flow, not part of the balance.
+    <div style="color:#6b7280;font-size:11px;margin-top:5px">Funded with ~$1,000 faucet USDC — a different scale from the
+    $10k books. Compare in % (24h P&amp;L), not $.</div></div>""")
+
     return f"""<div style="color:#8b95a5;font-size:13px;margin-bottom:10px">Real orders, fake money — Freyr's actual Hyperliquid testnet account · as of {fdate} UTC · the authoritative live view.</div>
   <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{chart}
     <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">{chart_note}</div>
   </div>
   <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
+  {recon}
   {pos_table}
   {ord_table}
   {fill_table}
