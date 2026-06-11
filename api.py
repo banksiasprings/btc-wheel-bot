@@ -837,6 +837,13 @@ def _chart_page(slug: str) -> str:
     # P&L summary at the top of the table
     pnl_summary_colour_r = "#22c55e" if total_realized >= 0 else "#ef4444"
     pnl_summary_colour_u = "#22c55e" if total_unrealized >= 0 else "#ef4444"
+    # Modelled trading cost: 3 bps/side (2bp fee + 1bp slippage, crypto registry) on each
+    # fill's notional — the fees/slippage estimate, already netted into the equity curve.
+    total_cost_est = sum(t.get("notional", 0.0) for t in trades) * 3.0 / 1e4
+    cost_note = (f"""<div style="background:#151a23;border-radius:10px;padding:10px 12px;margin-top:8px;color:#8b95a5;font-size:11.5px;line-height:1.5">
+    Est. trading cost (modelled <b>3 bps/side</b> — 2bp fee + 1bp slippage): <b style="color:#cbd5e1">${total_cost_est:,.2f}</b>
+    across {n_buys + n_sells} fills — already reflected in the equity curve above. Still-open BUY lots are marked to BTC ${current_btc:,.0f}.</div>"""
+                 if PNL_NORMALISED else "")
 
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
@@ -866,6 +873,7 @@ def _chart_page(slug: str) -> str:
       <div style="color:#6b7280;font-size:10.5px">at BTC ${current_btc:,.0f}</div>
     </div>
   </div>
+  {cost_note}
   <div style="background:#151a23;border-radius:10px;padding:12px;margin-top:10px">
     <div style="color:#8b95a5;font-size:12px;margin-bottom:6px">RECENT TRADES (newest first, up to 12) — tap any row's matching triangle for full detail</div>
     <table style="width:100%;border-collapse:collapse">
@@ -3199,6 +3207,53 @@ def _book_falsification(b: dict) -> tuple[str, str, str]:
             f"Today's P&amp;L fell OUTSIDE its backtest 95% band ({band}) — live is diverging from backtest.")
 
 
+def _freyr_fills_section(snap: dict) -> str:
+    """Trade-by-trade fills for a Freyr ENSEMBLE snapshot (the day's rebalance trades),
+    each with its modelled slippage + fee and the $ cost on a $10k notional. Freyr marks
+    paper P&L at the ensemble level (no per-leg open-position MTM), so this is the honest
+    trade-level detail the click-through can show — the fees/slippage the headline return
+    is already net of. Returns '' when the snapshot has no fills (specialist books)."""
+    if not PNL_NORMALISED:
+        return ""
+    fills = snap.get("fills") or []
+    if not fills:
+        return ""
+    rows, tot_cost = [], 0.0
+    for f in fills:
+        side = (f.get("side") or "").lower()
+        sc = "#22c55e" if side == "buy" else "#ef4444"
+        w = f.get("fill_weight", f.get("target_weight", 0.0)) * 100
+        slip, fee = f.get("slippage_bps", 0.0), f.get("fee_bps", 0.0)
+        cost = abs(f.get("fill_weight", 0.0)) * (slip + fee) / 1e4 * FREYR_NOTIONAL
+        tot_cost += cost
+        rows.append(
+            "<tr style='border-top:1px solid #1c2230'>"
+            f"<td style='padding:7px 6px;font-weight:600'>{html_escape(f.get('asset', '?'))}</td>"
+            f"<td style='padding:7px 6px;color:{sc};font-weight:600'>{side or '—'}</td>"
+            f"<td style='padding:7px 6px;text-align:right'>{w:.1f}%</td>"
+            f"<td style='padding:7px 6px;text-align:right'>${f.get('ref_price', 0):,.2f}</td>"
+            f"<td style='padding:7px 6px;text-align:right;color:#8b95a5'>{slip:.1f}</td>"
+            f"<td style='padding:7px 6px;text-align:right;color:#8b95a5'>{fee:.1f}</td>"
+            f"<td style='padding:7px 6px;text-align:right'>${cost:,.2f}</td></tr>")
+    head = "".join(
+        f"<th style='padding:6px;text-align:{a};color:#9aa4b2;font-size:11px;white-space:nowrap'>{h}</th>"
+        for h, a in [("Asset", "left"), ("Side", "left"), ("Weight", "right"), ("Ref px", "right"),
+                     ("Slip bps", "right"), ("Fee bps", "right"), ("Est cost", "right")])
+    bps = tot_cost / FREYR_NOTIONAL * 1e4 if FREYR_NOTIONAL else 0.0
+    return (
+        "<h3 style='margin:18px 0 2px;font-size:15px'>Today's fills · fees &amp; slippage</h3>"
+        "<div style='color:#8b95a5;font-size:12px;margin-bottom:6px'>The rebalance trades behind today's "
+        "paper P&amp;L, each with its modelled per-side slippage + fee. Est cost is the $ drag on a $10k "
+        "notional — already netted into the return shown above. "
+        "<span style='color:#6b7280'>Freyr marks P&amp;L at the ensemble level, so there's no per-leg "
+        "open-position uP&amp;L here; for live per-position marks + unrealised, see the Testnet tab.</span></div>"
+        "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table></div>"
+        f"<div style='color:#8b95a5;font-size:12px;margin-top:6px'>Total modelled cost today: "
+        f"<b>${tot_cost:,.2f}</b> on $10k (≈{bps:.1f} bps).</div>")
+
+
 def _book_panel(b: dict, snap_date: str) -> str:
     """Hidden detail panel for one Freyr portfolio book — shown by openBook()."""
     key = b.get("key", "?")
@@ -3265,7 +3320,7 @@ def _book_panel(b: dict, snap_date: str) -> str:
       <div>{sw_chip}</div>
 
       <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Recent events</div>
-      <div style="color:#6b7280;font-size:12px">No per-book event log yet — the portfolio writes fills at the ensemble level. Standalone specialist bots (Surtr 🔥, Bull, Calm, Chop) carry their own event log.</div>
+      <div style="color:#6b7280;font-size:12px">No per-book event log — the portfolio marks P&amp;L and writes fills at the <b>ensemble</b> level (see <b>Today's fills · fees &amp; slippage</b> below the book table for the trade-by-trade detail). Standalone specialist bots (Surtr 🔥, Bull, Calm, Chop) carry their own event log on their own page.</div>
 
       <div style="color:#9aa4b2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 5px">Rules</div>
       {rules_html}
@@ -3422,6 +3477,7 @@ def _freyr_detail_page(variant: str) -> str:
   <div style="display:flex;flex-wrap:wrap;gap:6px">{stats}</div>
   <div style="color:#6b7280;font-size:12px;margin:12px 0 2px">{esc.get('reason', '')}</div>
   {book_section}
+  {_freyr_fills_section(snap)}
   <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
   {_switch_modal_html()}
 </body></html>"""
