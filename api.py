@@ -2540,6 +2540,98 @@ BRACKET_ORDER = [
 _EMOJI_TO_BRACKET = {e: lbl for e, lbl, _ in BRACKET_ORDER}
 
 
+# ── Embedded ensemble books — the FULL union (BOOKS_FULL_UNION) ────────────────
+# The 12 internal strategy books that COMPOSE the Freyr ensembles (v0.1.1/v0.2/
+# v0.3). Until now they were visible only by drilling into an ensemble; here each
+# becomes a first-class standalone bot on the Books surface — its own $10k, its
+# own live equity (freyr persists b.equity per tick → snapshot `standalone_track`).
+# That is a DIFFERENT test from the same book INSIDE an ensemble (a weighted slice
+# of one shared pool) — Steven, 2026-06-11. Canonical standalone source = v0.1.1
+# (the survival-first baseline) so every book reads on ONE basis ("same equity");
+# each ensemble's realized_weight gives the "which portfolios reference it" column.
+# BOOKS_FULL_UNION=0 hides them (restores the prior specialists+survivors Books tab).
+BOOKS_FULL_UNION = os.getenv("BOOKS_FULL_UNION", "1") != "0"
+BOOK_CANON = "v0.1.1"            # canonical ensemble defining the standalone-book test
+BOOK_PREFIX = "book:"            # Mine-universe namespace for an embedded book
+
+# Clean display names (snake_case .title() butchers the acronyms QQQ/BTC/DXY/ATR/RS).
+BOOK_NAMES = {
+    "ts_momentum_qqq": "QQQ Momentum", "atr_breakout_qqq": "QQQ ATR Breakout",
+    "ts_momentum_btc": "BTC Momentum", "atr_breakout_btc": "BTC ATR Breakout",
+    "dxy_momentum": "DXY Momentum", "basket_rs": "Basket Relative-Strength",
+    "funding_carry": "Funding Carry", "tail_hedge": "Tail Hedge",
+    "crash_short": "Crash Short", "infinity_grid": "Infinity Grid",
+    "breakout_specialist": "Breakout Specialist", "panic_fade": "Panic Fade",
+}
+
+# category → (emoji, role tag, accent) for an embedded book's role column.
+BOOK_ROLE = {
+    "trend":     ("📈", "Trend", "#f59e0b"),
+    "macro":     ("🌐", "Macro", "#0ea5e9"),
+    "rotation":  ("🔄", "Rotation", "#8b5cf6"),
+    "insurance": ("🛡️", "Insurance", "#22c55e"),
+    "carry":     ("😴", "Carry", "#14b8a6"),
+    "chop":      ("🌪", "Chop", "#06b6d4"),
+    "crash":     ("🔥", "Crash", "#ef4444"),
+    "meanrev":   ("↩️", "Mean-revert", "#a78bfa"),
+}
+
+
+def _embedded_books() -> list[dict]:
+    """The 12 internal ensemble books as standalone bots, ordered by the canonical
+    v0.1.1 snapshot. Each dict carries its standalone result (return/equity/track/
+    inception/Sharpe), its role tag (category→BOOK_ROLE), live activation state, and
+    `refs` = [(variant, emoji, weight)] for every ensemble that holds it. Keyed
+    'book:<key>' in the Mine universe. Returns [] when the flag is off or no
+    snapshot. Pure-read; never raises into a request."""
+    if not BOOKS_FULL_UNION:
+        return []
+    canon, _ = _freyr_load(BOOK_CANON)
+    if not canon:
+        return []
+    # per-ensemble weights → "which portfolios reference it"
+    refs: dict[str, list[tuple]] = {}
+    for var in FREYR_ENSEMBLES:
+        snap, _ = _freyr_load(var)
+        if not snap:
+            continue
+        emoji = FREYR_META.get(var, ("•",))[0]
+        for b in snap.get("books", []):
+            w = b.get("realized_weight", 0.0) or 0.0
+            if w > 0:
+                refs.setdefault(b.get("key"), []).append((var, emoji, w * 100))
+    out = []
+    for b in canon.get("books", []):
+        key = b.get("key")
+        if not key:
+            continue
+        cat = b.get("category", "")
+        emoji, role, rcol = BOOK_ROLE.get(cat, ("📚", (cat.title() or "Book"), "#64748b"))
+        # standalone return: the book alone on full notional (falls back to the
+        # in-pool pnl_cum only if an old snapshot predates the standalone field).
+        sret = b.get("standalone_return")
+        if sret is None:
+            sret = b.get("pnl_cum", 0.0)
+        track = [(datetime.fromisoformat(pt["date"]), pt["equity"])
+                 for pt in (b.get("standalone_track") or []) if pt.get("date")]
+        out.append({
+            "key": key, "ukey": f"{BOOK_PREFIX}{key}",
+            "name": BOOK_NAMES.get(key, key.replace("_", " ").title()),
+            "emoji": emoji, "role": role, "rcol": rcol,
+            "cat": cat, "tier": b.get("tier"),
+            "ret": sret * 100.0,
+            "equity": (1.0 + sret) * FREYR_NOTIONAL,
+            "start": b.get("standalone_start"), "end": b.get("standalone_end"),
+            "sharpe": b.get("standalone_sharpe"),
+            "track": track,
+            "state": b.get("activation_state", "—"),
+            "armed": bool(b.get("armed", True)),
+            "book_dd": (b.get("book_dd") or 0.0) * 100.0,
+            "refs": refs.get(key, []),
+        })
+    return out
+
+
 def _sharpe_from_rows(rows: list[tuple[datetime, float]]) -> float | None:
     """Rough annualised Sharpe from an equity curve [(dt, equity)] ascending. Uses
     per-step simple returns, annualised by the median sampling interval. Returns None
