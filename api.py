@@ -2954,11 +2954,118 @@ def _testnet_tab() -> str:
   <p style="color:#6b7280;font-size:12px;margin-top:14px">Read-only view · polled every minute · this dashboard never places or cancels orders.</p>"""
 
 
+def _book_window(start: str | None, end: str | None) -> tuple[str, str, float]:
+    """(window label, 'since YYYY-..' sub, days) for a book's standalone track."""
+    try:
+        d0 = datetime.fromisoformat(start)
+        d1 = datetime.fromisoformat(end) if end else datetime.utcnow()
+        days = max((d1 - d0).days, 0)
+        yrs = days / 365.25
+        lbl = f"{yrs:.1f}y" if yrs >= 1 else f"{days}d"
+        return lbl, f"since {start}", float(days)
+    except Exception:
+        return "—", "", 0.0
+
+
+def _embedded_books_table(show_toggle: bool = False,
+                          picked: set | None = None) -> str:
+    """Sortable union table of the 12 embedded ensemble books as standalone bots —
+    name, role tag, standalone return, since-inception window, which portfolios hold
+    it (+ weight). Sorts like the Board (tap a header). Each row taps through to the
+    existing per-book dossier (openBook → _book_panel). Returns '' when the flag is
+    off / no snapshot. `show_toggle` adds the Add-to-Mine control (wired in Mine)."""
+    books = _embedded_books()
+    if not books:
+        return ""
+    picked = picked or set()
+    canon, _ = _freyr_load(BOOK_CANON)
+    raw = (canon or {}).get("books", [])
+    snap_date = (canon or {}).get("date", "")
+
+    def _sub(txt):
+        return f"<div style='color:#6b7280;font-size:9.5px;font-weight:400;margin-top:1px'>{txt}</div>"
+
+    trs = []
+    for i, b in enumerate(sorted(books, key=lambda x: -x["ret"]), 1):
+        rc = "#22c55e" if b["ret"] >= 0 else "#ef4444"
+        sh = b["sharpe"]
+        sh_txt = "—" if sh is None else f"{sh:.2f}"
+        win, since, days = _book_window(b["start"], b["end"])
+        refs = b["refs"]
+        maxwt = max((w for _v, _e, w in refs), default=0.0)
+        ref_emojis = " ".join(e for _v, e, _w in refs) or "—"
+        stc = "#22c55e" if b["state"] == "active" else "#6b7280"
+        dis = "" if b["armed"] else " <span style='color:#ef4444'>⨯</span>"
+        state_sub = f"<span style='color:{stc}'>● {b['state']}</span>{dis} · tier {b['tier']}"
+        toggle = ""
+        if show_toggle:
+            on = b["ukey"] in picked
+            toggle = (
+                f"<td style='padding:8px 5px;text-align:center'>"
+                f"<button onclick=\"event.stopPropagation();bookMine('{html_escape(b['ukey'])}','{html_escape(b['name'])}',{'1' if on else '0'})\" "
+                f"style='background:{'#1c2230' if on else STEVEN_COL};color:{'#9aa4b2' if on else '#0b0e14'};"
+                f"border:none;border-radius:7px;padding:5px 9px;font-size:11px;font-weight:700;"
+                f"font-family:inherit;cursor:pointer;white-space:nowrap'>{'✓ In' if on else '+ Mine'}</button></td>")
+        trs.append(
+            f"<tr onclick=\"openBook('{html_escape(b['key'])}')\" style='border-top:1px solid #1c2230;cursor:pointer'>"
+            f"<td style='padding:8px 5px;width:18px;color:#6b7280;font-weight:700'><span class='ebrk'>{i}</span></td>"
+            f"<td data-v=\"{html_escape(b['name'])}\" style='padding:8px 6px'>"
+            f"<span style='font-weight:600;font-size:13px'>{html_escape(b['name'])}</span>"
+            f"{_sub(state_sub)}</td>"
+            f"<td data-v=\"{html_escape(b['role'])}\" style='padding:8px 6px;white-space:nowrap'>"
+            f"<span style='color:{b['rcol']};font-size:12.5px'>{b['emoji']} {html_escape(b['role'])}</span></td>"
+            f"<td data-v='{b['ret']:.4f}' style='padding:8px 5px;text-align:right;color:{rc};font-weight:700'>{b['ret']:+,.1f}%"
+            f"{_sub(f'Sharpe {sh_txt}')}</td>"
+            f"<td data-v='{days:.0f}' style='padding:8px 5px;text-align:right'>{win}{_sub(since)}</td>"
+            f"<td data-v='{maxwt:.4f}' style='padding:8px 5px;text-align:right'>{ref_emojis}"
+            f"{_sub(f'wt ≤{maxwt:.0f}%')} <span style='color:#6b7280'>›</span></td>"
+            f"{toggle}</tr>")
+
+    def _th(label, i, align="right", num=True):
+        return (f"<th onclick='sortEB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
+                f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
+                f"{label}<span style='color:#475569'> ⇅</span></th>")
+    toggle_th = ("<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+                 if show_toggle else "")
+    head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+            + _th("Book", 1, "left", False) + _th("Role", 2, "left", False)
+            + _th("Standalone", 3) + _th("Since", 4) + _th("In portfolios", 5)
+            + toggle_th + "</tr>")
+
+    intro = (
+        "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
+        f"The <b>{len(books)} internal books</b> that compose the Freyr ensembles (🛡️ v0.1.1 / ⚖️ v0.2 / 🚀 v0.3), "
+        "each tested here as a <b>standalone bot</b> on its own $10k. "
+        "<span style='color:#6b7280'>This is a different test from the same book <i>inside</i> an ensemble, "
+        "where it's a weighted slice of one shared pool — the “In portfolios” column shows who holds it and at "
+        "what weight. Standalone returns use the v0.1.1 (survival-first) sizing. Tap a column to sort, a row to "
+        "drill in.</span></div>")
+    table = (
+        "<div style='background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:6px 8px 8px'>"
+        "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
+        "<table id='ebtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:340px'>"
+        f"<thead>{head}</thead><tbody>{''.join(trs)}</tbody></table></div></div>"
+        "<script>(function(){var dir={};window.sortEB=function(c,num){"
+        "var tb=document.querySelector('#ebtbl tbody');var rs=[].slice.call(tb.rows);"
+        "dir[c]=-(dir[c]||1);var d=dir[c];rs.sort(function(a,b){"
+        "var xa=a.cells[c].getAttribute('data-v'),xb=b.cells[c].getAttribute('data-v');"
+        "var ea=(xa===''||xa==null),eb=(xb===''||xb==null);if(ea&&eb)return 0;if(ea)return 1;if(eb)return -1;"
+        "var x=xa,y=xb;if(num){x=parseFloat(xa);y=parseFloat(xb);}else{x=(''+xa).toLowerCase();y=(''+xb).toLowerCase();}"
+        "return x<y?d:x>y?-d:0;});rs.forEach(function(r,i){tb.appendChild(r);"
+        "var rk=r.cells[0].querySelector('.ebrk');if(rk)rk.textContent=(i+1);});};})();</script>")
+    # reuse the existing per-book dossier modal (openBook → _book_panel)
+    modal = _book_modal_html(sorted(raw, key=lambda x: x.get("realized_weight", 0), reverse=True),
+                             snap_date) if raw else ""
+    return intro + table + modal
+
+
 def _books_tab() -> str:
-    """🤖 Books — every standalone specialist + farm survivor, grouped into expandable
-    bracket shelves (Crash / Bull / Chop / Calm / Cheap-exit / Contrarian /
-    Cross-asset-lead / Options / Unclassified). Tap a bracket to expand; each book card
-    taps through to its full dossier (/freyr/<specialist> or /bot/<survivor>)."""
+    """🤖 Books — the FULL union. Top: the 12 embedded ensemble books as standalone
+    bots in one sortable table (BOOKS_FULL_UNION). Below: every standalone specialist
+    + farm survivor, grouped into expandable bracket shelves (Crash / Bull / Chop /
+    Calm / Cheap-exit / Contrarian / Cross-asset-lead / Options / Unclassified). Tap a
+    bracket to expand; each card taps through to its dossier (/freyr/<specialist> or
+    /bot/<survivor>); each embedded-book row opens its per-book dossier (openBook)."""
     buckets: dict[str, list[str]] = {lbl: [] for _e, lbl, _c in BRACKET_ORDER}
     for v in FREYR_SPECIALISTS:
         snap, _ = _freyr_load(v)
@@ -2996,7 +3103,19 @@ def _books_tab() -> str:
           "d.open?sessionStorage.setItem(k,'1'):sessionStorage.removeItem(k);}catch(e){}}"
           "(function(){try{document.querySelectorAll('details[data-br]').forEach(function(d){"
           "var k='bsBr_'+d.getAttribute('data-br');if(sessionStorage.getItem(k)==='1')d.open=true;});}catch(e){}})();</script>")
-    return intro + "".join(out) + js
+    shelves = intro + "".join(out) + js
+
+    # Full-union headline: the embedded ensemble books as standalone bots, on top;
+    # the specialist + survivor bracket shelves below (unchanged). The Add-to-Mine
+    # toggle is wired in the Mine chunk (show_toggle there).
+    eb = _embedded_books_table(show_toggle=False)
+    if not eb:
+        return shelves
+    return (
+        "<div style='font-size:15px;font-weight:800;margin:4px 0 2px'>📚 Ensemble books</div>"
+        + eb
+        + "<div style='font-size:15px;font-weight:800;margin:20px 0 2px'>🛡️ Specialists &amp; survivors</div>"
+        + shelves)
 
 
 # ── Review tab — renders the auto-generated weekly markdown review off disk ────────
