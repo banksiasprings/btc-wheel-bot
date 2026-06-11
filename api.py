@@ -501,7 +501,6 @@ def _ann_windows(rows: list[tuple[datetime, float]]) -> dict:
 # ~/Documents/freyr/dossiers/pnl_semantics_audit_2026-06-11.md.
 #   PNL_NORMALISED=0 restores the exact prior rendering (the live-testnet safety valve).
 PNL_NORMALISED = os.getenv("PNL_NORMALISED", "1") != "0"
-PACE_MIN_DAYS = 21          # a paper track younger than this shows "building", never ×52/×365
 
 
 def _track_age_days(rows: list[tuple[datetime, float]]) -> float | None:
@@ -523,25 +522,6 @@ def _max_dd_pct(rows: list[tuple[datetime, float]]) -> float | None:
         if peak > 0:
             worst = min(worst, e / peak - 1)
     return worst * 100
-
-
-def _honest_pace(model_cagr_pct: float | None,
-                 paper_rows: list[tuple[datetime, float]] | None) -> tuple[float | None, str]:
-    """(pace_pct | None, basis_label) — the canonical annualised pace.
-
-    Model CAGR where a model/backtest track exists (Freyr). For a pure paper track,
-    a GEOMETRIC annualisation, and ONLY once the track spans PACE_MIN_DAYS — never the
-    old linear `ret × 365/elapsed`, which turned a 2-day +0.7% into +121%/yr. Younger
-    than that → (None, 'building'), so a few days of noise can't out-rank a real CAGR."""
-    if model_cagr_pct is not None:
-        return model_cagr_pct, "model CAGR"
-    age = _track_age_days(paper_rows or [])
-    if age is None or age < PACE_MIN_DAYS:
-        return None, "building"
-    r = paper_rows[-1][1] / paper_rows[0][1]
-    if r <= 0:
-        return None, "building"
-    return (r ** (365.0 / age) - 1) * 100, f"{age:.0f}d paper CAGR"
 
 
 def _age_str(days: float | None) -> str:
@@ -2716,11 +2696,11 @@ def _sharpe_from_rows(rows: list[tuple[datetime, float]]) -> float | None:
     return (mean / sd) * (per_year ** 0.5)
 
 
-def _leaderboard_tab() -> str:
-    """🏆 Leaderboard — EVERYTHING head-to-head in one sortable table: the 3 Freyr
-    ensembles, every specialist, the farm survivors, and Steven's own portfolio.
-    Sortable by return / annualised pace / Sharpe / max drawdown / switching cost
-    (tap a column header). Default sort = annualised pace, highest first."""
+def _board_rows() -> list[dict]:
+    """The Board roster as rich dicts: the 3 Freyr ensembles, every specialist, the
+    farm survivors, and Steven's portfolio. Each carries its PAPER-track linear
+    annualisation (1w/1mo/1y) + a separate Model CAGR (backtest) lens + Return /
+    Sharpe / Max-DD / Switch. Shared by the Board and the full-union Books table."""
     rows = []
     for variant in FREYR_VARIANTS:
         snap, _ = _freyr_load(variant)
@@ -2728,8 +2708,6 @@ def _leaderboard_tab() -> str:
             continue
         p = snap.get("portfolio", {})
         emoji, _pn, accent, _ = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
-        # Freyr: return is the PAPER track (days old); pace is the MODEL CAGR; max-DD
-        # is the true running-peak dip on the model track (not today's current_dd).
         prow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
                 for pt in (snap.get("paper_track") or []) if pt.get("date")]
         mrow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
@@ -2741,70 +2719,76 @@ def _leaderboard_tab() -> str:
                        - datetime.fromisoformat(p["paper_start"])).total_seconds() / 86400.0
             except Exception:
                 age = None
-        pace, pbasis = _honest_pace(p.get("cagr", 0.0) * 100, None)
         rows.append({
             "name": f"{emoji} Freyr {variant}", "accent": accent,
-            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ret_age": age, "ret_basis": "paper",
-            "pace": pace, "pbasis": pbasis,
+            "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ret_age": age,
+            "ann": _ann_windows(prow), "mcagr": p.get("cagr", 0.0) * 100,
             "sharpe": p.get("sharpe"),
-            "dd": (_max_dd_pct(mrow) if PNL_NORMALISED and mrow else p.get("current_dd", 0.0) * 100),
+            "dd": (_max_dd_pct(mrow) if mrow else p.get("current_dd", 0.0) * 100),
             "sw": _switch_cost(p.get("leverage", 1.0))[0],
-            "href": f"/freyr/{variant}", "onclick": None,
-            # legacy (flag-off) values:
-            "_pace_legacy": p.get("cagr", 0.0) * 100, "_dd_legacy": p.get("current_dd", 0.0) * 100})
+            "href": f"/freyr/{variant}", "onclick": None})
     for slug in SURVIVORS:
         v = _variant_by_slug(slug)
         if not v:
             continue
         bem, _bl, bcol = BRACKETS.get(slug, ("", "", "#64748b"))
         er = _equity_rows(slug)
-        pace, pbasis = _honest_pace(None, er)
         rows.append({
             "name": f"{bem} {v['name']}".strip(), "accent": bcol,
-            "ret": v["return_pct"], "ret_age": _track_age_days(er), "ret_basis": "paper",
-            "pace": pace, "pbasis": pbasis,
+            "ret": v["return_pct"], "ret_age": _track_age_days(er),
+            "ann": _ann_windows(er), "mcagr": None,
             "sharpe": _sharpe_from_rows(er), "dd": -v["max_drawdown_pct"],
             "sw": _switch_cost(v.get("leverage", 1.0))[0],
-            "href": f"/bot/{v['slug']}", "onclick": None,
-            "_pace_legacy": _annualised(slug)["monthly"], "_dd_legacy": -v["max_drawdown_pct"]})
+            "href": f"/bot/{v['slug']}", "onclick": None})
     try:
         snap = sp.snapshot()
         if snap["n_bots"] > 0:
             er = sp.equity_rows()
-            pace, pbasis = _honest_pace(None, er)
             rows.append({
                 "name": "👤 Steven's Portfolio", "accent": STEVEN_COL,
-                "ret": snap["return_pct"], "ret_age": _track_age_days(er), "ret_basis": "paper",
-                "pace": pace, "pbasis": pbasis,
+                "ret": snap["return_pct"], "ret_age": _track_age_days(er),
+                "ann": _ann_windows(er), "mcagr": None,
                 "sharpe": _sharpe_from_rows(er),
-                "dd": (_max_dd_pct(er) if PNL_NORMALISED and len(er) >= 2 else snap["drawdown_pct"]),
-                "sw": None, "href": None, "onclick": "showTab('mine')",
-                "_pace_legacy": _ann_windows(er)["mo"] if len(er) >= 2 else None,
-                "_dd_legacy": snap["drawdown_pct"]})
+                "dd": (_max_dd_pct(er) if len(er) >= 2 else snap["drawdown_pct"]),
+                "sw": None, "href": None, "onclick": "showTab('mine')"})
     except Exception:
         pass
+    return rows
 
-    # Normalised: sort by RETURN (an honest same-basis column) so a few days of
-    # linear-annualised noise can't top the board. Legacy: the old pace sort.
-    if PNL_NORMALISED:
-        rows.sort(key=lambda r: -r["ret"])
-    else:
-        for r in rows:
-            r["pace"], r["dd"] = r["_pace_legacy"], r["_dd_legacy"]
-        rows.sort(key=lambda r: (r["pace"] is None, -(r["pace"] or 0)))
 
-    def _dv(v):  # numeric data-v (empty string sorts last in both directions)
-        return "" if v is None else f"{v:.4f}"
+def _dv(v) -> str:  # numeric data-v for the sortable tables (empty sorts last)
+    return "" if v is None else f"{v:.4f}"
 
-    def _sub(txt):  # small grey sub-line under a cell value
+
+def _annual_td(v) -> str:
+    """One annualised <td>: tappable (opens the explainer), coloured, sortable."""
+    if v is None:
+        return ("<td data-v='' onclick='openAnn(event)' style='padding:9px 5px;text-align:right;"
+                "color:#6b7280;cursor:pointer'>—</td>")
+    c = "#22c55e" if v >= 0 else "#ef4444"
+    return (f"<td data-v='{v:.4f}' onclick='openAnn(event)' style='padding:9px 5px;text-align:right;"
+            f"color:{c};font-weight:700;cursor:pointer'>{v:+,.0f}%/yr</td>")
+
+
+def _leaderboard_tab() -> str:
+    """🏆 Board — EVERYTHING head-to-head in one sortable table: the 3 Freyr
+    ensembles, every specialist, the farm survivors, and Steven's portfolio. Columns:
+    Return · 1w/1mo/1y linear annualised (from the PAPER track — tap a cell for the
+    calc) · Model CAGR (backtest, a separate lens) · Sharpe · Max DD · Switch. All
+    lenses visible (Steven, 2026-06-11). Default sort = return, highest first."""
+    rows = _board_rows()
+    rows.sort(key=lambda r: -r["ret"])
+
+    def _sub(txt):
         return f"<div style='color:#6b7280;font-size:9.5px;font-weight:400;margin-top:1px'>{txt}</div>"
 
     trs = []
     for i, r in enumerate(rows, 1):
         rc = "#22c55e" if r["ret"] >= 0 else "#ef4444"
-        pacev = r["pace"]
-        pacec = "#6b7280" if pacev is None else ("#22c55e" if pacev >= 0 else "#ef4444")
-        pace_txt = "—" if pacev is None else f"{pacev:+,.0f}%/yr"
+        a = r["ann"]
+        mc = r["mcagr"]
+        mc_txt = "—" if mc is None else f"{mc:+,.0f}%/yr"
+        mcc = "#6b7280" if mc is None else ("#22c55e" if mc >= 0 else "#ef4444")
         sh = r["sharpe"]
         sh_txt = "—" if sh is None else f"{sh:.2f}"
         sw = r["sw"]
@@ -2812,15 +2796,15 @@ def _leaderboard_tab() -> str:
         swc = "#6b7280" if sw is None else _switch_color(sw)
         nav = (f"onclick=\"location.href='{r['href']}'\"" if r["href"]
                else (f"onclick=\"{r['onclick']}\"" if r["onclick"] else ""))
-        ret_sub = (_sub(f"{_age_str(r.get('ret_age'))} {r.get('ret_basis','')}") if PNL_NORMALISED else "")
-        pace_sub = (_sub(r.get("pbasis", "")) if PNL_NORMALISED and r.get("pbasis") else "")
+        ret_sub = _sub(f"{_age_str(r.get('ret_age'))} paper")
         trs.append(
             f"<tr {nav} style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td style='padding:9px 5px;width:20px;color:#6b7280;font-weight:700'><span class='rk'>{i}</span></td>"
             f"<td data-v=\"{html_escape(r['name'])}\" style='padding:9px 7px;border-left:3px solid {r['accent']}'>"
             f"<span style='font-weight:600;font-size:13px'>{r['name']}</span></td>"
             f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%{ret_sub}</td>"
-            f"<td data-v='{_dv(pacev)}' style='padding:9px 5px;text-align:right;color:{pacec};font-weight:700'>{pace_txt}{pace_sub}</td>"
+            + _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
+            + f"<td data-v='{_dv(mc)}' style='padding:9px 5px;text-align:right;color:{mcc}'>{mc_txt}</td>"
             f"<td data-v='{_dv(sh)}' style='padding:9px 5px;text-align:right'>{sh_txt}</td>"
             f"<td data-v='{_dv(r['dd'])}' style='padding:9px 5px;text-align:right'>{r['dd']:.1f}%</td>"
             f"<td data-v='{_dv(sw)}' style='padding:9px 5px;text-align:right;color:{swc}'>{sw_txt}</td>"
@@ -2831,16 +2815,16 @@ def _leaderboard_tab() -> str:
                 f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
                 f"{label}<span style='color:#475569'> ⇅</span></th>")
     head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
-            + _th("Name", 1, "left", False) + _th("Return", 2) + _th("Pace", 3)
-            + _th("Sharpe", 4) + _th("Max DD", 5) + _th("Switch", 6) + "</tr>")
+            + _th("Name", 1, "left", False) + _th("Return", 2)
+            + _th("1w·ann", 3) + _th("1mo·ann", 4) + _th("1y·ann", 5)
+            + _th("Model CAGR", 6) + _th("Sharpe", 7) + _th("Max DD", 8) + _th("Switch", 9) + "</tr>")
     n = len(rows)
-    legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees). "
-              "The small line under each return is its <b>track age + basis</b> — a 2-day paper number "
-              "isn't comparable to a months-old one. <b>Pace</b> = model CAGR where a backtest exists, "
-              "else a geometric paper CAGR once a track clears 21 days (younger = <i>building</i>, never "
-              "a few days blown up to a year). Max DD = worst peak-to-trough.</span>"
-              if PNL_NORMALISED else
-              "<span style='color:#6b7280'>Pace mixes bases: Freyr = model-track CAGR, survivors = 30-day paper pace.</span>")
+    legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees) — tap any header to re-sort. "
+              "<b>1w / 1mo / 1y · ann</b> = the realised return over that window <b>linearly annualised</b> (× 365/elapsed) "
+              "from the <b>paper</b> deployment — tap a cell for the calc. They run hot on young tracks <i>on purpose</i>: "
+              "read them as a relative ranking + the shape across windows, not a forecast. <b>Model CAGR</b> is the "
+              "backtest lens, kept separate (Freyr only; assumes always-on, so not canonical for a dispatcher). "
+              "Max DD = worst peak-to-trough.</span>")
     return (
         "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
         f"Everyone head-to-head — {n} contenders: Freyr ensembles &amp; specialists, farm survivors, and your picks. "
