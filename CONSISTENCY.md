@@ -1,5 +1,7 @@
 # Cross-surface Consistency Plan
 
+> ⚠️ **SUPERSEDED — options-era doc.** This plan targets two retired surfaces (a Streamlit `dashboard_ui.py` and a React `mobile-app/`) that no longer exist; the current product is a single 6-tab server-rendered HTML app in `api.py`. Read **[`CONTEXT.md`](CONTEXT.md)**. Kept only as a `legacy_options/` reference.
+
 The BTC Wheel Bot has two user-facing surfaces:
 1. **Dashboard** — Streamlit (`dashboard_ui.py`), runs at `localhost:8501`,
    keyboard-and-mouse, dense data tables and analytical depth.

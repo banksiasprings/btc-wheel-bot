@@ -1,5 +1,7 @@
 # Cloud Migration Plan
 
+> ⚠️ **SUPERSEDED — options-era doc.** This plan was written for the retired Deribit options put-wheel system (now in `legacy_options/`). The project pivoted 2026-05-28 to a paper bot farm and is now the **Freyr** dashboard host. Read **[`CONTEXT.md`](CONTEXT.md)** for the current architecture. Kept only as a `legacy_options/` reference.
+
 When you move from "iMac at home with caffeinate" to "always-on cloud
 infrastructure," several things have to change at the same time. This doc
 captures the order, the minimum bar to clear before flipping each switch,

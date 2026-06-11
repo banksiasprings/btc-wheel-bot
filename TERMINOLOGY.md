@@ -1,5 +1,7 @@
 # Cross-surface Terminology
 
+> ⚠️ **SUPERSEDED — options-era doc.** This vocabulary (put/call/strike/DTE/Δ, Streamlit dashboard, React PWA) is from the retired options system and its retired Streamlit/React surfaces. The current widget is server-rendered HTML in `api.py` with a different vocabulary (Books, Mine, books-union, brackets, Freyr ensembles/specialists, testnet card). Read **[`CONTEXT.md`](CONTEXT.md)**. Kept only as a `legacy_options/` reference.
+
 Single source of truth for the words used across the dashboard, mobile
 PWA, README, OPERATIONS, CLOUD_MIGRATION, NIGHT_LOG, schedule prompts,
 and Telegram notifier copy. Pick one term per concept, use it

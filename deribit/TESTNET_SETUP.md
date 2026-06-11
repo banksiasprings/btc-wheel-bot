@@ -1,5 +1,7 @@
 # Deribit Testnet Setup Guide
 
+> ⚠️ **SUPERSEDED — options-era doc.** This covers the retired Deribit **options** testnet (now in `legacy_options/`). The "Testnet" tab in the current dashboard is **Freyr's Hyperliquid testnet** account, written by Freyr and read read-only here — *not* Deribit. Read **[`../CONTEXT.md`](../CONTEXT.md)**. Kept only as a `legacy_options/` reference.
+
 This guide walks you through connecting the BTC Wheel Bot to
 [test.deribit.com](https://test.deribit.com) so that real API orders are
 placed with **fake BTC** — the safest possible validation before going live.

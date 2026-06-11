@@ -12,6 +12,8 @@ description: >
 
 # BTC Wheel Bot — Developer Guide
 
+> ⚠️ **SUPERSEDED — options-era doc.** This guide describes the retired Deribit options put-wheel (now in `legacy_options/`). The project pivoted 2026-05-28 to a paper bot farm and is now the **Freyr** dashboard host. Read **[`CONTEXT.md`](CONTEXT.md)** for the current architecture. (A newer, accurate btc-wheel-bot skill supersedes this file — see CONTEXT.)
+
 ## Project location
 ```
 ~/Documents/btc-wheel-bot/

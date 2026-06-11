@@ -1,5 +1,7 @@
 # Strategy Improvements Log
 
+> ⚠️ **SUPERSEDED — options-era doc.** Every entry below tunes the retired options put-wheel (IV-rank → delta, strike laddering, `config.yaml` options levers now in `legacy_options/`). The project pivoted 2026-05-28; read **[`CONTEXT.md`](CONTEXT.md)** for the current architecture. Kept only as a `legacy_options/` reference.
+
 ## Improvement #1 — Increase Trade Frequency (2026-04-23)
 
 **Goal:** Target Deribit weekly expiries to roughly double trade frequency.

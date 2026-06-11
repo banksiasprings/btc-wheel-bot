@@ -1,5 +1,7 @@
 # btc-wheel-bot
 
+> ⚠️ **SUPERSEDED — options-era doc.** This README describes the retired Deribit options put-wheel system (now in `legacy_options/`). The project pivoted 2026-05-28 to a paper bot farm and is now the **Freyr** dashboard host. Read **[`CONTEXT.md`](CONTEXT.md)** for the current architecture. Kept only as a `legacy_options/` reference.
+
 > ⚠️ **Risk Disclaimer:** This software is for educational purposes only. Bitcoin options trading involves substantial risk of loss. Never trade with capital you cannot afford to lose. This is not financial advice.
 
 A modular Python bot for a Bitcoin options **wheel-strategy** (premium-collection) on Deribit. Sells ~0.20–0.30 delta OTM puts (or calls) to harvest theta/vega decay. Alternates put/call each cycle to stay roughly delta-neutral.

@@ -1,5 +1,7 @@
 # Operations Runbook
 
+> ⚠️ **SUPERSEDED — options-era doc.** This runbook covers the retired Deribit options put-wheel system (now in `legacy_options/`). The project pivoted 2026-05-28 to a paper bot farm and is now the **Freyr** dashboard host. Read **[`CONTEXT.md`](CONTEXT.md)** for current operations. Kept only as a `legacy_options/` reference.
+
 How to run, monitor, and recover this bot. Written 2026-05-01 after the
 audit + the autonomous overnight session that hardened the capital-efficiency
 plumbing.
