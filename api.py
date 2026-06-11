@@ -1681,8 +1681,17 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir", "vali"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "dispatch_legacy", "dispatch_momentum", "dispatch_mtf", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir", "vali"]
 FREYR_META = {
+    # ── Performance-driven DISPATCHER portfolios (BSF Solar-Dispatch pattern applied
+    # to book selection) — competing variants that allocate the SAME 12-book universe
+    # by a swappable book_perf→{book:weight} policy, run through v0.1.1's exact survival
+    # machinery (walk-forward, vol-targeted to 12%, −30%/−35% breakers). The leaderboard
+    # measures SELECTION skill, not leverage. dispatch_legacy is the hand-tuned control
+    # the two performance policies must beat. Headline = full-history backtest CAGR/Sharpe.
+    "dispatch_legacy":  ("🎛️", "Dispatcher · hand-tuned (control)", "#64748b", "Legacy dispatcher · the CONTROL arm — passthrough of Freyr's current regime-gated inverse-vol allocator sleeves, run through the uniform dispatcher harness so the two performance policies race it apples-to-apples · the hand-tuned selection is the one to beat (backtest CAGR +15.5% / Sharpe 1.31 / maxDD −21%, 9/12 books deployed) · every book carries a why-flat reason string (dormant ≠ ignored) · NOT the production cron — v0.1.1 stays canonical"),
+    "dispatch_momentum":("🎛️", "Dispatcher · 1d momentum", "#f472b6", "Pure-momentum dispatcher · deploys a book while its most-recent ACTIVE-day INTENDED return > 0 (BSF P1: the un-throttled edge, not the risk-overlay-clamped realised contribution) · BSF-gated — level dead-band + 2-bar activate sustain (slow-to-add) + immediate flat on DD-disarm/stale (fast-to-cut) + flat-on-unknown LOCKOUT · single-timeframe = whippy: backtest CAGR +10.3% / Sharpe 1.02 / maxDD −21% (loses to hand-tuned — the naïve winner-chase underperforms, as the Pareto study predicted)"),
+    "dispatch_mtf":     ("🎛️", "Dispatcher · multi-TF agreement", "#22d3ee", "Multi-timeframe-agreement dispatcher · deploys only when a book's 1d AND 1w AND 1m intended active returns ALL agree (>0) — the timeframe filter that kills momentum's whipsaw · most conservative (only ~2/12 books deploy) → lowest CAGR but the TIGHTEST drawdown: backtest CAGR +8.0% / Sharpe 1.07 / maxDD −11.9% (best DD of the three) · the survivability-first selection · same BSF safety layer as the momentum policy"),
     # Twelfth specialist-library bot — FIRST member of the new 🌐 Cross-asset-lead bracket,
     # and the SECOND DATA-DISCOVERED specialist (Phase 2 Finding B). Card framing: the
     # major-leads-the-alt lead, the NON-bull regime correction, and the self-retiring decay.
