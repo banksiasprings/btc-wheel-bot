@@ -1868,6 +1868,34 @@ def book_perf(book: str = "", mode: str = "", tf: str = ""):
     return {"available": True, "as_of": prof.get("as_of"), "book": out}
 
 
+# ── Dispatcher league vs Mine — the success criterion for the dispatcher layer ──────
+# Steven's bar: a performance-driven dispatcher must BEAT *Mine* (his manual portfolio,
+# the lazy-human floor) or it hasn't earned its keep. Freyr's dispatchers.cull writes
+# this leaderboard (3 dispatchers + v0.1.x ensembles + Mine, on a common forward
+# normalised basis) to paper/dispatcher_league.json each tick; we serve it raw. Mine is
+# MANUAL FOREVER and never culled — it's the benchmark, not a competitor to automate.
+FREYR_LEAGUE = FREYR_SNAP.parent / "dispatcher_league.json"
+_LEAGUE_CACHE: dict = {}
+
+
+@app.get("/api/dispatcher_league", include_in_schema=False)
+def dispatcher_league():
+    """Freyr's dispatcher leaderboard vs Mine + the 'earned its keep' verdict."""
+    try:
+        mtime = FREYR_LEAGUE.stat().st_mtime
+    except OSError:
+        return {"available": False, "reason": "no league yet — dispatchers not ticked"}
+    cached = _LEAGUE_CACHE.get("l")
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        lb = json.loads(FREYR_LEAGUE.read_text())
+    except Exception as e:
+        return {"available": False, "reason": f"unreadable league: {e}"}
+    _LEAGUE_CACHE["l"] = (mtime, lb)
+    return lb
+
+
 def _variant_by_slug(slug: str) -> dict | None:
     for v in (_load() or {}).get("variants", []):
         if v.get("slug") == slug:
