@@ -3368,6 +3368,9 @@ def _all_entities() -> list[dict]:
             "type": pname, "tcol": accent, "group": "Ensemble" if ens else "Specialist",
             "sub": "portfolio of 12 books" if ens else "standalone specialist",
             "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ann": _ann_windows(prow),
+            # ensembles/specialists have no Freyr per-book profile → actual windows off
+            # their own deployment curve (one clock, so active == whole here).
+            "win_ao": _perf_from_rows(prow), "win_wc": _perf_from_rows(prow),
             "mcagr": p.get("cagr", 0.0) * 100, "age": _track_age_days(prow),
             # specialists ARE a single gated book → carry their reason badge; ensembles
             # are portfolios (their dispatch rationale lives on the Portfolios card).
@@ -3380,6 +3383,11 @@ def _all_entities() -> list[dict]:
             "type": b["role"], "tcol": b["rcol"], "group": "Book",
             "sub": (f"ensemble book · in {refs}" if refs else "ensemble book"),
             "ret": b["paper_ret"], "ann": _ann_windows(b["paper_rows"]),
+            # the 12 internal books carry Freyr's TWO-clock aggregator profile —
+            # the source of truth for their actual window returns (active vs whole).
+            "book_key": b["key"],
+            "win_ao": _perf_from_book(b["key"], "active_only"),
+            "win_wc": _perf_from_book(b["key"], "whole_clock"),
             "mcagr": b["mcagr"], "age": _track_age_days(b["paper_rows"]),
             "reason": b.get("reason"),     # why-flat badge (observability fix)
             "href": None, "onclick": f"openBook('{b['key']}')"})
@@ -3392,6 +3400,7 @@ def _all_entities() -> list[dict]:
             "type": blab or TAB_LABELS.get(tab, tab), "tcol": bcol or TAB_COLORS.get(tab, "#64748b"),
             "group": "Farm", "sub": "farm bot",
             "ret": v.get("return_pct", 0.0), "ann": _ann_windows(er),
+            "win_ao": _perf_from_rows(er), "win_wc": _perf_from_rows(er),
             "mcagr": None, "age": _track_age_days(er),
             "href": f"/bot/{slug}", "onclick": None})
     return ents
@@ -3399,9 +3408,12 @@ def _all_entities() -> list[dict]:
 
 def _union_table() -> str:
     """ONE sortable union table of every entity (ensembles + specialists + internal
-    books + every farm bot) as a first-class row: paper return, 1w/1mo/1y linear
-    annualised (paper, tap a cell for the calc), Model CAGR (backtest, separate), an
-    Add-to-Mine toggle, and a tap-through to its detail. Sort any column."""
+    books + every farm bot) as a first-class row: paper return, 1d/1w/1m/6m/1y ACTUAL
+    realised window returns (MULTI_WINDOW_COLS — the 12 internal books from Freyr's
+    aggregator in two clocks via the active-only/whole-clock toggle, everything else
+    off its own deployment curve, '—' where the track is younger than the window),
+    Model CAGR (backtest, separate), an Add-to-Mine toggle, and a tap-through to
+    detail. MULTI_WINDOW_COLS=0 restores the 1w/1mo/1y linear columns. Sort any column."""
     ents = _all_entities()
     if not ents:
         return "<div style='color:#6b7280;font-size:13px;padding:14px'>No entities loaded.</div>"
@@ -3421,6 +3433,11 @@ def _union_table() -> str:
         mc = e["mcagr"]
         mc_txt = "—" if mc is None else f"{mc:+,.0f}%/yr"
         mcc = "#6b7280" if mc is None else ("#22c55e" if mc >= 0 else "#ef4444")
+        if MULTI_WINDOW_COLS:
+            ao, wc = e.get("win_ao") or {}, e.get("win_wc") or {}
+            win_cells = "".join(_mw_td_dual(ao.get(tf), wc.get(tf), tf, pad="8px 5px") for tf in MW_COLS)
+        else:
+            win_cells = _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
         on = e["ukey"] in picked
         nav = (f"location.href='{e['href']}'" if e["href"] else (e["onclick"] or ""))
         toggle = (
@@ -3439,7 +3456,7 @@ def _union_table() -> str:
             f"<span style='color:{e['tcol']};font-size:12.5px'>{e['emoji']} {html_escape(e['type'])}</span></td>"
             f"<td data-v='{e['ret']:.4f}' style='padding:8px 5px;text-align:right;color:{rc};font-weight:700'>{e['ret']:+,.2f}%"
             f"{_sub(_age_str(e.get('age')) + ' paper')}</td>"
-            + _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
+            + win_cells
             + f"<td data-v='{_dv(mc)}' style='padding:8px 5px;text-align:right;color:{mcc}'>{mc_txt}</td>"
             f"{toggle}</tr>")
 
@@ -3447,27 +3464,58 @@ def _union_table() -> str:
         return (f"<th onclick='sortUB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
                 f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
                 f"{label}<span style='color:#475569'> ⇅</span></th>")
-    head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
-            + _th("Name", 1, "left", False) + _th("Type", 2, "left", False)
-            + _th("Return", 3) + _th("1w·ann", 4) + _th("1mo·ann", 5) + _th("1y·ann", 6)
-            + _th("Model CAGR", 7)
-            + "<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th></tr>")
+    mcl = "Model CAGR<span style='color:#6b7280;font-weight:400'> (backtest)</span>"
+    if MULTI_WINDOW_COLS:
+        win_head = "".join(_th(MW_LABELS[tf], 4 + j) for j, tf in enumerate(MW_COLS))
+        head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+                + _th("Name", 1, "left", False) + _th("Type", 2, "left", False)
+                + _th("Return", 3) + win_head + _th(mcl, 9)
+                + "<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th></tr>")
+        min_w = "470px"
+    else:
+        head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+                + _th("Name", 1, "left", False) + _th("Type", 2, "left", False)
+                + _th("Return", 3) + _th("1w·ann", 4) + _th("1mo·ann", 5) + _th("1y·ann", 6)
+                + _th("Model CAGR", 7)
+                + "<th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th></tr>")
+        min_w = "360px"
     canon, _ = _freyr_load(BOOK_CANON)
     raw = (canon or {}).get("books", [])
     modal = _book_modal_html(sorted(raw, key=lambda x: x.get("realized_weight", 0), reverse=True),
                              (canon or {}).get("date", "")) if raw else ""
     gline = " · ".join(f"{n} {g.lower()}{'s' if n != 1 else ''}" for g, n in groups.items())
-    intro = (
-        "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
-        f"<b>{len(ents)} books &amp; bots</b>, every one a first-class entity you can drop into <b>Mine</b> in any "
-        f"combination ({gline}). "
-        "<span style='color:#6b7280'>Return + 1w/1mo/1y are the <b>paper deployment</b> (tap an annualised cell for the "
-        "calc — they run hot on young tracks on purpose). <b>Model CAGR</b> is the backtest lens, separate. "
-        "Tap a column to sort, a row to drill in, <b style='color:#eab308'>+ Mine</b> to add it to your portfolio.</span></div>")
+    if MULTI_WINDOW_COLS:
+        as_of = (_book_perf_load() or {}).get("as_of", "")
+        toggle_ui = (
+            "<div style='display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 8px'>"
+            "<button id='mwToggle' onclick='togglePerfMode()' style='background:#11203a;border:1px solid #1d3a66;"
+            "color:#cbd5e1;border-radius:8px;padding:5px 11px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer'>"
+            "Clock: active-only ⇄</button>"
+            "<span style='color:#6b7280;font-size:10.5px'>active-only = bars a book actually held · whole-clock = every calendar bar "
+            "(parked = 0). Differs only for the 12 internal books.</span></div>")
+        intro = (
+            "<div style='color:#8b95a5;font-size:12px;margin:2px 0 6px'>"
+            f"<b>{len(ents)} books &amp; bots</b>, every one a first-class entity you can drop into <b>Mine</b> in any "
+            f"combination ({gline}). "
+            "<span style='color:#6b7280'><b>1d/1w/1m/6m/1y</b> = the <b>actual realised return</b> over each trailing window "
+            "(compounded, net, <b>not annualised</b>; tap a cell for the definition). The 12 internal books read from Freyr's "
+            f"multi-timeframe aggregator{(' (as of ' + as_of + ')') if as_of else ''}; everything else off its own deployment curve. "
+            "<b>—</b> = track younger than the window (no projection); <b style='color:#f59e0b'>thin</b> = few bars, shown raw. "
+            "<b>Model CAGR (backtest)</b> is a separate lens. "
+            "Tap a column to sort, a row to drill in, <b style='color:#eab308'>+ Mine</b> to add it.</span></div>"
+            + toggle_ui)
+    else:
+        intro = (
+            "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
+            f"<b>{len(ents)} books &amp; bots</b>, every one a first-class entity you can drop into <b>Mine</b> in any "
+            f"combination ({gline}). "
+            "<span style='color:#6b7280'>Return + 1w/1mo/1y are the <b>paper deployment</b> (tap an annualised cell for the "
+            "calc — they run hot on young tracks on purpose). <b>Model CAGR</b> is the backtest lens, separate. "
+            "Tap a column to sort, a row to drill in, <b style='color:#eab308'>+ Mine</b> to add it to your portfolio.</span></div>")
     table = (
         "<div style='background:#10151e;border:1px solid #1d3a66;border-radius:14px;padding:6px 8px 8px'>"
         "<div style='overflow-x:auto;-webkit-overflow-scrolling:touch'>"
-        "<table id='ubtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:360px'>"
+        f"<table id='ubtbl' style='width:100%;border-collapse:collapse;font-size:13px;min-width:{min_w}'>"
         f"<thead>{head}</thead><tbody>{''.join(trs)}</tbody></table></div></div>"
         "<script>(function(){var dir={};window.sortUB=function(c,num){"
         "var tb=document.querySelector('#ubtbl tbody');var rs=[].slice.call(tb.rows);"
@@ -3476,7 +3524,15 @@ def _union_table() -> str:
         "var ea=(xa===''||xa==null),eb=(xb===''||xb==null);if(ea&&eb)return 0;if(ea)return 1;if(eb)return -1;"
         "var x=xa,y=xb;if(num){x=parseFloat(xa);y=parseFloat(xb);}else{x=(''+xa).toLowerCase();y=(''+xb).toLowerCase();}"
         "return x<y?d:x>y?-d:0;});rs.forEach(function(r,i){tb.appendChild(r);"
-        "var rk=r.cells[0].querySelector('.ubrk');if(rk)rk.textContent=(i+1);});};})();</script>")
+        "var rk=r.cells[0].querySelector('.ubrk');if(rk)rk.textContent=(i+1);});};"
+        "window.ubMode='ao';window.togglePerfMode=function(){var wc=(window.ubMode==='ao');window.ubMode=wc?'wc':'ao';"
+        "var b=document.getElementById('mwToggle');if(b)b.textContent=(wc?'Clock: whole-clock ⇄':'Clock: active-only ⇄');"
+        "[].forEach.call(document.querySelectorAll('#ubtbl .mwc'),function(td){"
+        "var h=wc?td.getAttribute('data-wc'):td.getAttribute('data-ao');"
+        "var v=wc?td.getAttribute('data-wcv'):td.getAttribute('data-aov');"
+        "var c=wc?td.getAttribute('data-wcc'):td.getAttribute('data-aoc');"
+        "var t=wc?td.getAttribute('data-wct'):td.getAttribute('data-aot');"
+        "td.innerHTML=h;td.setAttribute('data-v',v);td.style.color=c;td.setAttribute('title',t);});};})();</script>")
     return intro + table + modal
 
 
