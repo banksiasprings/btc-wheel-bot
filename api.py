@@ -3052,7 +3052,8 @@ def _board_rows() -> list[dict]:
         rows.append({
             "name": f"{emoji} Freyr {variant}", "accent": accent,
             "ret": (p.get("paper_equity", 1.0) - 1) * 100, "ret_age": age,
-            "ann": _ann_windows(prow), "mcagr": p.get("cagr", 0.0) * 100,
+            "ann": _ann_windows(prow), "win": _perf_from_rows(prow),
+            "mcagr": p.get("cagr", 0.0) * 100,
             "sharpe": p.get("sharpe"),
             "dd": (_max_dd_pct(mrow) if mrow else p.get("current_dd", 0.0) * 100),
             "sw": _switch_cost(p.get("leverage", 1.0))[0],
@@ -3066,7 +3067,7 @@ def _board_rows() -> list[dict]:
         rows.append({
             "name": f"{bem} {v['name']}".strip(), "accent": bcol,
             "ret": v["return_pct"], "ret_age": _track_age_days(er),
-            "ann": _ann_windows(er), "mcagr": None,
+            "ann": _ann_windows(er), "win": _perf_from_rows(er), "mcagr": None,
             "sharpe": _sharpe_from_rows(er), "dd": -v["max_drawdown_pct"],
             "sw": _switch_cost(v.get("leverage", 1.0))[0],
             "href": f"/bot/{v['slug']}", "onclick": None})
@@ -3077,7 +3078,7 @@ def _board_rows() -> list[dict]:
             rows.append({
                 "name": "👤 Steven's Portfolio", "accent": STEVEN_COL,
                 "ret": snap["return_pct"], "ret_age": _track_age_days(er),
-                "ann": _ann_windows(er), "mcagr": None,
+                "ann": _ann_windows(er), "win": _perf_from_rows(er), "mcagr": None,
                 "sharpe": _sharpe_from_rows(er),
                 "dd": (_max_dd_pct(er) if len(er) >= 2 else snap["drawdown_pct"]),
                 "sw": None, "href": None, "onclick": "showTab('mine')"})
@@ -3102,10 +3103,12 @@ def _annual_td(v) -> str:
 
 def _leaderboard_tab() -> str:
     """🏆 Board — EVERYTHING head-to-head in one sortable table: the 3 Freyr
-    ensembles, every specialist, the farm survivors, and Steven's portfolio. Columns:
-    Return · 1w/1mo/1y linear annualised (from the PAPER track — tap a cell for the
-    calc) · Model CAGR (backtest, a separate lens) · Sharpe · Max DD · Switch. All
-    lenses visible (Steven, 2026-06-11). Default sort = return, highest first."""
+    ensembles, every specialist, the farm survivors, and Steven's portfolio. Columns
+    (MULTI_WINDOW_COLS): Return · 1d/1w/1m/6m/1y ACTUAL realised window returns
+    (deployment clock, not annualised — '—' where the track is younger than the
+    window) · Model CAGR (backtest, a separate lens) · Sharpe · Max DD · Switch.
+    MULTI_WINDOW_COLS=0 restores the prior 1w/1mo/1y linear-annualised columns.
+    Default sort = return, highest first."""
     rows = _board_rows()
     rows.sort(key=lambda r: -r["ret"])
 
@@ -3127,13 +3130,18 @@ def _leaderboard_tab() -> str:
         nav = (f"onclick=\"location.href='{r['href']}'\"" if r["href"]
                else (f"onclick=\"{r['onclick']}\"" if r["onclick"] else ""))
         ret_sub = _sub(f"{_age_str(r.get('ret_age'))} paper")
+        if MULTI_WINDOW_COLS:
+            w = r.get("win") or {}
+            win_cells = "".join(_mw_td(w.get(tf), tf, "deploy") for tf in MW_COLS)
+        else:
+            win_cells = _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
         trs.append(
             f"<tr {nav} style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td style='padding:9px 5px;width:20px;color:#6b7280;font-weight:700'><span class='rk'>{i}</span></td>"
             f"<td data-v=\"{html_escape(r['name'])}\" style='padding:9px 7px;border-left:3px solid {r['accent']}'>"
             f"<span style='font-weight:600;font-size:13px'>{r['name']}</span></td>"
             f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%{ret_sub}</td>"
-            + _annual_td(a["w"]) + _annual_td(a["mo"]) + _annual_td(a["y"])
+            + win_cells
             + f"<td data-v='{_dv(mc)}' style='padding:9px 5px;text-align:right;color:{mcc}'>{mc_txt}</td>"
             f"<td data-v='{_dv(sh)}' style='padding:9px 5px;text-align:right'>{sh_txt}</td>"
             f"<td data-v='{_dv(r['dd'])}' style='padding:9px 5px;text-align:right'>{r['dd']:.1f}%</td>"
@@ -3144,17 +3152,30 @@ def _leaderboard_tab() -> str:
         return (f"<th onclick='sortLB({i},{1 if num else 0})' style='padding:7px 5px;text-align:{align};"
                 f"cursor:pointer;user-select:none;white-space:nowrap;color:#9aa4b2;font-size:11px;position:sticky;top:0;background:#10151e'>"
                 f"{label}<span style='color:#475569'> ⇅</span></th>")
-    head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
-            + _th("Name", 1, "left", False) + _th("Return", 2)
-            + _th("1w·ann", 3) + _th("1mo·ann", 4) + _th("1y·ann", 5)
-            + _th("Model CAGR", 6) + _th("Sharpe", 7) + _th("Max DD", 8) + _th("Switch", 9) + "</tr>")
+    mcl = "Model CAGR<span style='color:#6b7280;font-weight:400'> (backtest)</span>"
+    if MULTI_WINDOW_COLS:
+        win_head = "".join(_th(MW_LABELS[tf], 3 + j) for j, tf in enumerate(MW_COLS))
+        head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+                + _th("Name", 1, "left", False) + _th("Return", 2) + win_head
+                + _th(mcl, 8) + _th("Sharpe", 9) + _th("Max DD", 10) + _th("Switch", 11) + "</tr>")
+        legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees) — tap any header to re-sort. "
+                  "<b>1d / 1w / 1m / 6m / 1y</b> = the <b>actual realised return</b> over that trailing window "
+                  "(compounded, net, <b>not annualised</b>) — tap a cell for the full definition. "
+                  "<b>—</b> = the track isn't that old yet (no projection); <b style='color:#f59e0b'>thin</b> = few bars, shown raw. "
+                  "<b>Model CAGR (backtest)</b> is a separate lens (assumes always-on, so not canonical for a dispatcher). "
+                  "Max DD = worst peak-to-trough.</span>")
+    else:
+        head = ("<tr><th style='padding:7px 5px;position:sticky;top:0;background:#10151e'></th>"
+                + _th("Name", 1, "left", False) + _th("Return", 2)
+                + _th("1w·ann", 3) + _th("1mo·ann", 4) + _th("1y·ann", 5)
+                + _th("Model CAGR", 6) + _th("Sharpe", 7) + _th("Max DD", 8) + _th("Switch", 9) + "</tr>")
+        legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees) — tap any header to re-sort. "
+                  "<b>1w / 1mo / 1y · ann</b> = the realised return over that window <b>linearly annualised</b> (× 365/elapsed) "
+                  "from the <b>paper</b> deployment — tap a cell for the calc. They run hot on young tracks <i>on purpose</i>: "
+                  "read them as a relative ranking + the shape across windows, not a forecast. <b>Model CAGR</b> is the "
+                  "backtest lens, kept separate (Freyr only; assumes always-on, so not canonical for a dispatcher). "
+                  "Max DD = worst peak-to-trough.</span>")
     n = len(rows)
-    legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees) — tap any header to re-sort. "
-              "<b>1w / 1mo / 1y · ann</b> = the realised return over that window <b>linearly annualised</b> (× 365/elapsed) "
-              "from the <b>paper</b> deployment — tap a cell for the calc. They run hot on young tracks <i>on purpose</i>: "
-              "read them as a relative ranking + the shape across windows, not a forecast. <b>Model CAGR</b> is the "
-              "backtest lens, kept separate (Freyr only; assumes always-on, so not canonical for a dispatcher). "
-              "Max DD = worst peak-to-trough.</span>")
     return (
         "<div style='color:#8b95a5;font-size:12px;margin:2px 0 8px'>"
         f"Everyone head-to-head — {n} contenders: Freyr ensembles &amp; specialists, farm survivors, and your picks. "
@@ -3684,6 +3705,7 @@ function bookMine(bot,name,on){
   {nav}
   {_switch_modal_html()}
   {_ann_modal_html()}
+  {_perf_modal_html()}
   {tab_js}
 </body></html>"""
 
@@ -4080,6 +4102,7 @@ def _freyr_detail_page(variant: str) -> str:
   <p style="color:#6b7280;font-size:12px;margin-top:16px">Paper (pretend money). Refresh on the home page.</p>
   {_switch_modal_html()}
   {_ann_modal_html()}
+  {_perf_modal_html()}
 </body></html>"""
 
 
@@ -4099,4 +4122,5 @@ def _testnet_detail_page() -> str:
   {_testnet_tab()}
   {_switch_modal_html()}
   {_ann_modal_html()}
+  {_perf_modal_html()}
 </body></html>"""
