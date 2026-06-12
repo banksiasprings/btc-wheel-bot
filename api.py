@@ -2456,12 +2456,16 @@ def _freyr_card(variant: str) -> str:
 
     track = [pt["equity"] for pt in (snap.get("model_track") or [])]
     spark = _spark_pair(track, days=30)
-    # Annualise the PAPER deployment track (un-suppressed linear) and show Model CAGR
-    # as a separate lens — the dispatcher-vs-always-on pair (Steven, 2026-06-11).
+    # ACTUAL realised window returns off the PAPER deployment track + Model CAGR as a
+    # separate lens (MULTI_WINDOW_COLS; reverses the 2026-06-11 linear pace — Steven).
     prow = [(datetime.fromisoformat(pt["date"]), pt["equity"])
             for pt in (snap.get("paper_track") or []) if pt.get("date")]
-    fc = _ann_strip(_ann_windows(prow), basis="paper deployment",
-                    model_cagr=p.get("cagr", 0.0) * 100)
+    if MULTI_WINDOW_COLS:
+        fc = _mw_strip(_perf_from_rows(prow), mode="deploy",
+                       model_cagr=p.get("cagr", 0.0) * 100, as_of=date)
+    else:
+        fc = _ann_strip(_ann_windows(prow), basis="paper deployment",
+                        model_cagr=p.get("cagr", 0.0) * 100)
     sw = _switch_chip(lev, name=f"Freyr {variant}", last_measured=date)
     sign = "+" if ret >= 0 else ""
     # The big % is the PAPER track (days old). Show its age + the model CAGR so a flat
@@ -2827,7 +2831,11 @@ def _steven_panel(snap: dict, meta: list) -> str:
     rc = "#22c55e" if ret >= 0 else "#ef4444"
     ddc = "#22c55e" if dd > -5 else ("#f59e0b" if dd > -15 else "#ef4444")
     srows = sp.equity_rows()
-    pace = _ann_strip(_ann_windows(srows), basis="your live track")
+    if MULTI_WINDOW_COLS:
+        # actual realised windows off your live NAV (no Model CAGR — Mine is live-only)
+        pace = _mw_strip(_perf_from_rows(srows), mode="deploy", model_cagr=None)
+    else:
+        pace = _ann_strip(_ann_windows(srows), basis="your live track")
     age_tag = (f"<div style='color:#6b7280;font-size:10.5px;margin-top:1px'>{_age_str(_track_age_days(srows))} paper</div>"
                if PNL_NORMALISED else "")
     summary = (
