@@ -2074,6 +2074,216 @@ def _reason_badge(reason: dict | None) -> str:
             f"font-weight:800;letter-spacing:.2px;vertical-align:middle;white-space:nowrap'>{label}</span>")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# MULTI-WINDOW ACTUAL RETURNS (MULTI_WINDOW_COLS) — 2026-06-12
+# ──────────────────────────────────────────────────────────────────────────────
+# Steven reversed the 2026-06-11 linear-annualisation call. The per-window columns
+# must now show the REAL realised return over each trailing window — never a short
+# window scaled ×365/elapsed. Two sources, one shape:
+#
+#   • the 12 internal ensemble books → Freyr's multi-timeframe aggregator
+#     (paper/book_performance_profiles.json via _book_perf_load), which carries the
+#     ACTUAL compounded return per window in TWO clocks (active_only vs whole_clock)
+#     plus a sample size `n`. We read it verbatim — it is the source of truth.
+#   • everything else (ensembles, specialists, farm bots, Mine) has no book profile,
+#     so we compute the actual trailing-window compounded return straight off its
+#     own equity curve — and show "—" for any window LONGER than the track's age.
+#     No projection: a 2-day track shows 1d (and 1w once it reaches 7d), never a
+#     1m/6m/1y number invented from 2 days.
+#
+# Model CAGR stays a SEPARATE, clearly-labelled lens (one view, not THE answer).
+# Sample sizes below significance get a "thin" badge but are NEVER hidden
+# (feedback_show_raw_signals). MULTI_WINDOW_COLS=0 restores the prior linear columns
+# (the build-safety valve, mirroring PNL_NORMALISED).
+MULTI_WINDOW_COLS = os.getenv("MULTI_WINDOW_COLS", "1") != "0"
+MW_COLS = ["1d", "1w", "1m", "6m", "1y"]            # the five window columns, in order
+MW_LABELS = {"1d": "1d", "1w": "1w", "1m": "1m", "6m": "6m", "1y": "1y"}
+WINDOW_DAYS = {"1d": 1, "1w": 7, "1m": 30, "6m": 182, "1y": 365}
+MW_THIN_N = 10                                       # < this many bars in a window ⇒ "thin"
+MW_MODE_LABEL = {"active_only": "active-only", "whole_clock": "whole-clock",
+                 "deploy": "deployment clock"}
+
+
+def _perf_from_book(book_key: str, mode: str = "active_only") -> dict:
+    """The five actual window returns for one of the 12 ensemble books, read straight
+    from Freyr's aggregator (book_performance_profiles.json). `mode` ∈ {active_only,
+    whole_clock}. Returns {tf: {ret%%, n, thin, win, dd, mode, src} | None}. None when
+    the book/window is absent, unavailable (sub-daily 1h), or has zero bars — never a
+    fabricated value."""
+    prof = _book_perf_load()
+    b = (prof or {}).get("books", {}).get(book_key) if prof else None
+    p = ((b or {}).get("profile", {}) or {}).get(mode, {}) or {}
+    out: dict = {}
+    for tf in MW_COLS:
+        d = p.get(tf) or {}
+        n = int(d.get("n") or 0)
+        if d.get("available") is False or d.get("return") is None or n == 0:
+            out[tf] = None
+        else:
+            out[tf] = {"ret": float(d["return"]) * 100.0, "n": n, "thin": n < MW_THIN_N,
+                       "win": d.get("win_rate"), "dd": d.get("max_dd"),
+                       "vol": d.get("vol"), "mode": mode, "src": "book"}
+    return out
+
+
+def _perf_from_rows(rows: list[tuple[datetime, float]]) -> dict:
+    """The five ACTUAL trailing-window compounded returns off an ascending
+    [(dt, equity)] curve — realised, net, NOT annualised. A window LONGER than the
+    track's age returns None ("—"): we never project a short track onto a longer
+    window. `n` is the number of curve points inside the window (for the thin badge).
+    This is the single 'deployment clock' for entities without a Freyr book profile."""
+    out: dict = {tf: None for tf in MW_COLS}
+    if len(rows) < 2:
+        return out
+    now_t, now_e = rows[-1]
+    age = (now_t - rows[0][0]).total_seconds() / 86400.0
+    for tf, wd in WINDOW_DAYS.items():
+        if age < wd:                       # track younger than the window → no projection
+            continue
+        cutoff = now_t - timedelta(days=wd)
+        base, n_in = None, 0
+        for t, e in rows:
+            if t <= cutoff:
+                base = (t, e)
+            else:
+                n_in += 1
+        if base is None or base[1] <= 0:
+            continue
+        out[tf] = {"ret": (now_e / base[1] - 1) * 100.0, "n": n_in, "thin": n_in < MW_THIN_N,
+                   "mode": "deploy", "src": "rows"}
+    return out
+
+
+def _mw_color(v: float) -> str:
+    return "#22c55e" if v >= 0 else "#ef4444"
+
+
+def _mw_title(tf: str, w: dict | None, mode: str) -> str:
+    """Per-cell tooltip text: window · mode · definition · sample size (or why empty)."""
+    ml = MW_MODE_LABEL.get(mode, mode)
+    if w is None:
+        return (f"{tf} window · {ml} · actual realised return (compounded, net of cost, "
+                f"NOT annualised) · — = insufficient history for a full {tf} window "
+                f"(no projection)")
+    thin = " · THIN sample (below significance) — shown raw, not hidden" if w["thin"] else ""
+    return (f"{tf} window · {ml} · actual realised return = compounded net-of-cost return "
+            f"over the trailing {tf} · NOT annualised · n={w['n']} bars{thin}")
+
+
+def _mw_td(w: dict | None, tf: str, mode: str, pad: str = "9px 5px") -> str:
+    """One sortable window <td>. data-v carries the numeric (empty ⇒ sorts last);
+    data-ao/data-wc let the Books whole-clock toggle swap modes without a refetch.
+    `w` here is the ACTIVE-mode cell; the toggle's other mode is attached by the
+    caller via _mw_td_dual."""
+    title = html_escape(_mw_title(tf, w, mode))
+    if w is None:
+        return (f"<td data-v='' onclick='openPerf(event)' title=\"{title}\" "
+                f"style='padding:{pad};text-align:right;color:#6b7280;cursor:pointer'>—</td>")
+    c = _mw_color(w["ret"])
+    badge = (" <span style='color:#f59e0b;font-size:8px;font-weight:800;vertical-align:top'>thin</span>"
+             if w["thin"] else "")
+    return (f"<td data-v='{w['ret']:.4f}' onclick='openPerf(event)' title=\"{title}\" "
+            f"style='padding:{pad};text-align:right;color:{c};font-weight:700;cursor:pointer'>"
+            f"{w['ret']:+.1f}%{badge}</td>")
+
+
+def _mw_td_dual(ao: dict | None, wc: dict | None, tf: str, pad: str = "9px 5px") -> str:
+    """A window <td> that carries BOTH clocks so the Books toggle can flip in-place.
+    Renders active-only by default; stashes whole-clock numerics in data-wc/-wcv and
+    the active values in data-ao/-aov so togglePerfMode() can swap text + sort key."""
+    title_ao = html_escape(_mw_title(tf, ao, "active_only"))
+    title_wc = html_escape(_mw_title(tf, wc, "whole_clock"))
+
+    def _disp(w):
+        if w is None:
+            return ("—", "", "#6b7280", "")
+        c = _mw_color(w["ret"])
+        badge = ("<span style='color:#f59e0b;font-size:8px;font-weight:800;vertical-align:top'> thin</span>"
+                 if w["thin"] else "")
+        return (f"{w['ret']:+.1f}%{badge}", f"{w['ret']:.4f}", c, badge)
+
+    ao_html, ao_v, ao_c, _ = _disp(ao)
+    wc_html, wc_v, wc_c, _ = _disp(wc)
+    return (f"<td class='mwc' data-v='{ao_v}' data-ao=\"{ao_html}\" data-aov='{ao_v}' "
+            f"data-aoc='{ao_c}' data-aot=\"{title_ao}\" data-wc=\"{wc_html}\" data-wcv='{wc_v}' "
+            f"data-wcc='{wc_c}' data-wct=\"{title_wc}\" onclick='openPerf(event)' title=\"{title_ao}\" "
+            f"style='padding:{pad};text-align:right;color:{ao_c};font-weight:700;cursor:pointer'>{ao_html}</td>")
+
+
+def _mw_strip(windows: dict, mode: str = "deploy", model_cagr: float | None = None,
+              as_of: str = "") -> str:
+    """Card version of the window columns: five actual-return mini-cells (1d…1y) plus
+    a separate Model CAGR (backtest) cell. Used by the Portfolios and Mine cards."""
+    def cell(label, w, tappable=True):
+        if w is None:
+            inner = "<span style='color:#6b7280;font-weight:700'>—</span>"
+            title = _mw_title(label, None, mode)
+        else:
+            c = _mw_color(w["ret"])
+            tb = (" <span style='color:#f59e0b;font-size:8px;font-weight:800;vertical-align:top'>thin</span>"
+                  if w["thin"] else "")
+            inner = f"<span style='color:{c};font-weight:700'>{w['ret']:+.1f}%{tb}</span>"
+            title = _mw_title(label, w, mode)
+        tap = " onclick='openPerf(event)'" if tappable else ""
+        cur = "cursor:pointer;" if tappable else ""
+        info = " <span style='color:#475569;font-weight:700'>ⓘ</span>" if tappable else ""
+        return (f"<div{tap} title=\"{html_escape(title)}\" style='flex:1 1 0;min-width:48px;background:#0f141c;"
+                f"border-radius:8px;padding:6px 4px;text-align:center;{cur}'>"
+                f"<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>{label}{info}</div>"
+                f"<div style='font-size:12px;margin-top:2px'>{inner}</div></div>")
+
+    if model_cagr is None:
+        mc_inner = "<span style='color:#6b7280;font-weight:700'>—</span>"
+    else:
+        mcc = _mw_color(model_cagr)
+        mc_inner = f"<span style='color:{mcc};font-weight:700'>{model_cagr:+,.0f}%/yr</span>"
+    mc_cell = ("<div title='Model CAGR (backtest) — the book/portfolio compounded to a yearly "
+               "rate from its FULL backtest history. A separate lens (assumes always-on), not THE "
+               "answer.' style='flex:1 1 0;min-width:54px;background:#0f141c;border-radius:8px;"
+               "padding:6px 4px;text-align:center'>"
+               "<div style='color:#6b7280;font-size:9px;text-transform:uppercase;letter-spacing:.2px'>Model CAGR</div>"
+               f"<div style='font-size:12px;margin-top:2px'>{mc_inner}</div></div>")
+    ml = MW_MODE_LABEL.get(mode, mode)
+    note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Actual realised return per window "
+            f"· {ml} · not annualised{(' · as of ' + as_of) if as_of else ''}</div>")
+    cells = "".join(cell(tf, windows.get(tf)) for tf in MW_COLS)
+    return note + "<div style='display:flex;gap:4px'>" + cells + mc_cell + "</div>"
+
+
+def _perf_modal_html() -> str:
+    """Shared explainer for the actual-window cells (openPerf). Spells out: real
+    realised return (not annualised), the two clocks, the thin badge, and why Model
+    CAGR is a separate lens. Tap any window cell to open it."""
+    pf = _book_perf_load() or {}
+    as_of = pf.get("as_of", "")
+    aoref = ("Book profiles as of " + as_of + ". " if as_of else "")
+    return """
+<div id="perfmodal" onclick="if(event.target===this)closePerf()" style="display:none;position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.66);overflow-y:auto;padding:18px">
+  <div style="box-sizing:border-box;width:100%;max-width:480px;margin:24px auto;background:#151a23;border-radius:16px;padding:18px 18px 22px;border:1px solid #232b39">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:6px">
+      <div style="font-size:18px;font-weight:800">Window returns — the real numbers</div>
+      <button onclick="closePerf()" style="background:#1c2230;border:none;color:#9aa4b2;font-size:20px;line-height:1;border-radius:9px;padding:4px 11px;cursor:pointer">×</button>
+    </div>
+    <div style="background:#0f141c;border-radius:10px;padding:12px 13px;margin:6px 0 12px;font-size:13px;color:#e6e6e6;line-height:1.55">
+      Each column is the <b>actual realised return</b> over that trailing window — 1d, 1w, 1m, 6m, 1y — <b>compounded, net of cost, NOT annualised</b>. A +1% week reads <b>+1%</b>, not +52%/yr.
+    </div>
+    <div style="color:#cbd5e1;font-size:12.5px;line-height:1.6;margin-bottom:10px">
+      <b style="color:#e6e6e6">Two clocks.</b> <b>Active-only</b> counts only the bars a book actually held a position — its edge <i>when switched on</i>. <b>Whole-clock</b> counts every calendar bar, scoring parked days as flat 0 — what the sleeve did on the wall clock. Toggle them on the Books tab. (They differ only for the 12 internal ensemble books, which carry Freyr's two-clock profile; ensembles, specialists and farm bots show their single deployment clock in both.)
+    </div>
+    <div style="color:#cbd5e1;font-size:12.5px;line-height:1.6;margin-bottom:10px">
+      <b style="color:#f59e0b">thin</b> = fewer than """ + str(MW_THIN_N) + """ bars in that window — below statistical significance. It is shown <b>raw, never hidden</b>; just read it as noisy. <b>—</b> = not enough history for a full window (a 2-day track has no 1-month number). We <b>never</b> project a short window up to a longer one.
+    </div>
+    <div style="background:#0f141c;border-radius:10px;padding:11px 12px;color:#cbd5e1;font-size:12.5px;line-height:1.5">
+      <b style="color:#e6e6e6">Model CAGR</b> is a <b>separate</b> column: the full backtest compounded to a yearly rate. It assumes the book is always-on, so for a regime-gated dispatcher it's <i>one lens, not the answer</i>. """ + aoref + """The window columns are the real deployment, beside it.
+    </div>
+  </div>
+</div>
+<script>
+function openPerf(ev){if(ev){ev.preventDefault();ev.stopPropagation();}document.getElementById('perfmodal').style.display='block';}
+function closePerf(){document.getElementById('perfmodal').style.display='none';}
+</script>"""
+
+
 def _ann_strip(ann: dict, basis: str = "", model_cagr: float | None = None) -> str:
     """Four mini-cells: the LINEAR annualised pace from the trailing 1w / 1mo / 1y
     (realised × 365/elapsed — tap any cell for the calc + noise caveat), plus the
