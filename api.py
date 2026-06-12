@@ -1752,6 +1752,33 @@ def _testnet_load() -> dict | None:
         return None
 
 
+def _testnet_annual(snap: dict) -> dict:
+    """Since-start P&L + simple annual-rate lenses for the testnet account.
+    ann_since = since-start return /days *365; ann_24h = 24h return *365.
+    Same 'multiply it out' comparison lens as the window columns (Steven,
+    2026-06-13) — a lens, not a forecast, and on a 3-day-old $1k faucet the
+    annual number runs VERY hot; the UI labels it as such."""
+    out = {"since_pct": None, "since_abs": None, "days": None,
+           "ann_since": None, "ann_24h": None}
+    series = snap.get("equity_series") or []
+    if len(series) >= 2:
+        try:
+            t0 = datetime.strptime(series[0][0], "%Y-%m-%dT%H:%M:%SZ")
+            t1 = datetime.strptime(series[-1][0], "%Y-%m-%dT%H:%M:%SZ")
+            v0, v1 = float(series[0][1]), float(series[-1][1])
+            days = max((t1 - t0).total_seconds() / 86400.0, 1e-6)
+            if v0 > 0 and days >= 0.25:
+                out["since_pct"] = (v1 / v0 - 1.0) * 100.0
+                out["since_abs"] = v1 - v0
+                out["days"] = days
+                out["ann_since"] = out["since_pct"] / days * 365.0
+        except Exception:
+            pass
+    if snap.get("pnl_24h_pct") is not None:
+        out["ann_24h"] = snap["pnl_24h_pct"] * 365.0
+    return out
+
+
 def _testnet_status(snap: dict | None) -> tuple[str, str, str]:
     """(emoji, label, color) for the connection chip. 🟢 fresh ok · 🟡 stale /
     slow · 🔴 no data. 'Stale' kicks in after 3 missed 60s polls."""
@@ -2566,6 +2593,10 @@ def _testnet_card() -> str:
     else:
         pc = "#22c55e" if pnl_abs >= 0 else "#ef4444"
         pnl_html = f"<span style='color:{pc}'>{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)</span>"
+        _ann = _testnet_annual(snap)
+        if _ann["ann_since"] is not None:
+            pnl_html += (f" <span style='color:#6b7280;font-size:11px'>· ≈{_ann['ann_since']:+,.0f}%/yr "
+                         f"since start (×365 lens)</span>")
 
     # equity sparkline (7d daily closes; blank until ≥2 points)
     eq_vals = [v for _, v in (snap.get("equity_spark") or [])]
@@ -3246,19 +3277,34 @@ def _testnet_tab() -> str:
     pnl_abs, pnl_pct = snap.get("pnl_24h_abs"), snap.get("pnl_24h_pct")
     fdate = snap.get("fetched_at", "")[:16].replace("T", " ")
 
-    def stat(label, value, c="#e6e6e6"):
+    def stat(label, value, c="#e6e6e6", sub=""):
+        sub_html = (f"<div style='color:#6b7280;font-size:9.5px;margin-top:1px'>{sub}</div>" if sub else "")
         return (f"<div style='background:#151a23;border-radius:10px;padding:10px 8px;text-align:center;flex:1 1 28%;min-width:90px'>"
                 f"<div style='color:#8b95a5;font-size:11px'>{label}</div>"
-                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div></div>")
+                f"<div style='font-size:16px;font-weight:700;color:{c};margin-top:2px'>{value}</div>{sub_html}</div>")
 
+    ann = _testnet_annual(snap)
     if pnl_abs is None:
-        pnl_v, pnl_c = "TBD", "#6b7280"
+        pnl_v, pnl_c, pnl_sub = "TBD", "#6b7280", ""
     else:
         pnl_c = "#22c55e" if pnl_abs >= 0 else "#ef4444"
         pnl_v = f"{pnl_abs:+,.2f} ({pnl_pct:+.2f}%)"
+        pnl_sub = (f"≈{ann['ann_24h']:+,.0f}%/yr ×365" if ann["ann_24h"] is not None else "")
+    if ann["since_pct"] is None:
+        since_v, since_c, since_sub = "TBD", "#6b7280", "building history"
+        annual_v, annual_c, annual_sub = "TBD", "#6b7280", ""
+    else:
+        since_c = "#22c55e" if ann["since_pct"] >= 0 else "#ef4444"
+        since_v = f"{ann['since_abs']:+,.2f} ({ann['since_pct']:+.2f}%)"
+        since_sub = f"{ann['days']:.1f} days of history"
+        annual_c = "#22c55e" if ann["ann_since"] >= 0 else "#ef4444"
+        annual_v = f"≈{ann['ann_since']:+,.0f}%/yr"
+        annual_sub = "since-start ×365 — lens, not a forecast"
     stats = "".join([
         stat("Portfolio (USDC)", f"${pv:,.2f}"),
-        stat("24h P&L", pnl_v, pnl_c),
+        stat("24h P&L", pnl_v, pnl_c, pnl_sub),
+        stat("Since start", since_v, since_c, since_sub),
+        stat("≈ Annual rate", annual_v, annual_c, annual_sub),
         stat("Spot USDC", f"${snap.get('spot_usdc', 0):,.2f}"),
         stat("Perp value", f"${snap.get('perp_account_value', 0):,.2f}"),
         stat("Notional", f"${snap.get('total_notional', 0):,.0f}"),
