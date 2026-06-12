@@ -1626,6 +1626,12 @@ def testnet_live():
             "snapshot": snap}
 
 
+@app.get("/testnet/chart", include_in_schema=False)
+def testnet_chart(coin: str = ""):
+    """Full-screen testnet comparison chart — coin price + trade markers + equity."""
+    return HTMLResponse(_testnet_chart_page(coin))
+
+
 @app.get("/bot/{slug}", include_in_schema=False)
 def bot_detail(slug: str):
     return HTMLResponse(_bot_page(slug))
@@ -2154,6 +2160,21 @@ def _perf_from_rows(rows: list[tuple[datetime, float]]) -> dict:
     return out
 
 
+MW_ANN_FACTOR = {"1d": 365.0, "1w": 52.0, "1m": 12.0, "6m": 2.0, "1y": 1.0}
+
+
+def _mw_ann_sub(tf: str, w: dict | None) -> str:
+    """Small grey annual-rate sub-line under each actual window return: the window
+    value simply multiplied to a yearly rate (1d ×365, 1w ×52, 1m ×12, 6m ×2) — a
+    comparison lens Steven asked for (2026-06-13), NOT a forecast. The headline
+    stays the actual realised return; 1y shows nothing (it already is the year)."""
+    if w is None or tf == "1y":
+        return ""
+    ann = w["ret"] * MW_ANN_FACTOR[tf]
+    return (f"<div style='color:#8b95a5;font-size:9px;font-weight:400;margin-top:1px'>"
+            f"≈{ann:+,.0f}%/yr</div>")
+
+
 def _mw_color(v: float) -> str:
     return "#22c55e" if v >= 0 else "#ef4444"
 
@@ -2167,7 +2188,8 @@ def _mw_title(tf: str, w: dict | None, mode: str) -> str:
                 f"(no projection)")
     thin = " · THIN sample (below significance) — shown raw, not hidden" if w["thin"] else ""
     return (f"{tf} window · {ml} · actual realised return = compounded net-of-cost return "
-            f"over the trailing {tf} · NOT annualised · n={w['n']} bars{thin}")
+            f"over the trailing {tf} · NOT annualised (grey line below ≈ the same number "
+            f"simply ×{MW_ANN_FACTOR[tf]:g} as a yearly-rate comparison) · n={w['n']} bars{thin}")
 
 
 def _mw_td(w: dict | None, tf: str, mode: str, pad: str = "9px 5px") -> str:
@@ -2184,7 +2206,7 @@ def _mw_td(w: dict | None, tf: str, mode: str, pad: str = "9px 5px") -> str:
              if w["thin"] else "")
     return (f"<td data-v='{w['ret']:.4f}' onclick='openPerf(event)' title=\"{title}\" "
             f"style='padding:{pad};text-align:right;color:{c};font-weight:700;cursor:pointer'>"
-            f"{w['ret']:+.1f}%{badge}</td>")
+            f"{w['ret']:+.1f}%{badge}{_mw_ann_sub(tf, w)}</td>")
 
 
 def _mw_td_dual(ao: dict | None, wc: dict | None, tf: str, pad: str = "9px 5px") -> str:
@@ -2200,7 +2222,7 @@ def _mw_td_dual(ao: dict | None, wc: dict | None, tf: str, pad: str = "9px 5px")
         c = _mw_color(w["ret"])
         badge = ("<span style='color:#f59e0b;font-size:8px;font-weight:800;vertical-align:top'> thin</span>"
                  if w["thin"] else "")
-        return (f"{w['ret']:+.1f}%{badge}", f"{w['ret']:.4f}", c, badge)
+        return (f"{w['ret']:+.1f}%{badge}{_mw_ann_sub(tf, w)}", f"{w['ret']:.4f}", c, badge)
 
     ao_html, ao_v, ao_c, _ = _disp(ao)
     wc_html, wc_v, wc_c, _ = _disp(wc)
@@ -2222,7 +2244,8 @@ def _mw_strip(windows: dict, mode: str = "deploy", model_cagr: float | None = No
             c = _mw_color(w["ret"])
             tb = (" <span style='color:#f59e0b;font-size:8px;font-weight:800;vertical-align:top'>thin</span>"
                   if w["thin"] else "")
-            inner = f"<span style='color:{c};font-weight:700'>{w['ret']:+.1f}%{tb}</span>"
+            inner = (f"<span style='color:{c};font-weight:700'>{w['ret']:+.1f}%{tb}</span>"
+                     f"{_mw_ann_sub(label, w)}")
             title = _mw_title(label, w, mode)
         tap = " onclick='openPerf(event)'" if tappable else ""
         cur = "cursor:pointer;" if tappable else ""
@@ -2245,7 +2268,7 @@ def _mw_strip(windows: dict, mode: str = "deploy", model_cagr: float | None = No
                f"<div style='font-size:12px;margin-top:2px'>{mc_inner}</div></div>")
     ml = MW_MODE_LABEL.get(mode, mode)
     note = (f"<div style='color:#6b7280;font-size:10px;margin:7px 0 3px'>Actual realised return per window "
-            f"· {ml} · not annualised{(' · as of ' + as_of) if as_of else ''}</div>")
+            f"· {ml} · grey ≈ simple yearly rate (×365/×52/×12/×2){(' · as of ' + as_of) if as_of else ''}</div>")
     cells = "".join(cell(tf, windows.get(tf)) for tf in MW_COLS)
     return note + "<div style='display:flex;gap:4px'>" + cells + mc_cell + "</div>"
 
@@ -2266,6 +2289,7 @@ def _perf_modal_html() -> str:
     </div>
     <div style="background:#0f141c;border-radius:10px;padding:12px 13px;margin:6px 0 12px;font-size:13px;color:#e6e6e6;line-height:1.55">
       Each column is the <b>actual realised return</b> over that trailing window — 1d, 1w, 1m, 6m, 1y — <b>compounded, net of cost, NOT annualised</b>. A +1% week reads <b>+1%</b>, not +52%/yr.
+      The <b style="color:#8b95a5">grey ≈ %/yr line</b> under each value is that same actual number simply multiplied to a yearly rate (1d ×365 · 1w ×52 · 1m ×12 · 6m ×2) — a <b>comparison lens</b>, not a forecast: short windows run hot/cold, so read it across books, not as a promise.
     </div>
     <div style="color:#cbd5e1;font-size:12.5px;line-height:1.6;margin-bottom:10px">
       <b style="color:#e6e6e6">Two clocks.</b> <b>Active-only</b> counts only the bars a book actually held a position — its edge <i>when switched on</i>. <b>Whole-clock</b> counts every calendar bar, scoring parked days as flat 0 — what the sleeve did on the wall clock. Toggle them on the Books tab. (They differ only for the 12 internal ensemble books, which carry Freyr's two-clock profile; ensembles, specialists and farm bots show their single deployment clock in both.)
@@ -3168,7 +3192,8 @@ def _leaderboard_tab() -> str:
                 + _th(mcl, 8) + _th("Sharpe", 9) + _th("Max DD", 10) + _th("Switch", 11) + "</tr>")
         legend = ("<span style='color:#6b7280'>Sorted by <b>return</b> (mark-to-market, net of fees) — tap any header to re-sort. "
                   "<b>1d / 1w / 1m / 6m / 1y</b> = the <b>actual realised return</b> over that trailing window "
-                  "(compounded, net, <b>not annualised</b>) — tap a cell for the full definition. "
+                  "(compounded, net, <b>not annualised</b>; the grey ≈ line is the same number simply ×N "
+                  "to a yearly rate, for comparison) — tap a cell for the full definition. "
                   "<b>—</b> = the track isn't that old yet (no projection); <b style='color:#f59e0b'>thin</b> = few bars, shown raw. "
                   "<b>Model CAGR (backtest)</b> is a separate lens (assumes always-on, so not canonical for a dispatcher). "
                   "Max DD = worst peak-to-trough.</span>")
@@ -3244,8 +3269,9 @@ def _testnet_tab() -> str:
 
     series = [v for _, v in (snap.get("equity_series") or [])]
     if len(series) >= 2:
-        chart = _mini_spark(series, series[-1] >= series[0], w=660, h=120)
-        chart_note = "portfolio value · last 7 days (intraday, grows over time)"
+        chart = ("<a href='/testnet/chart' style='display:block;text-decoration:none'>"
+                 + _mini_spark(series, series[-1] >= series[0], w=660, h=120) + "</a>")
+        chart_note = "portfolio value · last 7 days · tap for price + buy/sell detail ›"
     else:
         chart = "<div style='color:#6b7280;font-size:12px;padding:18px;text-align:center'>Equity chart builds as the minute poller accumulates snapshots.</div>"
         chart_note = ""
@@ -4187,4 +4213,254 @@ def _testnet_detail_page() -> str:
   {_switch_modal_html()}
   {_ann_modal_html()}
   {_perf_modal_html()}
+</body></html>"""
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# /testnet/chart — full-screen testnet drill-down chart (2026-06-13, Steven's ask):
+# coin price on top with tappable ▲ BUY / ▼ SELL markers, account equity on the
+# bottom, same time axis — the testnet twin of the paper bots' /bot/{slug}/chart.
+# Price candles come live from the Hyperliquid TESTNET public info API (no key).
+# ════════════════════════════════════════════════════════════════════════════════
+HL_TESTNET_INFO = "https://api.hyperliquid-testnet.xyz/info"
+
+
+def _hl_testnet_candles(coin: str, days: int = 7, interval: str = "15m") -> list[dict]:
+    """[{t_ms, close}] for the trailing `days` from the testnet candle endpoint.
+    Read-only public POST; [] on any failure (the page degrades to equity-only)."""
+    import urllib.request
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    req_body = json.dumps({
+        "type": "candleSnapshot",
+        "req": {"coin": coin, "interval": interval,
+                "startTime": now_ms - days * 86_400_000, "endTime": now_ms},
+    }).encode()
+    try:
+        req = urllib.request.Request(HL_TESTNET_INFO, data=req_body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = json.loads(resp.read())
+        return [{"t": int(c["t"]), "close": float(c["c"])} for c in raw]
+    except Exception:
+        return []
+
+
+def _testnet_chart_svg(candles: list[dict], fills: list[dict],
+                       equity: list, coin: str) -> str:
+    """Two stacked panes on one time axis: {coin} price + trade triangles (top),
+    account equity (bottom). Each triangle links to its row in the trade table
+    (#tnt-N) and carries a hover/tap <title> with the full trade detail."""
+    W, PH, EH, PADL, PADR, GAP = 660, 210, 120, 56, 10, 30
+    H = PH + GAP + EH
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    t0 = now_ms - 7 * 86_400_000
+
+    def x(ms):
+        return PADL + (W - PADL - PADR) * (ms - t0) / (now_ms - t0)
+
+    parts = [f"<svg viewBox='0 0 {W} {H}' style='width:100%;height:auto;background:#10151e;"
+             f"border-radius:14px' xmlns='http://www.w3.org/2000/svg'>"]
+
+    # ── price pane ──────────────────────────────────────────────────────────────
+    pts = [c for c in candles if c["t"] >= t0]
+    fill_pxs = [f["px"] for f in fills]
+    if pts:
+        ys = [c["close"] for c in pts] + fill_pxs
+        ylo, yhi = min(ys), max(ys)
+        span = (yhi - ylo) or (ylo * 0.01) or 1.0
+        ylo, yhi = ylo - span * 0.08, yhi + span * 0.08
+
+        def yp(v):
+            return 14 + (PH - 28) * (1 - (v - ylo) / (yhi - ylo))
+
+        for i in range(4):
+            gv = ylo + (yhi - ylo) * i / 3
+            gy = yp(gv)
+            parts.append(f"<line x1='{PADL}' y1='{gy:.1f}' x2='{W - PADR}' y2='{gy:.1f}' "
+                         f"stroke='#1c2230' stroke-width='1'/>"
+                         f"<text x='{PADL - 6}' y='{gy + 3.5:.1f}' fill='#6b7280' font-size='10' "
+                         f"text-anchor='end'>{gv:,.0f}</text>")
+        poly = " ".join(f"{x(c['t']):.1f},{yp(c['close']):.1f}" for c in pts)
+        parts.append(f"<polyline points='{poly}' fill='none' stroke='#60a5fa' stroke-width='1.6'/>")
+        parts.append(f"<text x='{PADL}' y='11' fill='#8b95a5' font-size='11' font-weight='700'>"
+                     f"{coin} price (testnet, 15m)</text>")
+        # trade markers — tap → matching table row; <title> = full detail
+        for i, f in enumerate(fills):
+            fx, fy = x(f["t_ms"]), yp(f["px"])
+            buy = f["side"] in ("buy", "long")
+            col = "#22c55e" if buy else "#ef4444"
+            tri = (f"{fx:.1f},{fy - 7:.1f} {fx - 5:.1f},{fy + 4:.1f} {fx + 5:.1f},{fy + 4:.1f}" if buy
+                   else f"{fx:.1f},{fy + 7:.1f} {fx - 5:.1f},{fy - 4:.1f} {fx + 5:.1f},{fy - 4:.1f}")
+            book = f.get("book") or "—"
+            cp = f.get("closed_pnl", 0) or 0
+            pnl_txt = f" · realised {cp:+,.2f}" if cp else ""
+            title = (f"{f['side'].upper()} {f['size']:g} {coin} @ ${f['px']:,.2f} · "
+                     f"{f.get('time_str', '')} · book: {book}{pnl_txt} · fee ${f.get('fee', 0):,.4f}")
+            parts.append(f"<a href='#tnt-{i}'><polygon points='{tri}' fill='{col}' stroke='#0b0e14' "
+                         f"stroke-width='0.8'><title>{html_escape(title)}</title></polygon></a>")
+    else:
+        parts.append(f"<text x='{W / 2}' y='{PH / 2}' fill='#6b7280' font-size='12' "
+                     f"text-anchor='middle'>price feed unavailable — equity below</text>")
+
+    # ── equity pane ─────────────────────────────────────────────────────────────
+    ey0 = PH + GAP
+    eq = []
+    for ts, v in (equity or []):
+        try:
+            ems = int(datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ")
+                      .replace(tzinfo=timezone.utc).timestamp() * 1000)
+        except Exception:
+            continue
+        if ems >= t0:
+            eq.append((ems, v))
+    if len(eq) >= 2:
+        evs = [v for _, v in eq]
+        elo, ehi = min(evs), max(evs)
+        espan = (ehi - elo) or (elo * 0.01) or 1.0
+        elo, ehi = elo - espan * 0.1, ehi + espan * 0.1
+
+        def ye(v):
+            return ey0 + 12 + (EH - 24) * (1 - (v - elo) / (ehi - elo))
+
+        up = evs[-1] >= evs[0]
+        ecol = "#22c55e" if up else "#ef4444"
+        for i in range(3):
+            gv = elo + (ehi - elo) * i / 2
+            gy = ye(gv)
+            parts.append(f"<line x1='{PADL}' y1='{gy:.1f}' x2='{W - PADR}' y2='{gy:.1f}' "
+                         f"stroke='#1c2230' stroke-width='1'/>"
+                         f"<text x='{PADL - 6}' y='{gy + 3.5:.1f}' fill='#6b7280' font-size='10' "
+                         f"text-anchor='end'>${gv:,.0f}</text>")
+        epoly = " ".join(f"{x(t):.1f},{ye(v):.1f}" for t, v in eq)
+        parts.append(f"<polyline points='{epoly}' fill='none' stroke='{ecol}' stroke-width='1.6'/>")
+        parts.append(f"<text x='{PADL}' y='{ey0 + 9}' fill='#8b95a5' font-size='11' font-weight='700'>"
+                     f"account equity (whole account, all books)</text>")
+    else:
+        parts.append(f"<text x='{W / 2}' y='{ey0 + EH / 2}' fill='#6b7280' font-size='12' "
+                     f"text-anchor='middle'>equity series builds as the minute poller accumulates</text>")
+
+    # shared x-axis day ticks
+    for d in range(1, 7):
+        tms = t0 + d * 86_400_000
+        tx = x(tms)
+        lbl = datetime.fromtimestamp(tms / 1000, tz=timezone.utc).strftime("%d %b")
+        parts.append(f"<line x1='{tx:.1f}' y1='14' x2='{tx:.1f}' y2='{H - 14}' stroke='#161c28' "
+                     f"stroke-width='1'/><text x='{tx:.1f}' y='{H - 3}' fill='#6b7280' "
+                     f"font-size='9.5' text-anchor='middle'>{lbl}</text>")
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _testnet_chart_page(coin: str = "") -> str:
+    """Full-screen testnet chart — the testnet twin of /bot/{slug}/chart."""
+    snap = _testnet_load() or {}
+    fills_all = snap.get("recent_fills") or []
+    positions = snap.get("positions") or []
+    coins = sorted({f.get("coin") for f in fills_all if f.get("coin")}
+                   | {p.get("coin") for p in positions if p.get("coin")}) or ["BTC"]
+    if coin not in coins:
+        # default to the coin with the largest open notional, else first traded
+        coin = (max(positions, key=lambda p: p.get("notional", 0))["coin"]
+                if positions else coins[0])
+
+    fills = []
+    for f in fills_all:
+        if f.get("coin") != coin:
+            continue
+        try:
+            t_ms = int(datetime.strptime(f["time_iso"], "%Y-%m-%dT%H:%M:%SZ")
+                       .replace(tzinfo=timezone.utc).timestamp() * 1000)
+        except Exception:
+            continue
+        fills.append({**f, "t_ms": t_ms})
+    fills.sort(key=lambda f: f["t_ms"])
+
+    candles = _hl_testnet_candles(coin)
+    svg = _testnet_chart_svg(candles, fills, snap.get("equity_series") or [], coin)
+
+    pos = next((p for p in positions if p.get("coin") == coin), None)
+    realized = sum(f.get("closed_pnl", 0) or 0 for f in fills)
+    fees = sum(f.get("fee", 0) or 0 for f in fills)
+    upnl = (pos or {}).get("unrealized_pnl", 0) or 0
+    rc = "#22c55e" if realized >= 0 else "#ef4444"
+    uc = "#22c55e" if upnl >= 0 else "#ef4444"
+
+    def _book_lbl(b):
+        if not b:
+            return "<span style='color:#475569'>—</span>"
+        meta = FREYR_META.get(b)
+        if meta:
+            emoji, _n, accent, _s = meta
+            return f"<span style='color:{accent};font-weight:600'>{emoji} {html_escape(b)}</span>"
+        return f"<span style='color:#8b95a5'>{html_escape(b)}</span>"
+
+    rows = []
+    for i, f in enumerate(reversed(fills)):
+        idx = len(fills) - 1 - i
+        buy = f["side"] in ("buy", "long")
+        scol = "#22c55e" if buy else "#ef4444"
+        cp = f.get("closed_pnl", 0) or 0
+        cpc = "#6b7280" if cp == 0 else ("#22c55e" if cp > 0 else "#ef4444")
+        rows.append(
+            f"<tr id='tnt-{idx}' style='border-top:1px solid #1c2230'>"
+            f"<td style='padding:6px 8px;color:#9aa4b2;font-size:12px;white-space:nowrap'>{f.get('time_str', '—')}</td>"
+            f"<td style='padding:6px 8px;font-size:12px'><span style='color:{scol};font-weight:700'>"
+            f"{'▲ BUY' if buy else '▼ SELL'}</span></td>"
+            f"<td style='padding:6px 8px;font-size:12px'>{_book_lbl(f.get('book'))}</td>"
+            f"<td style='padding:6px 8px;text-align:right;font-size:12px'>{f.get('size', 0):g}</td>"
+            f"<td style='padding:6px 8px;text-align:right;font-size:12px'>${f.get('px', 0):,.2f}</td>"
+            f"<td style='padding:6px 8px;text-align:right;font-size:12px;color:{cpc}'>"
+            f"{f'{cp:+,.2f}' if cp else '—'}</td></tr>")
+    trows = "".join(rows) or ("<tr><td colspan='6' style='color:#6b7280;text-align:center;"
+                              "padding:14px;font-size:12.5px'>No fills on this coin yet.</td></tr>")
+
+    chips = "".join(
+        f"<a href='/testnet/chart?coin={c}' style='text-decoration:none;padding:6px 14px;"
+        f"border-radius:9px;font-size:13px;font-weight:700;"
+        f"{'background:#1d3a66;color:#e6e6e6' if c == coin else 'background:#151a23;color:#8b95a5'}'>{c}</a>"
+        for c in coins)
+
+    return f"""<!doctype html><html><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<meta http-equiv=refresh content=60>
+<title>Testnet — {coin} chart</title></head>
+<body style="background:#0b0e14;color:#e6e6e6;font-family:system-ui;margin:0;padding:14px;max-width:820px;margin:auto">
+  <a href="/testnet" style="color:#60a5fa;text-decoration:none;font-size:14px">← back to Testnet</a>
+  <h2 style="margin:10px 0 2px">🔌 Testnet — {coin} full chart</h2>
+  <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">
+    {coin} testnet price on top with <span style="color:#22c55e">▲ BUY</span> /
+    <span style="color:#ef4444">▼ SELL</span> markers (tap one → its trade below) ·
+    account equity on the bottom · same 7-day axis
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:10px">{chips}</div>
+  {svg}
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0">
+    <div style="background:#151a23;border-radius:10px;padding:10px 8px;text-align:center">
+      <div style="color:#8b95a5;font-size:11px">Realised P&amp;L ({coin}, closed fills)</div>
+      <div style="font-size:20px;margin-top:2px;color:{rc};font-weight:bold">{realized:+,.2f}</div>
+      <div style="color:#6b7280;font-size:10.5px">{len(fills)} fills · fees ${fees:,.2f}</div>
+    </div>
+    <div style="background:#151a23;border-radius:10px;padding:10px 8px;text-align:center">
+      <div style="color:#8b95a5;font-size:11px">Unrealised P&amp;L (open {coin})</div>
+      <div style="font-size:20px;margin-top:2px;color:{uc};font-weight:bold">{upnl:+,.2f}</div>
+      <div style="color:#6b7280;font-size:10.5px">{(f"{pos['side']} {pos['size']:g} @ ${pos['entry_px']:,.1f}" if pos else "flat")}</div>
+    </div>
+  </div>
+  <div style="background:#151a23;border-radius:10px;padding:12px;margin-top:10px">
+    <div style="color:#8b95a5;font-size:12px;margin-bottom:6px">ALL {coin} FILLS (newest first) —
+    real testnet orders, book-attributed · tap a triangle above to jump to its row</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="color:#6b7280;font-size:10.5px;text-align:left">
+        <th style="padding:4px 8px;font-weight:normal">Time</th>
+        <th style="padding:4px 8px;font-weight:normal">Side</th>
+        <th style="padding:4px 8px;font-weight:normal">Book</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">Size</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">Price</th>
+        <th style="padding:4px 8px;font-weight:normal;text-align:right">P&amp;L</th>
+      </tr></thead>
+      <tbody>{trows}</tbody>
+    </table>
+  </div>
+  <div style="color:#6b7280;font-size:11px;margin-top:10px">Auto-refreshes every 60s ·
+  price = Hyperliquid testnet 15m closes · equity = whole-account value from the minute poller</div>
 </body></html>"""
