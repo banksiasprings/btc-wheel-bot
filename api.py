@@ -3376,7 +3376,7 @@ def _testnet_tab() -> str:
                        orows, "No open orders.")
 
     frows = []
-    for f in snap.get("recent_fills", []):
+    for f in (snap.get("recent_fills") or [])[:20]:   # poller keeps 200 for /testnet/chart
         cp = f.get("closed_pnl", 0)
         cpc = "#6b7280" if cp == 0 else ("#22c55e" if cp > 0 else "#ef4444")
         frows.append("<tr style='border-top:1px solid #1c2230'>"
