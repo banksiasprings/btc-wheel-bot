@@ -2482,6 +2482,72 @@ function closeAnn(){document.getElementById('annmodal').style.display='none';}
 </script>"""
 
 
+def _freyr_staleness(snap: dict | None) -> dict | None:
+    """Honest read of whether a Freyr ensemble's MODEL is running on stale data.
+
+    Freyr stamps a `vol_staleness` block (per-book last_updated / age_days / stale) and a
+    `target_as_of` into every snapshot, but the dashboard never surfaced them — so a model
+    frozen on an old cross-asset panel still showed a green 'Heartbeat OK' chip and a
+    flat/negative forward number that reads as a live trading loss. It is NOT one: when the
+    feeds stall (crypto keeps updating, the equity/macro side doesn't), the joint backtest
+    panel is bounded by the stalest feed, the model day-return pins to ~0, and the forward
+    'paper' curve becomes pure rebalance-cost decay. Surface that, don't hide it
+    (feedback_show_raw_signals). Returns None when fresh; else the count + since-date +
+    as-of gap. Pure-read; never raises into a request."""
+    if not isinstance(snap, dict):
+        return None
+    vs = snap.get("vol_staleness") or {}
+    books = vs.get("books") or {}
+    stale = [k for k, b in books.items() if isinstance(b, dict) and b.get("stale")]
+    taso, sdate = snap.get("target_as_of"), snap.get("date")
+    gap_days = None
+    if taso and sdate:
+        try:
+            gap_days = (datetime.fromisoformat(sdate) - datetime.fromisoformat(taso)).days
+        except Exception:
+            gap_days = None
+    big_gap = bool(gap_days and gap_days >= 2)
+    if vs.get("all_fresh", True) and not big_gap:
+        return None
+    if not stale and not big_gap:
+        return None
+    since, max_age = None, 0
+    for k in stale:
+        b = books.get(k) or {}
+        lu, ag = b.get("last_updated"), (b.get("age_days") or 0)
+        if lu and (since is None or lu < since):
+            since = lu
+        if ag > max_age:
+            max_age = ag
+    return {"n_stale": len(stale), "n_total": len(books), "since": since,
+            "max_age": max_age, "target_as_of": taso, "data_through": snap.get("data_through"),
+            "gap_days": gap_days}
+
+
+def _stale_banner(st: dict | None) -> str:
+    """Amber 'stale model data' bar for the Freyr card / detail header — turns a flat or
+    negative forward figure from 'Freyr is losing money' into the honest 'the model panel
+    is frozen, this is cost decay'. Empty string when fresh."""
+    if not st:
+        return ""
+    frac = f"{st['n_stale']}/{st['n_total']}" if st.get("n_total") else str(st["n_stale"])
+    since = st.get("since") or "—"
+    age = st.get("max_age") or 0
+    asof = ""
+    if st.get("target_as_of") and st.get("data_through") and st.get("gap_days"):
+        asof = (f" The model is evaluating as-of <b>{st['target_as_of']}</b> "
+                f"(not {st['data_through']}).")
+    return ("<div style='background:#2a1d05;border:1px solid #f59e0b59;border-radius:9px;"
+            "padding:8px 11px;margin:10px 0 2px'>"
+            "<span style='color:#f59e0b;font-weight:800;font-size:9.5px;text-transform:uppercase;"
+            "letter-spacing:.4px'>⚠ Stale model data</span>"
+            f"<div style='color:#cbd5e1;font-size:11px;margin-top:3px;line-height:1.45'>"
+            f"<b>{frac} books</b> on price/vol data frozen since <b>{since}</b> ({age}d old)."
+            f"{asof} While the panel is frozen the daily model return pins to ~0, so the flat/"
+            f"negative forward figure is <b>rebalance cost on a stale panel, not a live trading "
+            f"loss</b> — the backtest (Model CAGR) is unaffected.</div></div>")
+
+
 def _freyr_card(variant: str) -> str:
     snap, summ = _freyr_load(variant)
     emoji, pname, accent, sub = FREYR_META.get(variant, ("•", variant, "#3b82f6", ""))
@@ -2560,6 +2626,7 @@ def _freyr_card(variant: str) -> str:
           {paper_ctx}
         </div>
       </div>
+      {_stale_banner(_freyr_staleness(snap))}
       <div style="margin:12px 0 4px">{spark}</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">{chips}</div>
       {fc}
@@ -3127,6 +3194,7 @@ def _board_rows() -> list[dict]:
             "sharpe": p.get("sharpe"),
             "dd": (_max_dd_pct(mrow) if mrow else p.get("current_dd", 0.0) * 100),
             "sw": _switch_cost(p.get("leverage", 1.0))[0],
+            "stale": bool(_freyr_staleness(snap)),
             "href": f"/freyr/{variant}", "onclick": None})
     for slug in SURVIVORS:
         v = _variant_by_slug(slug)
@@ -3200,6 +3268,10 @@ def _leaderboard_tab() -> str:
         nav = (f"onclick=\"location.href='{r['href']}'\"" if r["href"]
                else (f"onclick=\"{r['onclick']}\"" if r["onclick"] else ""))
         ret_sub = _sub(f"{_age_str(r.get('ret_age'))} paper")
+        stale_mark = ("<span title='Model on stale price/vol data — forward number is "
+                      "cost decay on a frozen panel, not a live loss. Tap the row for detail.' "
+                      "style='color:#f59e0b;font-weight:800;margin-left:4px;cursor:help'>⚠</span>"
+                      if r.get("stale") else "")
         if MULTI_WINDOW_COLS:
             w = r.get("win") or {}
             win_cells = "".join(_mw_td(w.get(tf), tf, "deploy") for tf in MW_COLS)
@@ -3209,7 +3281,7 @@ def _leaderboard_tab() -> str:
             f"<tr {nav} style='border-top:1px solid #1c2230;cursor:pointer'>"
             f"<td style='padding:9px 5px;width:20px;color:#6b7280;font-weight:700'><span class='rk'>{i}</span></td>"
             f"<td data-v=\"{html_escape(r['name'])}\" style='padding:9px 7px;border-left:3px solid {r['accent']}'>"
-            f"<span style='font-weight:600;font-size:13px'>{r['name']}</span></td>"
+            f"<span style='font-weight:600;font-size:13px'>{r['name']}</span>{stale_mark}</td>"
             f"<td data-v='{r['ret']:.4f}' style='padding:9px 5px;text-align:right;color:{rc};font-weight:600'>{r['ret']:+.2f}%{ret_sub}</td>"
             + win_cells
             + f"<td data-v='{_dv(mc)}' style='padding:9px 5px;text-align:right;color:{mcc}'>{mc_txt}</td>"
@@ -4230,6 +4302,7 @@ def _freyr_detail_page(variant: str) -> str:
   <a href="/" style="color:#60a5fa;text-decoration:none;font-size:14px">← Home</a>
   <h2 style="margin:8px 0 2px">{emoji} Freyr {variant} <span style="font-size:14px;color:#8b95a5;font-weight:500">· {pname}</span></h2>
   <div style="color:#8b95a5;font-size:13px;margin-bottom:10px">{snap.get('label', sub)} · as of {snap.get('date', '')}</div>
+  {_stale_banner(_freyr_staleness(snap))}
   <div style="background:#0f141c;border-radius:10px;padding:8px;margin-bottom:12px">{spark}
     <div style="color:#6b7280;font-size:11px;text-align:center;margin-top:2px">model equity, last 60 days (paper live since {p.get('paper_start', '—')})</div>
     <div style="border-top:1px solid #1c2230;margin:8px 4px 4px"></div>
