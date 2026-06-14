@@ -154,18 +154,45 @@ code, not data). This audit will be updated if/when the regeneration lands.
 
 ---
 
+## Update — root cause fixed (Freyr-side), 2026-06-14 same session
+
+The stale feed was traced to a **missing auto-refresh**: `paper/run.py` refreshed only the
+crypto caches each tick (the "O20" anti-freeze fix), while the equity/FX/VIX caches had
+none — `load_equity`/`load_fx` default `refresh=False` and `regime._load_vix` only
+downloads when the file is **absent**. So once seeded, SPY/QQQ/GLD/TLT/DXY/VIX never
+advanced. yfinance was verified working (pulls cleanly through 2026-06-12), so this was
+purely a wiring gap, not a broken puller. **Fixed in two parts (Steven: "do what you need to"):**
+- **Immediate:** hand-refreshed all caches → equities/FX/VIX now through **2026-06-12**,
+  crypto **2026-06-13**. (Steven approved; no manual re-tick — see below.)
+- **Durable (Freyr commit `0eac721`):** added a mtime-gated `refresh_stale_caches` to
+  `data/equities.py` + `data/fx.py` and `refresh_stale_vix` to `regime.py`, mirroring
+  crypto's exact contract (≤once/tick, graceful per-file fallback, `FREYR_OFFLINE` no-op),
+  and wired all four into `run.py` before variants load. Verified end-to-end: aging a cache
+  to 48h triggers a clean re-pull; fresh caches are skipped.
+
+**Deliberately did NOT force a manual re-tick.** The forward paper track is the live
+record, and how the 6 frozen days reconcile is a Freyr-engine call — not something to
+decide unilaterally mid-fee-task. The model unfreezes **on the next scheduled tick**
+(tonight's 19:00 UTC cron runs the new `run.py` → refreshes nothing-now-stale → marks
+v0.1.1 against the fresh panel → publishes), and the widget's amber banner auto-clears once
+`vol_staleness.all_fresh` flips true. The unfreeze-to-6/12 is deductively certain (the
+panel is now bounded by fresh feeds, not 6/05).
+
 ## Recommended next steps (in priority order)
-1. **[Freyr] Refresh the stale equity/macro OHLC feeds** (`data/equities.py` /
-   `sources/macro.py` / `fx.py` / `dvol.py`) and re-tick `--variant all`. This is the
-   single highest-impact fix for "Freyr looks rubbish" — it turns the forward track from
-   cost-decay into a real signal. Coordinate with the in-flight fee-fix task so the feed
-   refresh and the backtest re-run land together (don't interleave a feed pull mid-run).
-2. **[Freyr] Fix the staleness/heartbeat monitors** (B2) so a frozen cross-asset panel
-   trips `data_staleness.stale` / `heartbeat.all_ok`, and `target_as_of` divergence raises
-   a `config_warning` — the data already knows it's stale; the gauges should too.
-3. **[done] Widget surfaces staleness + v0.4** — restart uvicorn to make live.
-4. **[watch]** Re-read snapshots after the fee-fix regenerates and append the new
-   Model-CAGR / forward-bleed deltas here.
+1. **[done — Freyr `0eac721`]** Auto-refresh equity/FX/VIX caches each tick. The single
+   highest-impact fix for "Freyr looks rubbish" — turns the forward track from cost-decay
+   into a real signal from the next tick on.
+2. **[Freyr — flag]** Fix the staleness/heartbeat monitors (B2) so a frozen cross-asset
+   panel trips `data_staleness.stale` / `heartbeat.all_ok` and a `target_as_of` divergence
+   raises a `config_warning` — the data already knew it was stale; the gauges should too.
+   (This is a *detection* gap; the *cause* above is now fixed, but the monitor should still
+   catch any future freeze.)
+3. **[done] Widget surfaces staleness + v0.4** — `api.py` `6aa270f` / `ca29632`; uvicorn
+   restarted, live.
+4. **[watch]** After tonight's tick (or the fee-fix forward re-run), re-read snapshots and
+   append the real Model-CAGR / forward-return deltas here. Expect: Model CAGR down a touch
+   (5.5 vs 3.0 bps cost), forward track finally showing *real* daily P&L instead of −4.5bps
+   flat — direction unknown, and that's the point (it'll be the first honest reading).
 
 ## Evidence index
 - Forward bleed / frozen model: `freyr/paper/snapshots/{v0.1.1,v0.2,v0.3,v0.4}/2026-06-13.json`
