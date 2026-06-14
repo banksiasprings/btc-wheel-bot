@@ -532,13 +532,15 @@ def _age_str(days: float | None) -> str:
 
 
 # Switching cost — reuses Freyr's crypto cost model (rules/registry.yaml:
-# crypto-cost-bps = 3.0 bps/side = 2 bps fee + 1 bp slippage on Hyperliquid/Binance
-# majors). A round trip (fully exit + re-enter a sleeve) is 2 sides = 6.0 bps of the
-# gross notional; as a fraction of NAV that scales with the bot's gross leverage:
-# 1× ≈ 0.06% (cheap-exit specialist — can take narrow edges), 3× ≈ 0.18% (needs a
-# fatter edge to be worth running). Methodology mirrors ~/Documents/freyr/switching.py
-# (derive_round_trip_bps = 2 × per-side cost).
-CRYPTO_ROUND_TRIP_BPS = 6.0
+# crypto-cost-bps = 5.5 bps/side = 4.5 bps fee + 1 bp slippage on Hyperliquid/Binance
+# majors). The 4.5 bps fee is the MEASURED HL base taker (2026-06-13 testnet round
+# trip; = mainnet), correcting the prior 2.0-bps assumption. A round trip (fully exit
+# + re-enter a sleeve) is 2 sides = 11.0 bps of the gross notional; as a fraction of
+# NAV that scales with the bot's gross leverage: 1× ≈ 0.11% (cheap-exit specialist —
+# can take narrow edges), 3× ≈ 0.33% (needs a fatter edge to be worth running).
+# Methodology mirrors ~/Documents/freyr/switching.py (derive_round_trip_bps = 2 ×
+# per-side cost). ETF books keep the 3.0-bps round trip (1+0.5/side) — separate venue.
+CRYPTO_ROUND_TRIP_BPS = 11.0
 
 
 def _switch_color(pct: float) -> str:
@@ -548,7 +550,7 @@ def _switch_color(pct: float) -> str:
 
 def _switch_cost(leverage: float) -> tuple[float, str]:
     """(round-trip switching cost as % of NAV, colour) for a bot's gross leverage.
-    Crypto farm bots: 6.0 bps round trip × gross leverage."""
+    Crypto farm bots: 11.0 bps round trip × gross leverage (measured HL taker)."""
     pct = CRYPTO_ROUND_TRIP_BPS * max(leverage or 1.0, 0.0) / 100.0
     return pct, _switch_color(pct)
 
@@ -557,12 +559,18 @@ def _switch_breakdown(round_trip_bps: float, gross: float, *, asset: str = "BTC"
                       last_measured: str = "") -> dict:
     """Decompose a round-trip switching cost into the parts that produce the chip,
     so the tap-panel can show its working. The cost model is a single blended
-    per-side cost = fee + slippage (registry crypto-cost-bps = 2bp fee + 1bp
-    slippage; etf-cost-bps = 1bp fee + 0.5bp slippage). Round trip = 2 × per-side;
-    as a % of NAV it scales with the position's gross leverage."""
+    per-side cost = fee + slippage (registry crypto-cost-bps = 4.5bp fee + 1bp
+    slippage, measured HL taker 2026-06-13; etf-cost-bps = 1bp fee + 0.5bp slippage).
+    Round trip = 2 × per-side; as a % of NAV it scales with the position's gross
+    leverage."""
     g = max(gross or 1.0, 0.0)
     per_side = round_trip_bps / 2.0
-    fee = per_side * 2.0 / 3.0       # 2:1 fee:slippage split, matches the registry
+    # fee:slip split differs by class after the 2026-06-13 taker fix: crypto = 4.5:1
+    # (per_side 5.5 = 4.5 fee + 1 slip), ETF = 2:1 (per_side 1.5 = 1 fee + 0.5 slip).
+    if str(asset).split("/")[0].upper() in ("BTC", "ETH", "SOL"):
+        fee = per_side * (4.5 / 5.5)
+    else:
+        fee = per_side * (2.0 / 3.0)
     slip = per_side - fee
     pct = round_trip_bps * g / 100.0
     return {
