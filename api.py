@@ -1687,7 +1687,7 @@ def portfolio_set(bot: str, action: str, name: str = ""):
 # ══════════════════════════════════════════════════════════════════════════════
 
 FREYR_SNAP = Path("/Users/openclaw/Documents/freyr/paper/snapshots")
-FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "dispatch_legacy", "dispatch_momentum", "dispatch_mtf", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir", "vali"]
+FREYR_VARIANTS = ["v0.1.1", "v0.2", "v0.3", "v0.4", "dispatch_legacy", "dispatch_momentum", "dispatch_mtf", "surtr", "vidar", "thor", "idunn", "loki", "aegir", "sif", "skadi", "hermod", "mimir", "vali"]
 FREYR_META = {
     # ── Performance-driven DISPATCHER portfolios (BSF Solar-Dispatch pattern applied
     # to book selection) — competing variants that allocate the SAME 12-book universe
@@ -1712,6 +1712,12 @@ FREYR_META = {
     "v0.1.1": ("🛡️", "Conservative", "#22c55e", "Survival-first · vol 12% · ≤2.5× cap"),
     "v0.2":   ("⚖️", "Moderate",     "#3b82f6", "Escape-governed · vol 15% · 2.0× target"),
     "v0.3":   ("🚀", "Aggressive",   "#a78bfa", "Escape-governed · vol 20% · 3.0× target"),
+    # v0.4 "hot baseline" — v0.1.1 with EXACTLY ONE knob changed (vol-target 12%→18%).
+    # The 2026-06-11 merit-dispatcher experiment was FALSIFIED (concentration ruined CAGR);
+    # the only raw-CAGR lever that survived was the vol target, and it works best on the
+    # plain survivable baseline (NOT v0.3's relaxed breakers). Same 12-book roster, same
+    # −15/−30/−35 breakers, same ≤2.5× cap, same escape stack — just hotter sizing.
+    "v0.4":   ("🌶️", "Hot baseline",  "#f97316", "v0.1.1 + ONE knob (vol 12%→18%) · same 12 books / breakers / ≤2.5× cap · merit-dispatch was falsified → vol-target was the only raw-CAGR lever · backtest CAGR +20.3% · Sharpe 1.07 · maxDD −21% (deeper DD survivable only because the kill/escape stack is now live)"),
     # First specialist-library bot — independent paper P&L, 🔥 crash bracket.
     "surtr":  ("🔥", "Crash specialist", "#ef4444", "Surtr · gated long-gamma · flat in calm · armed on BTC 5d-vol z>2σ OR VIX>30"),
     # Second specialist-library bot — independent paper P&L, 🐂 bull bracket.
@@ -2947,10 +2953,11 @@ def _steven_panel(snap: dict, meta: list) -> str:
 # HTML; `_home_page()` assembles them under a fixed bottom nav.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# The 3 Freyr ensemble portfolios (v0.1.1/v0.2/v0.3) — surfaced on 🛡️ Portfolios and,
+# The Freyr ensemble portfolios (v0.1.1/v0.2/v0.3/v0.4) — surfaced on 🛡️ Portfolios and,
 # with every other entity, on the 🤖 Books full-union table. The other FREYR_VARIANTS
-# are standalone specialists.
-FREYR_ENSEMBLES = ["v0.1.1", "v0.2", "v0.3"]
+# are standalone specialists. v0.4 ("hot baseline") joined 2026-06-11 (active:true, ticks
+# in the daily --variant all run) — it was missing from this list, so it never rendered.
+FREYR_ENSEMBLES = ["v0.1.1", "v0.2", "v0.3", "v0.4"]
 
 
 # ── Embedded ensemble books — the FULL union (BOOKS_FULL_UNION) ────────────────
